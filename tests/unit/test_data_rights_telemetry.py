@@ -19,6 +19,7 @@ from mindweave.modules.data_rights.domain import (
     ExportMediaItem,
     allocate_media_archive_path,
     package_export_zip,
+    render_journal_markdown,
     verify_one_time_download_token,
 )
 from mindweave.modules.telemetry.domain import (
@@ -411,3 +412,85 @@ def test_unassigned_person_placeholder_excluded_from_export_persons_and_journal(
     assert "- 收录人物：1 位" in bundle.journal_markdown
     assert "## 未归属随手记" in bundle.journal_markdown
     assert "她不能吃香菜" in bundle.journal_markdown
+
+
+def test_render_journal_markdown_excludes_unknown_or_deleted_person_ids_and_held_records() -> None:
+    journal_md = render_journal_markdown(
+        exported_at_iso="2026-11-12T04:00:00+00:00",
+        persons=[
+            {
+                "id": "p-active",
+                "tier": "gold",
+                "rank": "a",
+                "displayName": "沈清秋",
+            }
+        ],
+        materials=[
+            {
+                "id": "mat-deleted-person",
+                "personId": "p-soft-deleted-ex",
+                "kind": "note",
+                "title": "前任旧便签",
+                "body": "绝不能出现在未归属随手记里的私密旧记录",
+                "reviewState": "normal",
+            },
+            {
+                "id": "mat-held",
+                "personId": "p-active",
+                "kind": "note",
+                "title": "情绪冷静期便签",
+                "body": "未确认的气话暂缓内容",
+                "reviewState": "held",
+            },
+            {
+                "id": "mat-true-unassigned",
+                "personId": None,
+                "kind": "note",
+                "title": "真正的随手记",
+                "body": "周末买桂花乌龙茶包",
+                "reviewState": "note_only",
+            },
+        ],
+        facts=[
+            {
+                "id": "fact-deleted-person",
+                "personId": "p-soft-deleted-ex",
+                "type": "taboo",
+                "status": "confirmed",
+                "content": "沈前任的私密敏感禁忌记录XYZ",
+            },
+            {
+                "id": "fact-rejected",
+                "personId": "p-active",
+                "type": "preference",
+                "status": "rejected",
+                "content": "已驳回的错误喜好",
+            },
+        ],
+        reminders=[
+            {
+                "id": "rem-cancelled",
+                "personId": "p-active",
+                "title": "已取消提醒",
+                "rule": "once",
+                "status": "cancelled",
+            }
+        ],
+        chat_messages=[
+            {
+                "id": "msg-deleted-person",
+                "personId": "p-soft-deleted-ex",
+                "role": "user",
+                "content": "我再也不想看到沈前任SecretChat999了",
+            }
+        ],
+    )
+
+    assert "沈前任的私密敏感禁忌记录XYZ" not in journal_md
+    assert "绝不能出现在未归属随手记里的私密旧记录" not in journal_md
+    assert "我再也不想看到沈前任SecretChat999了" not in journal_md
+    assert "未确认的气话暂缓内容" not in journal_md
+    assert "已驳回的错误喜好" not in journal_md
+    assert "已取消提醒" not in journal_md
+    assert "## 未归属随手记" in journal_md
+    assert "周末买桂花乌龙茶包" in journal_md

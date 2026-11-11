@@ -501,3 +501,49 @@ def test_non_gold_tiers_never_allow_perspectives(tier: Tier) -> None:
     )
     res = apply_tier_policy(out, tier=tier, user_message="复盘一下")
     assert res.alternative_perspectives == []
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 5, 13, 200])
+def test_r2_04_sentence_buffered_stream_guard_preserves_fenced_code_blocks_and_indentation(
+    chunk_size: int,
+) -> None:
+    sample_id = "01965b30-0000-7000-8000-000000000099"
+    bogus_id = "01965b30-0000-7000-8000-0000000000aa"
+    raw_xml = (
+        "<reply>"
+        "换个角度想也许他也有苦衷。"
+        f"参考模板 [rec_{bogus_id}] 如下：\n"
+        f"```markdown\n    [rec_{sample_id}]\n        nested_item: true\n```\n"
+        f"以及波浪线围栏：\n~~~yaml\n  ref: [rec_{sample_id}]\n~~~\n"
+        f"内联示例 `[。！？] [rec_{sample_id}]` 按这个格式整理即可。"
+        "</reply>"
+    )
+
+    extractor = StreamingReplyExtractor()
+    cit_proc = StreamingCitationProcessor(set())
+    guard = SentenceBufferedStreamGuard(tier=Tier.SILVER)
+
+    deltas: list[str] = []
+    for idx in range(0, len(raw_xml), chunk_size):
+        piece = raw_xml[idx : idx + chunk_size]
+        body = extractor.feed(piece)
+        if body:
+            step = cit_proc.feed(body)
+            d = guard.feed(step.delta_text)
+            if d:
+                deltas.append(d)
+
+    rem = extractor.finalize()
+    fin_cit = cit_proc.finalize()
+    tail = guard.feed(cit_proc.feed(rem).delta_text + fin_cit.delta_text) + guard.finalize()
+    if tail:
+        deltas.append(tail)
+
+    assembled = "".join(deltas)
+    assert "换个角度想" not in assembled
+    assert "苦衷" not in assembled
+    assert bogus_id not in assembled
+    assert f"```markdown\n    [rec_{sample_id}]\n        nested_item: true\n```\n" in assembled
+    assert f"~~~yaml\n  ref: [rec_{sample_id}]\n~~~\n" in assembled
+    assert f"`[。！？] [rec_{sample_id}]`" in assembled
+    assert assembled.endswith("按这个格式整理即可。")

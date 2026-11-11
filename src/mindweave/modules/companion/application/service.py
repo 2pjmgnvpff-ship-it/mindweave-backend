@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +23,13 @@ from mindweave.core.dependencies import AppContainer
 from mindweave.core.errors import AppError, UpstreamAIError, ValidationFailedError
 from mindweave.core.idempotency import hash_request_payload
 from mindweave.core.ids import new_id
-from mindweave.core.orm import BackgroundJobRow, IdempotencyKeyRow, TelemetryEventRow
+from mindweave.core.orm import (
+    BackgroundJobRow,
+    ChatMessageRow,
+    ChatThreadRow,
+    IdempotencyKeyRow,
+    TelemetryEventRow,
+)
 from mindweave.modules.companion.application.dto import (
     ChatMessageDto,
     ChatMessagePage,
@@ -331,6 +337,29 @@ class CompanionService:
 
             dek = await self._container.load_user_dek(session, scope.user_scope)
 
+            norm_client_msg_id = (
+                client_message_id.strip()
+                if client_message_id and client_message_id.strip()
+                else None
+            )
+            reused_user_row: ChatMessageRow | None = None
+            if norm_client_msg_id is not None:
+                latest_msg = await session.scalar(
+                    select(ChatMessageRow)
+                    .where(
+                        ChatMessageRow.user_id == scope.user_id,
+                        ChatMessageRow.person_id == scope.person_id,
+                    )
+                    .order_by(ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc())
+                    .limit(1)
+                )
+                if (
+                    latest_msg is not None
+                    and latest_msg.role == ChatRole.USER.value
+                    and latest_msg.client_message_id == norm_client_msg_id
+                ):
+                    reused_user_row = latest_msg
+
             # 2. Build person-isolated context (verifies PersonRow & referenced_material_ids ownership!)
             context = await self._ctx_builder.build(
                 session,
@@ -338,19 +367,25 @@ class CompanionService:
                 dek=dek,
                 user_message=cleaned_msg,
                 referenced_material_ids=referenced_material_ids,
+                exclude_message_id=reused_user_row.id if reused_user_row is not None else None,
             )
 
-            # 3. Enforce daily chat quota BEFORE saving new user message
-            await self._container.quotas.check_chat_quota(
-                session,
-                scope.user_scope,
-                tz_name=context.timezone,
-            )
+            # 3. Enforce daily chat quota BEFORE saving new user message (skip if reusing unanswered row)
+            if reused_user_row is None:
+                await self._container.quotas.check_chat_quota(
+                    session,
+                    scope.user_scope,
+                    tz_name=context.timezone,
+                )
 
             # 4. Update continuous session window & late-night care check on ChatThreadRow
             now = self._container.clock.now()
             thread = await self._repo.get_or_create_thread_for_update(session, scope, now=now)
-            prev_msg_count = thread.message_count
+            prev_msg_count = (
+                max(0, thread.message_count - 1)
+                if reused_user_row is not None
+                else thread.message_count
+            )
             local_now = to_user_local(now, context.timezone)
             session_decision = evaluate_session_window(
                 previous_session_started_at=thread.session_started_at,
@@ -375,20 +410,26 @@ class CompanionService:
                 session=session,
             )
 
-            # 6. Persist user ChatMessageRow encrypted with DEK + AAD (Invariant I2 & I12)
-            user_msg_row = await self._repo.insert_message(
-                session,
-                scope=scope,
-                dek=dek,
-                thread_id=thread.id,
-                role=ChatRole.USER,
-                content=cleaned_msg,
-                tier_snapshot=context.tier,
-                now=now,
-                referenced_record_ids=list(dict.fromkeys(referenced_material_ids)),
-                safety_category=safety_decision.category,
-                client_message_id=client_message_id,
-            )
+            # 6. Persist user ChatMessageRow encrypted with DEK + AAD (or reuse trailing unanswered row)
+            if reused_user_row is not None:
+                user_msg_row = reused_user_row
+                user_msg_row.safety_category = safety_decision.category.value
+                user_msg_row.referenced_record_ids = list(dict.fromkeys(referenced_material_ids))
+                await session.flush()
+            else:
+                user_msg_row = await self._repo.insert_message(
+                    session,
+                    scope=scope,
+                    dek=dek,
+                    thread_id=thread.id,
+                    role=ChatRole.USER,
+                    content=cleaned_msg,
+                    tier_snapshot=context.tier,
+                    now=now,
+                    referenced_record_ids=list(dict.fromkeys(referenced_material_ids)),
+                    safety_category=safety_decision.category,
+                    client_message_id=norm_client_msg_id,
+                )
             user_hydrated = self._repo.decrypt_message_row(
                 user_msg_row, scope=scope, dek=dek, citations=[]
             )
@@ -659,8 +700,10 @@ class CompanionService:
         *,
         idem_key: str | None = None,
         idem_path: str = "",
+        user_message_id: UUID | None = None,
+        thread_id: UUID | None = None,
     ) -> None:
-        if idem_key is None and idem_row_id is None:
+        if idem_key is None and idem_row_id is None and user_message_id is None:
             return
 
         async def _do_release() -> None:
@@ -681,6 +724,42 @@ class CompanionService:
                             IdempotencyKeyRow.status == "in_progress",
                         )
                     )
+
+                if user_message_id is not None:
+                    thread_row: ChatThreadRow | None = None
+                    if thread_id is not None:
+                        thread_row = await sess.scalar(
+                            select(ChatThreadRow)
+                            .where(
+                                ChatThreadRow.user_id == scope.user_id,
+                                ChatThreadRow.id == thread_id,
+                            )
+                            .with_for_update()
+                        )
+                    orphan_user_msg = await sess.scalar(
+                        select(ChatMessageRow).where(
+                            ChatMessageRow.user_id == scope.user_id,
+                            ChatMessageRow.id == user_message_id,
+                            ChatMessageRow.role == ChatRole.USER.value,
+                        )
+                    )
+                    if orphan_user_msg is not None:
+                        has_assistant_after = await sess.scalar(
+                            select(ChatMessageRow.id)
+                            .where(
+                                ChatMessageRow.user_id == scope.user_id,
+                                ChatMessageRow.thread_id == orphan_user_msg.thread_id,
+                                ChatMessageRow.role == ChatRole.ASSISTANT.value,
+                                tuple_(ChatMessageRow.created_at, ChatMessageRow.id)
+                                > (orphan_user_msg.created_at, orphan_user_msg.id),
+                            )
+                            .limit(1)
+                        )
+                        if has_assistant_after is None:
+                            await sess.delete(orphan_user_msg)
+                            if thread_row is not None:
+                                thread_row.message_count = max(0, thread_row.message_count - 1)
+                            await sess.flush()
 
         cleanup_task = asyncio.create_task(_do_release())
         try:
@@ -758,6 +837,8 @@ class CompanionService:
                 prepared.idem_row_id,
                 idem_key=idem_key,
                 idem_path=idem_path,
+                user_message_id=prepared.user_msg_dto.id if prepared.user_msg_dto else None,
+                thread_id=prepared.thread_id,
             )
             raise call_exc
         assert raw_out is not None
@@ -1093,6 +1174,8 @@ class CompanionService:
                     prepared.idem_row_id,
                     idem_key=idem_key,
                     idem_path=idem_path,
+                    user_message_id=prepared.user_msg_dto.id if prepared.user_msg_dto else None,
+                    thread_id=prepared.thread_id,
                 )
                 stream_released = True
                 yield format_sse_event(
@@ -1105,6 +1188,8 @@ class CompanionService:
                     prepared.idem_row_id,
                     idem_key=idem_key,
                     idem_path=idem_path,
+                    user_message_id=prepared.user_msg_dto.id if prepared.user_msg_dto else None,
+                    thread_id=prepared.thread_id,
                 )
                 stream_released = True
                 yield format_sse_event(
@@ -1121,6 +1206,10 @@ class CompanionService:
                         prepared.idem_row_id,
                         idem_key=idem_key,
                         idem_path=idem_path,
+                        user_message_id=(
+                            prepared.user_msg_dto.id if prepared.user_msg_dto else None
+                        ),
+                        thread_id=prepared.thread_id,
                     )
                     stream_released = True
 

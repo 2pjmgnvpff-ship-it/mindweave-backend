@@ -62,7 +62,7 @@ FORBIDDEN_DEV_JARGON_PHRASES: tuple[str, ...] = (
 
 # ADR-005 #3: Neutral preaching / excusing phrases strictly banned in Tier.SILVER (银箭 · 记恨)
 _SILVER_EXCUSING_RE = re.compile(
-    r"[^。！？!\?\n]*(?:"
+    r"[^。！？!\?\n\x00]*(?:"
     r"换个角度想|换个角度看|换位思考|"
     r"站在(?:他|她|对方|主管|领导|同事)的?(?:角度|立场)|"
     r"也许(?:他|她|对方|人家)?.{0,10}(?:也有苦衷|也有压力|也有难处|不容易|不是故意的|无心的|太忙了)|"
@@ -71,7 +71,7 @@ _SILVER_EXCUSING_RE = re.compile(
     r"(?:你?可以)?试着(?:体谅|理解|包容|原谅)|"
     r"一个巴掌拍不响|退一步海阔天空|各退一步|"
     r"去见见(?:他|她)吧"
-    r")[^。！？!\?\n]*[。！？!\?]?"
+    r")[^。！？!\?\n\x00]*[。！？!\?]?"
 )
 
 # Numeric person-scoring assignment pattern (e.g. "渣男分：85", "海王概率 92%", "欺骗指数为0.88")
@@ -84,7 +84,13 @@ _RESIDUAL_REC_TAG_RE = re.compile(
     r"[\[【]\s*(?:rec[_:\-#]|记录[#_:：])[0-9a-zA-Z\-_,\s，、;；]*[\]】]?",
     re.IGNORECASE,
 )
-_CODE_SPAN_PROTECT_RE = re.compile(r"(```[\s\S]*?```|~~~[\s\S]*?~~~|``[^\n`]+``|`[^\n`]+`)")
+_CODE_SPAN_PROTECT_RE = re.compile(
+    r"(?:(?<=^)|(?<=\n))[ \t]{0,3}(?:`{3,}[\s\S]*?(?:`{3,}|$)|~{3,}[\s\S]*?(?:~{3,}|$))"
+    r"|`{3,}[\s\S]*?(?:`{3,}|$)"
+    r"|~{3,}[\s\S]*?(?:~{3,}|$)"
+    r"|``[^\n`]+``"
+    r"|`[^\n`]+`"
+)
 
 _CLEAN_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
 _STRAY_CLAUSE_PUNCT_RE = re.compile(
@@ -92,6 +98,7 @@ _STRAY_CLAUSE_PUNCT_RE = re.compile(
 )
 _DOUBLE_PUNCT_RE = re.compile(r"([，,。；;！!？?])[，,；;、]+")
 _SENTENCE_TERMINATORS = frozenset("。！？\n；!?")
+_MAX_FENCE_BUFFER_LEN = 16_384
 
 ALL_STREAM_SCRUB_PHRASES: tuple[str, ...] = tuple(
     sorted(
@@ -124,14 +131,7 @@ class GuardrailReport:
         return bool(self.removed_parasitic or self.removed_scoring or self.removed_dev_jargon)
 
 
-def _tidy_prose(text: str) -> str:
-    cleaned = _CLEAN_MULTI_SPACE_RE.sub(" ", text)
-    cleaned = _DOUBLE_PUNCT_RE.sub(r"\1", cleaned)
-    cleaned = _STRAY_CLAUSE_PUNCT_RE.sub("", cleaned)
-    return cleaned.strip()
-
-
-def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> str:
+def _stash_code_spans(text: str) -> tuple[str, list[str]]:
     protected: list[str] = []
 
     def _stash(match: re.Match[str]) -> str:
@@ -139,7 +139,27 @@ def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> st
         protected.append(match.group(0))
         return f"\x00MWCODE{idx}\x00"
 
-    masked = _CODE_SPAN_PROTECT_RE.sub(_stash, text)
+    return _CODE_SPAN_PROTECT_RE.sub(_stash, text), protected
+
+
+def _restore_code_spans(text: str, protected: list[str]) -> str:
+    restored = text
+    for idx, original in enumerate(protected):
+        restored = restored.replace(f"\x00MWCODE{idx}\x00", original)
+    return restored
+
+
+def _tidy_prose(text: str) -> str:
+    masked, protected = _stash_code_spans(text)
+    cleaned = _CLEAN_MULTI_SPACE_RE.sub(" ", masked)
+    cleaned = _DOUBLE_PUNCT_RE.sub(r"\1", cleaned)
+    cleaned = _STRAY_CLAUSE_PUNCT_RE.sub("", cleaned)
+    cleaned = cleaned.strip()
+    return _restore_code_spans(cleaned, protected)
+
+
+def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> str:
+    masked, protected = _stash_code_spans(text)
     if _RESIDUAL_REC_TAG_RE.search(masked):
         removed_jargon.append("[rec_")
         masked = _RESIDUAL_REC_TAG_RE.sub("", masked)
@@ -148,9 +168,7 @@ def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> st
             removed_jargon.append(raw_prefix)
             masked = masked.replace(raw_prefix, "")
 
-    for idx, original in enumerate(protected):
-        masked = masked.replace(f"\x00MWCODE{idx}\x00", original)
-    return masked
+    return _restore_code_spans(masked, protected)
 
 
 def sanitize_text(text: str, *, allow_empty: bool = True) -> GuardrailReport:
@@ -390,12 +408,137 @@ class StreamingReplyExtractor:
         return ""
 
 
-class SentenceBufferedStreamGuard:
-    """Buffers decoded SSE reply text until sentence terminators (`。！？\\n；!?`) or EOF (`RT-09`).
+def _find_flushable_segments(buf: str) -> tuple[list[str], str]:
+    """Split `buf` into complete sentence segments while keeping fenced/inline code spans intact."""
+    segments: list[str] = []
+    start = 0
+    n = len(buf)
+    i = 0
 
-    Applies `enforce_tier_output_constraints` to each complete sentence BEFORE yielding `event: delta`,
-    preventing Silver-tier preaching (`_SILVER_EXCUSING_RE`), parasitic phrases, and forbidden jargon
-    from ever reaching the client mid-stream.
+    in_fence = False
+    fence_char = ""
+    fence_len = 0
+    fence_saw_newline = False
+
+    in_inline_code = False
+    inline_tick_len = 0
+
+    while i < n:
+        if in_fence:
+            if (i - start) >= _MAX_FENCE_BUFFER_LEN and buf[i] == "\n":
+                end = i + 1
+                segments.append(buf[start:end])
+                start = end
+                i = end
+                in_fence = False
+                fence_char = ""
+                fence_len = 0
+                fence_saw_newline = False
+                continue
+
+            if buf[i] == "\n":
+                fence_saw_newline = True
+                i += 1
+                continue
+
+            if buf[i] == fence_char:
+                j = i
+                while j < n and buf[j] == fence_char:
+                    j += 1
+                if j == n:
+                    return segments, buf[start:]
+                run_len = j - i
+                if run_len >= fence_len:
+                    if not fence_saw_newline:
+                        in_fence = False
+                        fence_char = ""
+                        fence_len = 0
+                        i = j
+                        continue
+                    line_start = buf.rfind("\n", start, i) + 1
+                    prefix = buf[line_start:i]
+                    if len(prefix) <= 3 and all(c in (" ", "\t") for c in prefix):
+                        k = j
+                        while k < n and buf[k] in (" ", "\t"):
+                            k += 1
+                        if k == n:
+                            return segments, buf[start:]
+                        if buf[k] == "\n":
+                            in_fence = False
+                            fence_char = ""
+                            fence_len = 0
+                            fence_saw_newline = False
+                            i = k
+                            continue
+                i = j
+                continue
+
+            i += 1
+            continue
+
+        if in_inline_code:
+            if buf[i] == "\n":
+                in_inline_code = False
+                inline_tick_len = 0
+                continue
+            if buf[i] == "`":
+                j = i
+                while j < n and buf[j] == "`":
+                    j += 1
+                if j == n and (j - i) < inline_tick_len:
+                    return segments, buf[start:]
+                if (j - i) == inline_tick_len:
+                    in_inline_code = False
+                    inline_tick_len = 0
+                i = j
+                continue
+            i += 1
+            continue
+
+        ch = buf[i]
+        if ch in ("`", "~"):
+            j = i
+            while j < n and buf[j] == ch:
+                j += 1
+            if j == n:
+                return segments, buf[start:]
+            run_len = j - i
+            if run_len >= 3:
+                in_fence = True
+                fence_char = ch
+                fence_len = run_len
+                fence_saw_newline = False
+                i = j
+                continue
+            if ch == "`":
+                in_inline_code = True
+                inline_tick_len = run_len
+            i = j
+            continue
+
+        if ch in _SENTENCE_TERMINATORS:
+            end = i + 1
+            while end < n and buf[end] in _SENTENCE_TERMINATORS:
+                end += 1
+            segments.append(buf[start:end])
+            start = end
+            i = end
+            continue
+
+        i += 1
+
+    return segments, buf[start:]
+
+
+class SentenceBufferedStreamGuard:
+    """Buffers decoded SSE reply text until sentence terminators (`。！？\\n；!?`) or EOF (`RT-09`, `R2-04`).
+
+    - Tracks Markdown ```` ``` ```` / `~~~` fenced code blocks and inline backtick spans so
+      multi-line code blocks are NEVER split mid-fence on `\\n`, preserving `[rec_<uuid>]`
+      literals and leading code indentation inside fences (Invariant I4).
+    - Applies `enforce_tier_output_constraints` to each complete sentence/block BEFORE yielding
+      `event: delta`, preventing Silver-tier preaching (`_SILVER_EXCUSING_RE`), parasitic phrases,
+      and forbidden jargon from ever reaching the client mid-stream.
     """
 
     def __init__(self, *, tier: Tier | None = None) -> None:
@@ -426,26 +569,14 @@ class SentenceBufferedStreamGuard:
             return ""
         self._buf += delta
 
-        out_parts: list[str] = []
-        start = 0
-        n = len(self._buf)
-        i = 0
-        while i < n:
-            if self._buf[i] in _SENTENCE_TERMINATORS:
-                end = i + 1
-                while end < n and self._buf[end] in _SENTENCE_TERMINATORS:
-                    end += 1
-                seg = self._buf[start:end]
-                cleaned_seg = self._sanitize_segment(seg)
-                if cleaned_seg:
-                    out_parts.append(cleaned_seg)
-                start = end
-                i = end
-            else:
-                i += 1
+        raw_segments, remainder = _find_flushable_segments(self._buf)
+        self._buf = remainder
 
-        if start > 0:
-            self._buf = self._buf[start:]
+        out_parts: list[str] = []
+        for seg in raw_segments:
+            cleaned_seg = self._sanitize_segment(seg)
+            if cleaned_seg:
+                out_parts.append(cleaned_seg)
 
         return "".join(out_parts)
 

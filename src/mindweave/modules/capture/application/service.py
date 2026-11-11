@@ -274,7 +274,12 @@ class CapturePipelineService:
                 raise ConflictError("Capture ID already exists")
 
             if cmd.active_person_id is not None:
-                await require_person_row(session, cmd.scope, cmd.active_person_id)
+                active_person = await require_person_row(session, cmd.scope, cmd.active_person_id)
+                if (
+                    active_person.archived_at is not None
+                    or active_person.state == PersonState.ARCHIVED.value
+                ):
+                    raise ValidationFailedError("Cannot capture into an archived person")
 
             tz_name = await get_user_timezone(session, cmd.scope)
             if cmd.source is CaptureSource.VOICE:

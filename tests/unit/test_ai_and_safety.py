@@ -196,7 +196,7 @@ def test_prompt_registry_rejects_invalid_frontmatter_and_missing_vars(tmp_path: 
             SafetyCategory.NORMAL,
         ),
         ("上班oncall累得想原地去世lol，顺便记一下周五聚餐。", SafetyCategory.NORMAL),
-        ("期末高数难得我想跳楼哈哈哈，算了言归正传背单词去了。", SafetyCategory.NORMAL),
+        ("期末高数难得真的想死哈哈哈，算了言归正传背单词去了。", SafetyCategory.NORMAL),
     ],
 )
 def test_l1_safety_engine_classifications(text: str, expected_category: SafetyCategory) -> None:
@@ -947,6 +947,50 @@ def test_p2_3_fake_adapter_never_extracts_pronouns_or_temporal_nouns_as_person_n
         f"Unexpected suggest_new_person={out.suggest_new_person!r} for {text!r}"
     )
     assert all(not p.is_new_person for p in out.persons)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Explicit clinical/lethal suicide acts + mundane stressor + bitter laughter -> MUST be CRISIS!
+        (
+            "毕业论文彻底挂了，我已经站在天台准备跳楼自杀了，哈哈哈一切都结束吧",
+            SafetyCategory.CRISIS,
+        ),
+        (
+            "天天加班到崩溃，今晚准备结束自己的生命，笑死再见了",
+            SafetyCategory.CRISIS,
+        ),
+        (
+            "期末考试全挂了，打算去跳河自我了断哈哈哈",
+            SafetyCategory.CRISIS,
+        ),
+        (
+            "上班被甲方逼疯了，我 准 备 跳 楼 了 lol",
+            SafetyCategory.CRISIS,
+        ),
+        (
+            "改论文改到绝望，已经在房间准备上吊轻生了2333",
+            SafetyCategory.CRISIS,
+        ),
+        # Benign colloquial figurative hyperbole + stressor + laughter/pivot -> MUST stay NORMAL!
+        (
+            "加班改PPT第8版真的想死哈哈哈，顺便记一下阿哲不吃香菜",
+            SafetyCategory.NORMAL,
+        ),
+        (
+            "救命啊改完第18版PPT我真是烦死了，打工人每天被折磨得简直不想活了，气得想从写字楼原地起飞跳下去算了哈哈！不过言归正传，赶紧帮我记一下：张总对花生过敏。",
+            SafetyCategory.NORMAL,
+        ),
+    ],
+)
+def test_r2_01_lethal_suicide_acts_never_suppressed_by_stressor_or_bitter_laughter(
+    text: str,
+    expected: SafetyCategory,
+) -> None:
+    engine = L1SafetyEngine()
+    res = engine.evaluate(text)
+    assert res.category is expected, f"Got {res.category} ({res.matched_rule}) for {text!r}"
 
 
 async def _unused_dummy_for_typecheck() -> AdapterCallResponse:  # pragma: no cover

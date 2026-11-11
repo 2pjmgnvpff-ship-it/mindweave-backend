@@ -1514,3 +1514,193 @@ async def test_redteam_remediation_unassigned_slug_polarity_flip_sse_cancel_and_
         assert "换个角度" not in silver_deltas
         assert "也不是故意的" not in silver_deltas
         assert "建议把对接文档发群里留痕" in silver_deltas
+
+
+@pytest.mark.asyncio
+async def test_round2_remediation_fenced_code_sse_and_retry_no_duplicate_user_msg_or_quota_burn(
+    db_container: AppContainer,
+) -> None:
+    """Regression suite for Round 2 adversarial findings R2-04 (fenced code SSE) & R2-05 (retry rollback/reuse)."""
+    from mindweave.core.ratelimit import QuotaService
+    from mindweave.shared.enums import ChatRole, SafetyCategory
+
+    sample_id = "01965b30-0000-7000-8000-000000000099"
+    fenced_reply = f"参考模板如下：\n```markdown\n    [rec_{sample_id}]\n```\n按这个格式整理即可。"
+
+    stream_attempts = 0
+
+    class _Round2Gateway(DeterministicCompanionGateway):
+        async def generate_companion_reply(
+            self,
+            *,
+            scope: UserScope,
+            payload: CompanionChatInput,
+            session: AsyncSession | None = None,
+        ) -> tuple[CompanionChatOutput, str, str]:
+            del scope, payload, session
+            return (
+                CompanionChatOutput(
+                    safety_flag=SafetyCategory.NORMAL,
+                    reply_text=fenced_reply,
+                    cited_record_ids=[],
+                    has_unrecorded_gap=False,
+                    alternative_perspectives=[],
+                    actionable_suggestions=[],
+                ),
+                "r2_test_v1",
+                "fake",
+            )
+
+        def stream_companion_reply(
+            self,
+            *,
+            scope: UserScope,
+            payload: CompanionChatInput,
+            session: AsyncSession | None = None,
+        ) -> AsyncIterator[str]:
+            del scope, session
+            nonlocal stream_attempts
+            if "中断重试测试" in payload.user_message:
+                stream_attempts += 1
+
+                async def _flaky() -> AsyncIterator[str]:
+                    if stream_attempts == 1:
+                        yield "<reply>第一段未完成"
+                        raise RuntimeError("simulated mid-stream reset")
+                    yield "<reply>重试后完整回复。</reply>"
+
+                return _flaky()
+
+            wrapped = f"<reply>{fenced_reply}</reply>"
+
+            async def _fenced() -> AsyncIterator[str]:
+                for i in range(0, len(wrapped), 5):
+                    yield wrapped[i : i + 5]
+
+            return _fenced()
+
+    gateway = _Round2Gateway()
+    queue = RecordingJobQueue()
+    app = _build_test_app(db_container, gateway, queue)
+
+    # 1. [R2-04] Both stream=false and SSE stream preserve indented `[rec_<uuid>]` inside ```markdown ... ```
+    user_a, token_a, dek_a = await _provision_user(db_container)
+    person_a = await _seed_person(
+        db_container, user_id=user_a, dek=dek_a, name="顾言", tier=Tier.GOLD, role_tag="同事"
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r_json = await client.post(
+            f"/v1/persons/{person_a}/chat/messages?stream=false",
+            headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": "idem-r204-json"},
+            json={"message": "给我一个模板示例"},
+        )
+        assert r_json.status_code == 200
+        assert f"    [rec_{sample_id}]" in r_json.json()["assistantMessage"]["content"]
+
+        r_sse = await client.post(
+            f"/v1/persons/{person_a}/chat/stream",
+            headers={"Authorization": f"Bearer {token_a}", "Idempotency-Key": "idem-r204-sse"},
+            json={"message": "流式给我一个模板示例"},
+        )
+        assert r_sse.status_code == 200
+        sse_frames = _parse_sse_frames(r_sse.text)
+        streamed_text = "".join(p["text"] for n, p in sse_frames if n == "delta")
+        assert f"```markdown\n    [rec_{sample_id}]\n```\n" in streamed_text
+
+    # 2. [R2-05] Tight daily_chat_quota=1: failed SSE stream rolls back user row & quota so retry succeeds cleanly!
+    db_container.quotas = QuotaService(
+        db_container.clock, daily_chat_quota=1, daily_voice_minutes_quota=60
+    )
+    user_b, token_b, dek_b = await _provision_user(db_container)
+    person_b = await _seed_person(
+        db_container, user_id=user_b, dek=dek_b, name="许知意", tier=Tier.GOLD, role_tag="好友"
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        retry_payload = {"message": "中断重试测试：梳理下周话题", "clientMessageId": "cmsg-r205-1"}
+        attempt_1 = await client.post(
+            f"/v1/persons/{person_b}/chat/stream",
+            headers={"Authorization": f"Bearer {token_b}", "Idempotency-Key": "idem-r205-1"},
+            json=retry_payload,
+        )
+        assert attempt_1.status_code == 200
+        assert "event: error" in attempt_1.text
+
+        attempt_2 = await client.post(
+            f"/v1/persons/{person_b}/chat/stream",
+            headers={"Authorization": f"Bearer {token_b}", "Idempotency-Key": "idem-r205-1"},
+            json=retry_payload,
+        )
+        assert attempt_2.status_code == 200
+        assert "event: done" in attempt_2.text
+
+        hist_b = (
+            await client.get(
+                f"/v1/persons/{person_b}/chat/messages",
+                headers={"Authorization": f"Bearer {token_b}"},
+            )
+        ).json()["items"]
+        assert [m["role"] for m in hist_b] == ["user", "assistant"]
+
+    # 3. [R2-05 defense-in-depth] Pre-existing unanswered user row with matching clientMessageId is reused (no dup, no 429)
+    user_c, token_c, dek_c = await _provision_user(db_container)
+    person_c = await _seed_person(
+        db_container, user_id=user_c, dek=dek_c, name="沈星回", tier=Tier.GOLD, role_tag="搭档"
+    )
+    async with db_container.db.user_session(UserScope(user_c)) as sess:
+        tid = new_id()
+        now_c = db_container.clock.now()
+        sess.add(
+            ChatThreadRow(
+                id=tid,
+                user_id=user_c,
+                person_id=person_c,
+                message_count=1,
+                created_at=now_c,
+                updated_at=now_c,
+            )
+        )
+        await sess.flush()
+        mid = new_id()
+        sess.add(
+            ChatMessageRow(
+                id=mid,
+                user_id=user_c,
+                thread_id=tid,
+                person_id=person_c,
+                role=ChatRole.USER.value,
+                content_enc=db_container.cipher.encrypt_str(
+                    dek_c,
+                    "之前断线留下的未回复消息",
+                    user_id=user_c,
+                    table="chat_messages",
+                    column="content_enc",
+                    row_id=mid,
+                ),
+                referenced_record_ids=[],
+                tier_snapshot=Tier.GOLD.value,
+                safety_category=SafetyCategory.NORMAL.value,
+                has_unrecorded_gap=False,
+                client_message_id="cmsg-orphan-reuse",
+                created_at=now_c,
+            )
+        )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        reused_resp = await client.post(
+            f"/v1/persons/{person_c}/chat/stream",
+            headers={"Authorization": f"Bearer {token_c}", "Idempotency-Key": "idem-r205-reuse"},
+            json={"message": "之前断线留下的未回复消息", "clientMessageId": "cmsg-orphan-reuse"},
+        )
+        assert reused_resp.status_code == 200
+        assert "event: done" in reused_resp.text
+
+        hist_c = (
+            await client.get(
+                f"/v1/persons/{person_c}/chat/messages",
+                headers={"Authorization": f"Bearer {token_c}"},
+            )
+        ).json()["items"]
+        assert [m["role"] for m in hist_c] == ["user", "assistant"]
+        assert hist_c[0]["id"] == str(mid)

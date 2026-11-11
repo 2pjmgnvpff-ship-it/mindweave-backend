@@ -158,23 +158,29 @@ def render_journal_markdown(
     for fact in facts:
         if fact.get("status") == "rejected":
             continue
-        pid = fact.get("personId")
-        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
-            facts_by_person.setdefault(str(pid), []).append(fact)
-        else:
+        raw_pid = fact.get("personId")
+        pid_str = str(raw_pid).strip() if raw_pid is not None else ""
+        if not pid_str or pid_str in excluded_person_ids:
             unassigned_facts.append(fact)
+        elif pid_str in known_person_ids:
+            facts_by_person.setdefault(pid_str, []).append(fact)
 
     materials_by_person: dict[str, list[Mapping[str, Any]]] = {}
     unassigned_materials: list[Mapping[str, Any]] = []
     for mat in materials:
-        pid = mat.get("personId")
-        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
-            materials_by_person.setdefault(str(pid), []).append(mat)
-        else:
+        if mat.get("reviewState") == "held":
+            continue
+        raw_pid = mat.get("personId")
+        pid_str = str(raw_pid).strip() if raw_pid is not None else ""
+        if not pid_str or pid_str in excluded_person_ids:
             unassigned_materials.append(mat)
+        elif pid_str in known_person_ids:
+            materials_by_person.setdefault(pid_str, []).append(mat)
 
     reminders_by_person: dict[str, list[Mapping[str, Any]]] = {}
     for rem in reminders:
+        if rem.get("status") == "cancelled":
+            continue
         pid = rem.get("personId")
         if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             reminders_by_person.setdefault(str(pid), []).append(rem)

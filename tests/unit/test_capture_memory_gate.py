@@ -721,3 +721,50 @@ def test_bitemporal_topic_tokens_exclude_sentiment_carriers() -> None:
         now=datetime(2026, 11, 12, 16, 0, 0, tzinfo=UTC),
     )
     assert [p.superseded_fact_id for p in patches] == [existing_cilantro.id]
+
+
+def test_fact_create_request_lunar_validation_and_material_dto_optional_person_id() -> None:
+    from pydantic import ValidationError as PydanticValidationError
+
+    from mindweave.modules.memory.application.dto import FactCreateRequest, MaterialDto
+    from mindweave.shared.enums import RecordKind
+
+    with pytest.raises(PydanticValidationError):
+        FactCreateRequest(
+            type=FactType.DATE,
+            content="农历生日缺月日",
+            is_lunar=True,
+        )
+
+    with pytest.raises(PydanticValidationError):
+        FactCreateRequest(
+            type=FactType.DATE,
+            content="非农历闰月冲突",
+            is_lunar=False,
+            lunar_is_leap_month=True,
+        )
+
+    valid_lunar = FactCreateRequest(
+        type=FactType.DATE,
+        content="农历八月十五",
+        is_lunar=True,
+        lunar_month=8,
+        lunar_day=15,
+    )
+    assert valid_lunar.lunar_month == 8
+    assert valid_lunar.lunar_day == 15
+
+    now = datetime(2026, 11, 12, 12, 0, 0, tzinfo=UTC)
+    dto = MaterialDto(
+        id=new_id(),
+        person_id=None,
+        kind=RecordKind.NOTE,
+        type=RecordKind.NOTE,
+        title="未归档随手记",
+        body="买一束向日葵",
+        snippet="买一束向日葵",
+        created_at=now,
+        updated_at=now,
+    )
+    dumped = dto.model_dump(mode="json", by_alias=True)
+    assert dumped["personId"] is None

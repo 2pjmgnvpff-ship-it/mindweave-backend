@@ -14,6 +14,7 @@ from mindweave.core.crypto import EnvelopeCipher, normalize_alias_for_index
 from mindweave.core.errors import ConflictError, NotFoundError
 from mindweave.core.ids import new_id
 from mindweave.core.orm import (
+    FactRow,
     InboxItemRow,
     PersonAliasRow,
     PersonRow,
@@ -30,6 +31,7 @@ from mindweave.modules.people.domain.tier_transition import PersonRankEntry
 from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
     AliasKind,
+    FactStatus,
     InboxItemStatus,
     PersonState,
     ReminderStatus,
@@ -720,7 +722,7 @@ class PeopleRepository:
         person_id: UUID,
         now: datetime,
     ) -> None:
-        """30-day soft-delete `PersonRow` + records, cancel reminders, and resolve open inbox items.
+        """30-day soft-delete `PersonRow` + records, reject facts, cancel reminders, and resolve open inbox items.
 
         Physical blob purge is deferred to the 30-day `purge_soft_deleted` worker job (§3.6).
         """
@@ -738,6 +740,19 @@ class PeopleRepository:
             )
             .values(
                 deleted_at=now,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(FactRow)
+            .where(
+                FactRow.user_id == scope.user_id,
+                FactRow.person_id == person_id,
+                FactRow.status != FactStatus.REJECTED.value,
+            )
+            .values(
+                status=FactStatus.REJECTED.value,
+                invalid_at=now,
                 updated_at=now,
             )
         )
@@ -769,6 +784,7 @@ class PeopleRepository:
             )
             .values(
                 status=InboxItemStatus.RESOLVED.value,
+                resolution_action="discard",
                 resolved_at=now,
             )
         )

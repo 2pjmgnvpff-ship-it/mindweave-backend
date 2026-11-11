@@ -134,6 +134,22 @@ async def list_person_materials(
     )
 
 
+def _resign_material_hit_body(
+    container: AppContainer,
+    scope: UserScope,
+    response_body: dict[str, object],
+) -> dict[str, object]:
+    body = dict(response_body)
+    mat_id = body.get("id")
+    if body.get("hasMedia") and mat_id:
+        body["mediaUrl"] = container.tokens.sign_media_path(
+            f"/v1/materials/{mat_id}/media",
+            user_id=scope.user_id,
+            now=container.clock.now(),
+        )
+    return body
+
+
 @router.post(
     "/persons/{person_id}/materials",
     response_model=MaterialDto,
@@ -158,10 +174,9 @@ async def create_person_material(
         route_path=request.url.path,
     )
     if hit is not None:
-        headers = (
-            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
-        )
-        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
+        body = _resign_material_hit_body(container, scope, hit.response_body)
+        headers = {"ETag": f'"{body["version"]}"'} if "version" in body else {}
+        return JSONResponse(status_code=hit.status_code, content=body, headers=headers)
     assert created is not None
     return JSONResponse(
         status_code=201,
@@ -205,10 +220,9 @@ async def patch_material(
         route_path=request.url.path,
     )
     if hit is not None:
-        headers = (
-            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
-        )
-        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
+        body = _resign_material_hit_body(container, scope, hit.response_body)
+        headers = {"ETag": f'"{body["version"]}"'} if "version" in body else {}
+        return JSONResponse(status_code=hit.status_code, content=body, headers=headers)
     assert dto is not None
     return JSONResponse(
         status_code=200,

@@ -1627,3 +1627,281 @@ async def test_redteam_remediations_rt02_rt07_and_p2_1_signed_media(
         )
         assert act_resp.status_code == 200, act_resp.text
         assert act_resp.json()["status"] == "active"
+
+
+# ============================================================================
+# 10. Round 2 Remediations: R2-03 Deleted/Archived Fact & Reminder Guards,
+#     R2-06 Lunar & Archived Capture Validation, R2-07 Unassigned Masking +
+#     Idempotency Media Re-signing, and R2-08 Autoflush Provisional Cleanup
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_round2_remediations_r2_03_r2_06_r2_07_and_r2_08(
+    db_container: AppContainer,
+    manual_clock: ManualClock,
+) -> None:
+    scope, token, dek = await _provision_user(db_container)
+    active_pid = await _seed_person(db_container, scope, dek, display_name="唐梨", tier=Tier.GOLD)
+    archived_pid = await _seed_person(
+        db_container, scope, dek, display_name="归档联系人", tier=Tier.SILVER
+    )
+    to_delete_pid = await _seed_person(
+        db_container, scope, dek, display_name="即将删除", tier=Tier.CRYSTAL
+    )
+
+    async with db_container.db.user_session(scope) as sess:
+        arch_row = await sess.get(PersonRow, archived_pid)
+        assert arch_row is not None
+        arch_row.state = PersonState.ARCHIVED.value
+        arch_row.archived_at = manual_clock.now()
+
+    gateway = ProgrammableGateway()
+    app = _build_test_app(db_container, gateway)
+    jpeg_bytes = _make_jpeg_with_exif()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # ------------------------------------------------------------------
+        # 1. R2-06: Incomplete lunar fact (POST & PATCH) + archived scoped capture -> 422
+        # ------------------------------------------------------------------
+        assert (
+            await client.post(
+                f"/v1/persons/{active_pid}/facts",
+                headers=_auth(token, idem="r2-bad-lunar-1"),
+                json={"type": "date", "content": "唐梨农历生日", "isLunar": True},
+            )
+        ).status_code == 422
+        assert (
+            await client.post(
+                f"/v1/persons/{active_pid}/facts",
+                headers=_auth(token, idem="r2-bad-lunar-2"),
+                json={
+                    "type": "date",
+                    "content": "非农历却标闰月",
+                    "isLunar": False,
+                    "lunarIsLeapMonth": True,
+                },
+            )
+        ).status_code == 422
+
+        valid_fact_res = await client.post(
+            f"/v1/persons/{active_pid}/facts",
+            headers=_auth(token, idem="r2-base-fact"),
+            json={"type": "preference", "polarity": "positive", "content": "喜欢乌龙茶"},
+        )
+        assert valid_fact_res.status_code == 201
+        valid_fid = valid_fact_res.json()["id"]
+
+        assert (
+            await client.patch(
+                f"/v1/facts/{valid_fid}",
+                headers=_auth(token, idem="r2-patch-bad-lunar-1", if_match='"1"'),
+                json={"type": "date", "isLunar": True},
+            )
+        ).status_code == 422
+        assert (
+            await client.patch(
+                f"/v1/facts/{valid_fid}",
+                headers=_auth(token, idem="r2-patch-bad-lunar-2", if_match='"1"'),
+                json={"lunarIsLeapMonth": True},
+            )
+        ).status_code == 422
+
+        arch_cap_res = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(token, idem="r2-arch-cap"),
+            json={
+                "source": "text",
+                "routeMode": "current",
+                "activePersonId": str(archived_pid),
+                "text": "她喜欢草莓蛋糕",
+            },
+        )
+        assert arch_cap_res.status_code == 422
+
+        # ------------------------------------------------------------------
+        # 2. R2-03: Archived person fact keeps reminder PAUSED; soft-deleted
+        #    person blocks PATCH/DELETE on facts & materials with 404
+        # ------------------------------------------------------------------
+        arch_date_fact = await client.post(
+            f"/v1/persons/{archived_pid}/facts",
+            headers=_auth(token, idem="r2-arch-fact"),
+            json={
+                "type": "date",
+                "content": "归档纪念日 12月20日",
+                "triggerDate": "2027-12-20",
+            },
+        )
+        assert arch_date_fact.status_code == 201
+        async with db_container.db.user_session(scope) as sess:
+            arch_rem = await sess.scalar(
+                select(ReminderRow).where(ReminderRow.person_id == archived_pid)
+            )
+            assert arch_rem is not None
+            assert arch_rem.status == "paused"
+            assert arch_rem.next_fire_at is None
+
+        del_fact_res = await client.post(
+            f"/v1/persons/{to_delete_pid}/facts",
+            headers=_auth(token, idem="r2-del-p-fact"),
+            json={"type": "preference", "content": "喜欢桂花糕"},
+        )
+        assert del_fact_res.status_code == 201
+        del_fid = del_fact_res.json()["id"]
+        del_mid = del_fact_res.json()["recordId"]
+
+        async with db_container.db.user_session(scope) as sess:
+            del_p_row = await sess.get(PersonRow, to_delete_pid)
+            assert del_p_row is not None
+            del_p_row.deleted_at = manual_clock.now()
+
+        assert (
+            await client.patch(
+                f"/v1/facts/{del_fid}",
+                headers=_auth(token, idem="r2-patch-del-f", if_match='"1"'),
+                json={"content": "不该成功"},
+            )
+        ).status_code == 404
+        assert (
+            await client.delete(
+                f"/v1/facts/{del_fid}",
+                headers=_auth(token, idem="r2-delete-del-f"),
+            )
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/materials/{del_mid}", headers=_auth(token))
+        ).status_code == 404
+        assert (
+            await client.patch(
+                f"/v1/materials/{del_mid}",
+                headers=_auth(token, idem="r2-patch-del-m", if_match='"1"'),
+                json={"title": "不该成功"},
+            )
+        ).status_code == 404
+
+        # ------------------------------------------------------------------
+        # 3. R2-07: Unassigned material masks `personId: None`, and IdempotencyHit
+        #    replay after 16m (> 15m media TTL) freshly re-signs `mediaUrl`!
+        # ------------------------------------------------------------------
+        def _boom(_s: UserScope, _i: ExtractRecordInput) -> ExtractRecordOutput:
+            raise TimeoutError("simulated upstream timeout")
+
+        gateway.extract_handler = _boom
+        unassigned_cap = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(token, idem="r2-unassigned-cap"),
+            json={"source": "text", "routeMode": "global", "text": "买一束向日葵"},
+        )
+        assert unassigned_cap.status_code == 201
+        open_inbox = (await client.get("/v1/inbox?status=open", headers=_auth(token))).json()[
+            "items"
+        ]
+        unassigned_rec_id = open_inbox[0]["recordId"]
+        mat_unassigned = await client.get(
+            f"/v1/materials/{unassigned_rec_id}", headers=_auth(token)
+        )
+        assert mat_unassigned.status_code == 200
+        assert mat_unassigned.json()["personId"] is None
+
+        photo_mat = await client.post(
+            f"/v1/persons/{active_pid}/materials",
+            headers=_auth(token, idem="r2-photo-idem"),
+            data={"title": "海边夕阳", "body": "胶片质感很好"},
+            files={"photo": ("sunset.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert photo_mat.status_code == 201
+        photo_mid = photo_mat.json()["id"]
+
+        patch_photo_1 = await client.patch(
+            f"/v1/materials/{photo_mid}",
+            headers=_auth(token, idem="r2-photo-patch-idem", if_match='"1"'),
+            json={"title": "海边夕阳·精修"},
+        )
+        assert patch_photo_1.status_code == 200
+
+        manual_clock.advance(seconds=960)  # 16 minutes > 15m media & access token TTL
+        fresh_token, _ = db_container.tokens.create_access_token(
+            scope.user_id, now=manual_clock.now()
+        )
+        photo_mat_replay = await client.post(
+            f"/v1/persons/{active_pid}/materials",
+            headers=_auth(fresh_token, idem="r2-photo-idem"),
+            data={"title": "海边夕阳", "body": "胶片质感很好"},
+            files={"photo": ("sunset.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert photo_mat_replay.status_code == 201
+        assert (await client.get(photo_mat_replay.json()["mediaUrl"])).status_code == 200
+
+        patch_photo_replay = await client.patch(
+            f"/v1/materials/{photo_mid}",
+            headers=_auth(fresh_token, idem="r2-photo-patch-idem", if_match='"1"'),
+            json={"title": "海边夕阳·精修"},
+        )
+        assert patch_photo_replay.status_code == 200
+        assert (await client.get(patch_photo_replay.json()["mediaUrl"])).status_code == 200
+
+        # ------------------------------------------------------------------
+        # 4. R2-08: `:undo` and `inbox:resolve(discard)` flush before counting
+        #    active records/facts so provisional persons are soft-deleted!
+        # ------------------------------------------------------------------
+        gateway.extract_handler = lambda _s, _i: ExtractRecordOutput(
+            persons=[ExtractedPersonCandidate(mention="周予安", is_new_person=True)],
+            facts=[
+                ExtractedFactItem(
+                    person_mention="周予安",
+                    fact_type=FactType.TABOO,
+                    polarity=Polarity.NEGATIVE,
+                    title="水果过敏",
+                    content="对猕猴桃过敏",
+                    confidence=0.95,
+                )
+            ],
+        )
+        cap_zhou = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(fresh_token, idem="r2-08-zhou"),
+            json={"source": "text", "routeMode": "global", "text": "周予安对猕猴桃过敏"},
+        )
+        assert cap_zhou.status_code == 201
+        zhou_pid = UUID(cap_zhou.json()["splits"][0]["personId"])
+        undo_zhou = await client.post(
+            f"/v1/captures/{cap_zhou.json()['captureId']}:undo",
+            headers=_auth(fresh_token, idem="r2-08-zhou-undo"),
+        )
+        assert undo_zhou.status_code == 200
+
+        gateway.extract_handler = lambda _s, _i: ExtractRecordOutput(
+            persons=[ExtractedPersonCandidate(mention="林知夏", is_new_person=True)],
+            facts=[
+                ExtractedFactItem(
+                    person_mention="林知夏",
+                    fact_type=FactType.TABOO,
+                    polarity=Polarity.NEGATIVE,
+                    title="香菜忌口",
+                    content="不吃香菜",
+                    confidence=0.94,
+                )
+            ],
+        )
+        cap_lin = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(fresh_token, idem="r2-08-lin"),
+            json={"source": "text", "routeMode": "global", "text": "林知夏不吃香菜"},
+        )
+        assert cap_lin.status_code == 201
+        lin_pid = UUID(cap_lin.json()["splits"][0]["personId"])
+        lin_inbox_id = cap_lin.json()["inboxItemIds"][0]
+        disc_lin = await client.post(
+            f"/v1/inbox/{lin_inbox_id}:resolve",
+            headers=_auth(fresh_token, idem="r2-08-lin-discard"),
+            json={"action": "discard"},
+        )
+        assert disc_lin.status_code == 200
+
+        async with db_container.db.user_session(scope) as sess:
+            zhou_row = await sess.get(PersonRow, zhou_pid)
+            lin_row = await sess.get(PersonRow, lin_pid)
+            assert zhou_row is not None and zhou_row.deleted_at is not None
+            assert zhou_row.state == PersonState.ARCHIVED.value
+            assert lin_row is not None and lin_row.deleted_at is not None
+            assert lin_row.state == PersonState.ARCHIVED.value

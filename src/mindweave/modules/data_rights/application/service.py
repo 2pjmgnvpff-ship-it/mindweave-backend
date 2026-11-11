@@ -66,9 +66,10 @@ class DataRightsService:
         *,
         user_id: UUID,
         known_keys: list[str],
+        excluded_keys: set[str] | frozenset[str] = frozenset(),
     ) -> list[str]:
-        merged = list(known_keys)
-        seen = set(known_keys)
+        merged = [k for k in known_keys if k not in excluded_keys]
+        seen = set(merged)
         user_dir: Path = (self._container.settings.blob_storage_dir / str(user_id)).resolve()
         root_dir: Path = self._container.settings.blob_storage_dir.resolve()
         if not str(user_dir).startswith(str(root_dir)) or not user_dir.is_dir():
@@ -77,7 +78,7 @@ class DataRightsService:
             if not file_path.is_file() or file_path.name.endswith(".ct"):
                 continue
             rel_key = file_path.relative_to(root_dir).as_posix()
-            if "/exports/" in f"/{rel_key}" or rel_key in seen:
+            if "/exports/" in f"/{rel_key}" or rel_key in seen or rel_key in excluded_keys:
                 continue
             seen.add(rel_key)
             merged.append(rel_key)
@@ -214,7 +215,11 @@ class DataRightsService:
                 occurred_at=now,
             )
 
-            sections, referenced_media_keys = await self._repo.collect_exportable_user_data(
+            (
+                sections,
+                referenced_media_keys,
+                excluded_media_keys,
+            ) = await self._repo.collect_exportable_user_data(
                 user_sess,
                 sys_sess,
                 scope=scope,
@@ -224,6 +229,7 @@ class DataRightsService:
             all_media_keys = self._discover_unreferenced_local_blobs(
                 user_id=scope.user_id,
                 known_keys=referenced_media_keys,
+                excluded_keys=excluded_media_keys,
             )
 
             used_arc_paths: set[str] = set()

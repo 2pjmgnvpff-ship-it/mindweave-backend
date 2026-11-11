@@ -14,8 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mindweave.core.crypto import EnvelopeCipher
 from mindweave.core.dto import strip_forbidden_dev_jargon
 from mindweave.core.ids import new_id
-from mindweave.core.orm import FactRow, ReminderRow
-from mindweave.shared.enums import FactType, ReminderRule, ReminderStatus
+from mindweave.core.orm import FactRow, PersonRow, ReminderRow
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    FactType,
+    PersonState,
+    ReminderRule,
+    ReminderStatus,
+)
 from mindweave.shared.scopes import UserScope
 
 _YEARLY_KEYWORDS = ("生日", "纪念日", "周年", "诞辰", "母亲节", "父亲节", "结婚")
@@ -190,6 +196,17 @@ async def upsert_reminder_for_fact(
     if fact.type not in (FactType.DATE.value, FactType.PROMISE.value):
         return None
 
+    person = await session.scalar(
+        select(PersonRow).where(
+            PersonRow.id == fact.person_id,
+            PersonRow.user_id == scope.user_id,
+        )
+    )
+    if person is None or person.deleted_at is not None or person.slug == UNASSIGNED_PERSON_SLUG:
+        return None
+    if person.archived_at is not None or person.state == PersonState.ARCHIVED.value:
+        desired_status = ReminderStatus.PAUSED
+
     has_date = fact_has_schedulable_date(fact)
     existing = await session.scalar(
         select(ReminderRow).where(
@@ -247,6 +264,9 @@ async def upsert_reminder_for_fact(
         tz_name=tz_name,
         now_utc=now,
     )
+    if desired_status is ReminderStatus.PAUSED:
+        next_fire_at = None
+        next_lead_day = None
     clean_title = strip_forbidden_dev_jargon(fact_content)[:80] or "重要事项提醒"
 
     if existing is not None:

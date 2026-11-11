@@ -829,3 +829,47 @@ async def test_archived_deleted_unassigned_filtering_and_lunar_once_activation(
         assert act_body["isLunar"] is True
         assert act_body["nextLeadDay"] == 1
         assert act_body["nextFireAt"] is not None
+
+        # 5. R2-03: Reactivating archived person's paused reminder via PATCH -> 422!
+        reactivate_arch = await client.patch(
+            f"/v1/reminders/{due_archived_rem_id}",
+            headers={**headers, "If-Match": '"2"', "Idempotency-Key": "r203-arch-act"},
+            json={"status": "active", "onceDate": "2027-05-20"},
+        )
+        assert reactivate_arch.status_code == 422
+
+        # Non-active updates / cancellation on archived person remain permitted
+        pause_edit_arch = await client.patch(
+            f"/v1/reminders/{due_archived_rem_id}",
+            headers={**headers, "If-Match": '"2"', "Idempotency-Key": "r203-arch-paused"},
+            json={"title": "继续暂停的备忘"},
+        )
+        assert pause_edit_arch.status_code == 200
+        assert pause_edit_arch.json()["status"] == "paused"
+
+        # Soft-deleted & __unassigned__ persons return 404 across PATCH, DELETE, and :done!
+        for hidden_rem_id in (due_deleted_rem_id, due_unassigned_rem_id):
+            p_res = await client.patch(
+                f"/v1/reminders/{hidden_rem_id}",
+                headers={**headers, "If-Match": '"2"', "Idempotency-Key": f"p-{hidden_rem_id}"},
+                json={"status": "active", "onceDate": "2027-06-01"},
+            )
+            d_res = await client.delete(
+                f"/v1/reminders/{hidden_rem_id}",
+                headers={**headers, "Idempotency-Key": f"d-{hidden_rem_id}"},
+            )
+            done_res = await client.post(
+                f"/v1/reminders/{hidden_rem_id}:done",
+                headers={**headers, "Idempotency-Key": f"done-{hidden_rem_id}"},
+            )
+            assert p_res.status_code == 404
+            assert d_res.status_code == 404
+            assert done_res.status_code == 404
+
+    async with db_container.db.user_session(scope) as sess:
+        from mindweave.core.errors import NotFoundError
+
+        with pytest.raises(NotFoundError):
+            await svc.get_reminder(sess, scope, due_deleted_rem_id)
+        with pytest.raises(NotFoundError):
+            await svc.get_reminder(sess, scope, due_unassigned_rem_id)

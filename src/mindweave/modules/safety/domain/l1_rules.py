@@ -15,8 +15,11 @@ from mindweave.shared.enums import SafetyCategory
 class L1SafetyLexicon:
     """Configurable linguistic feature patterns for L1 safety pre-screening."""
 
-    # 1a. Hard lethal means / overdose / farewell note preparation (never suppressed by laughter)
+    # 1a. Hard lethal means / explicit suicide acts / overdose / farewell note (never suppressed by laughter)
     hard_crisis_patterns: tuple[str, ...] = (
+        r"(?:自杀|轻生|结束自己的?生命|自我了断|寻短见)",
+        r"(?:想|准备|去|打算|要|已经在?|站在[^。！？\n]{0,12})(?!原地起飞)(?:从(?:(?!原地起飞)[^。！？\n]){0,12})?(?:跳楼|跳下去|往下跳|跳河|跳江|跳海|上吊|服毒|吞药|吃安眠药)",
+        r"活着(?:一点)?意义都没有",
         r"(?:安眠药|头孢配酒|烧炭自杀|割腕|划手腕)",
         r"(?:烧炭(?!烤|火锅)|炭盆(?!烤|火锅)|一氧化碳(?:中毒|自杀)?|吸一氧化碳)",
         r"(?:封死[^。！？\n]{0,16}门窗|门窗[^。！？\n]{0,12}封死)",
@@ -45,13 +48,8 @@ class L1SafetyLexicon:
         r"(?:看最后一眼|最后看一眼)[^。！？\n]{0,12}(?:照片|记录|大家|城市)",
     )
 
-    # 1c. General suicidal ideation (evaluated AFTER colloquial hyperbole context exclusion)
-    ideation_crisis_patterns: tuple[str, ...] = (
-        r"(?:自杀|轻生|结束自己的?生命|自我了断)",
-        r"活着(?:一点)?意义都没有",
-        r"(?:不想活了|活不下去了|想原地去世|想死)",
-        r"(?:想|准备|去)(?:从[^。！？\n]{0,10})?(?:跳楼|跳下去|跳河|跳江)",
-    )
+    # 1c. Colloquial figurative distress idioms (evaluated AFTER hyperbole context exclusion)
+    ideation_crisis_patterns: tuple[str, ...] = (r"(?:不想活了|活不下去了|想原地去世|想死)",)
 
     # 1d. Colloquial workplace/study hyperbole context markers (anti-false-positive shield)
     mundane_stressor_patterns: tuple[str, ...] = (

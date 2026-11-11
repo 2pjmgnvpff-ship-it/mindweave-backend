@@ -341,6 +341,41 @@ class ReminderService:
         await session.flush()
         return self._reminders.decrypt_row(row, scope, dek)
 
+    async def _require_valid_person_for_reminder(
+        self,
+        session: AsyncSession,
+        scope: UserScope,
+        person_id: UUID,
+    ) -> PersonRow:
+        person = await session.scalar(
+            select(PersonRow).where(
+                PersonRow.id == person_id,
+                PersonRow.user_id == scope.user_id,
+            )
+        )
+        if person is None or person.deleted_at is not None or person.slug == UNASSIGNED_PERSON_SLUG:
+            raise NotFoundError("Reminder not found")
+        return person
+
+    async def get_reminder(
+        self,
+        session: AsyncSession,
+        scope: UserScope,
+        reminder_id: UUID,
+    ) -> DecryptedReminder:
+        row = await session.scalar(
+            select(ReminderRow).where(
+                ReminderRow.id == reminder_id,
+                ReminderRow.user_id == scope.user_id,
+            )
+        )
+        if row is None:
+            raise NotFoundError("Reminder not found")
+        if row.person_id is not None:
+            await self._require_valid_person_for_reminder(session, scope, row.person_id)
+        dek = await self._container.load_user_dek(session, scope)
+        return self._reminders.decrypt_row(row, scope, dek)
+
     async def update_reminder(
         self,
         session: AsyncSession,
@@ -356,6 +391,12 @@ class ReminderService:
         row = await self._reminders.get_for_update(session, scope, reminder_id)
         if row is None:
             raise NotFoundError("Reminder not found")
+
+        person = (
+            await self._require_valid_person_for_reminder(session, scope, row.person_id)
+            if row.person_id is not None
+            else None
+        )
 
         if row.version != expected_version:
             raise VersionMismatchError(
@@ -381,6 +422,15 @@ class ReminderService:
         new_fire_minute = inp.fire_minute if inp.fire_minute is not None else row.fire_minute
         new_tz = inp.timezone.strip() if inp.timezone is not None else row.timezone
         new_status = inp.status if inp.status is not None else ReminderStatus(row.status)
+
+        if (
+            person is not None
+            and new_status is ReminderStatus.ACTIVE
+            and (person.archived_at is not None or person.state == PersonState.ARCHIVED.value)
+        ):
+            raise ValidationFailedError(
+                "Cannot activate or update an active reminder for an archived person"
+            )
 
         if (
             new_rule is ReminderRule.ONCE
@@ -490,6 +540,8 @@ class ReminderService:
         row = await self._reminders.get_for_update(session, scope, reminder_id)
         if row is None:
             raise NotFoundError("Reminder not found")
+        if row.person_id is not None:
+            await self._require_valid_person_for_reminder(session, scope, row.person_id)
         if expected_version is not None and row.version != expected_version:
             raise VersionMismatchError(
                 f"Optimistic lock failed: expected version {expected_version}, current is {row.version}"
@@ -514,6 +566,8 @@ class ReminderService:
         row = await self._reminders.get_for_update(session, scope, reminder_id)
         if row is None:
             raise NotFoundError("Reminder not found")
+        if row.person_id is not None:
+            await self._require_valid_person_for_reminder(session, scope, row.person_id)
         if row.status == ReminderStatus.CANCELLED.value:
             raise ConflictError("Cancelled reminder cannot be marked done")
 

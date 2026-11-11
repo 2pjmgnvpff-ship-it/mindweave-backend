@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -75,6 +75,40 @@ def _profile_to_dto(service: PeopleService, scope: UserScope, profile: PersonPro
         created_at=profile.created_at,
         updated_at=profile.updated_at,
     )
+
+
+def _person_dto_from_body(
+    raw_body: Mapping[str, Any],
+    *,
+    container: AppContainer,
+    scope: UserScope,
+) -> PersonDTO:
+    """Validate cached/serialized `PersonDTO` and freshly re-sign non-null media URLs on replay."""
+    dto = PersonDTO.model_validate(dict(raw_body))
+    prefix = container.settings.api_prefix.rstrip("/")
+    now = container.clock.now()
+    updates: dict[str, str] = {}
+    if dto.avatar_url:
+        updates["avatar_url"] = container.tokens.sign_media_path(
+            f"{prefix}/persons/{dto.id}/photos/{PhotoSlot.AVATAR.value}",
+            user_id=scope.user_id,
+            now=now,
+        )
+    if dto.main_photo_url:
+        updates["main_photo_url"] = container.tokens.sign_media_path(
+            f"{prefix}/persons/{dto.id}/photos/{PhotoSlot.MAIN.value}",
+            user_id=scope.user_id,
+            now=now,
+        )
+    if dto.sub_photo_url:
+        updates["sub_photo_url"] = container.tokens.sign_media_path(
+            f"{prefix}/persons/{dto.id}/photos/{PhotoSlot.SUB.value}",
+            user_id=scope.user_id,
+            now=now,
+        )
+    if updates:
+        return dto.model_copy(update=updates)
+    return dto
 
 
 def _alias_to_dto(alias: PersonAlias) -> PersonAliasDTO:
@@ -166,7 +200,7 @@ async def create_person(
         serialize_profile=_serialize,
     )
     response.status_code = code
-    return PersonDTO.model_validate(body)
+    return _person_dto_from_body(body, container=container, scope=scope)
 
 
 @router.get(
@@ -213,7 +247,7 @@ async def patch_person(
         serialize_profile=_serialize,
     )
     response.status_code = code
-    return PersonDTO.model_validate(body)
+    return _person_dto_from_body(body, container=container, scope=scope)
 
 
 @router.delete(
@@ -407,7 +441,7 @@ async def upload_person_photo(
         serialize_profile=_serialize,
     )
     response.status_code = code
-    return PersonDTO.model_validate(body)
+    return _person_dto_from_body(body, container=container, scope=scope)
 
 
 @router.get(

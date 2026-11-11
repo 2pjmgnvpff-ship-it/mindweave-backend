@@ -668,7 +668,7 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
                     column="body_enc",
                     row_id=unassigned_rec_id,
                 ),
-                review_state="held",
+                review_state="note_only",
                 pinned=False,
                 version=1,
                 created_at=now_a,
@@ -1243,3 +1243,331 @@ async def test_account_deletion_crypto_shredding_cascade_and_token_revocation(
             headers={"Authorization": f"Bearer {access_b}"},
         )
         assert ok_b.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_export_excludes_soft_deleted_person_facts_aliases_chats_reminders_held_records_and_blobs(
+    db_container: AppContainer,
+) -> None:
+    from mindweave.main import create_app
+
+    user_id, access_tok, reauth_tok, active_media_key = await _seed_rich_user(
+        db_container,
+        email="r2-isolation@mindweave.local",
+        person_gold_name="沈清秋",
+        person_silver_name="张主管",
+        person_crystal_name="陈教授",
+        voice_bytes=b"ACTIVE-OCEAN-PROMISE-VOICE",
+    )
+    auth_headers = {"Authorization": f"Bearer {access_tok}"}
+    app = create_app(container=db_container)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # Create an ex-partner via HTTP API with alias "阿沈"
+        ex_resp = await client.post(
+            "/v1/persons",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={
+                "nameCn": "沈前任",
+                "tier": "silver",
+                "roleTag": "前任",
+                "aliases": ["阿沈"],
+            },
+        )
+        assert ex_resp.status_code == 201, ex_resp.text
+        ex_id_str = ex_resp.json()["id"]
+        ex_id = UUID(ex_id_str)
+
+        # Add sensitive taboo fact, reminder, and companion chat message for 沈前任
+        fact_resp = await client.post(
+            f"/v1/persons/{ex_id_str}/facts",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={
+                "type": "taboo",
+                "polarity": "negative",
+                "content": "沈前任的私密敏感禁忌记录XYZ",
+            },
+        )
+        assert fact_resp.status_code == 201
+
+        rem_resp = await client.post(
+            "/v1/reminders",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={
+                "personId": ex_id_str,
+                "title": "沈前任纪念日提醒SecretRem",
+                "rule": "yearly",
+                "targetMonth": 5,
+                "targetDay": 20,
+                "leadDays": [0],
+            },
+        )
+        assert rem_resp.status_code == 201
+        ex_rem_id = UUID(rem_resp.json()["id"])
+
+        chat_resp = await client.post(
+            f"/v1/persons/{ex_id_str}/chat/messages?stream=false",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={"message": "我再也不想看到沈前任SecretChat999了"},
+        )
+        assert chat_resp.status_code == 200
+
+        # Also seed encrypted blobs + DB rows for:
+        # 1) 沈前任 avatar photo + voice capture + material + reminder delivery
+        # 2) an active person's held venting record (review_state="held") + pending fact + held audio blob
+        # 3) a reverted capture (status="reverted") + reverted screenshot blob
+        ex_avatar_key = f"{user_id}/persons/{ex_id}/avatar_ex.webp"
+        ex_voice_key = f"{user_id}/captures/ex_voice.webm"
+        held_voice_key = f"{user_id}/captures/held_venting.webm"
+        reverted_img_key = f"{user_id}/captures/reverted_shot.webp"
+
+        async with db_container.db.user_session(UserScope(user_id)) as sess:
+            dek = await db_container.load_user_dek(sess, UserScope(user_id))
+            now = db_container.clock.now()
+
+            for key, payload, ctype in [
+                (ex_avatar_key, b"EX-PARTNER-AVATAR-BYTES", "image/webp"),
+                (ex_voice_key, b"EX-PARTNER-VOICE-BYTES", "audio/webm"),
+                (held_voice_key, b"HELD-VENTING-VOICE-BYTES", "audio/webm"),
+                (reverted_img_key, b"REVERTED-SCREENSHOT-BYTES", "image/webp"),
+            ]:
+                await db_container.storage.put_encrypted(
+                    user_id=user_id,
+                    dek=dek,
+                    object_key=key,
+                    plaintext=payload,
+                    content_type=ctype,
+                )
+
+            ex_row = await sess.get(PersonRow, ex_id)
+            assert ex_row is not None
+            ex_row.has_photo = True
+            ex_row.avatar_object_key = ex_avatar_key
+
+            active_person_id = await sess.scalar(
+                select(PersonRow.id).where(
+                    PersonRow.user_id == user_id,
+                    PersonRow.tier == "gold",
+                    PersonRow.deleted_at.is_(None),
+                )
+            )
+            assert active_person_id is not None
+
+            ex_cap_id = new_id()
+            ex_rec_id = new_id()
+            reverted_cap_id = new_id()
+            held_rec_id = new_id()
+            held_fact_id = new_id()
+
+            sess.add_all(
+                [
+                    CaptureRow(
+                        id=ex_cap_id,
+                        user_id=user_id,
+                        source="voice",
+                        route_mode="global",
+                        scoped_person_id=None,
+                        status="completed",
+                        audio_object_key=ex_voice_key,
+                        keep_original_media=True,
+                        transcript_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "沈前任的语音原声SecretVoice",
+                            user_id=user_id,
+                            table="captures",
+                            column="transcript_enc",
+                            row_id=ex_cap_id,
+                        ),
+                        idempotency_key=f"cap-ex-{ex_cap_id}",
+                        created_at=now,
+                        completed_at=now,
+                    ),
+                    CaptureRow(
+                        id=reverted_cap_id,
+                        user_id=user_id,
+                        source="image",
+                        route_mode="global",
+                        scoped_person_id=None,
+                        status="reverted",
+                        image_object_key=reverted_img_key,
+                        keep_original_media=True,
+                        raw_text_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "已撤销的截图文字SecretReverted",
+                            user_id=user_id,
+                            table="captures",
+                            column="raw_text_enc",
+                            row_id=reverted_cap_id,
+                        ),
+                        idempotency_key=f"cap-rev-{reverted_cap_id}",
+                        created_at=now,
+                    ),
+                ]
+            )
+            await sess.flush()
+
+            sess.add_all(
+                [
+                    RecordRow(
+                        id=ex_rec_id,
+                        user_id=user_id,
+                        person_id=ex_id,
+                        capture_id=ex_cap_id,
+                        kind="voice",
+                        title_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "沈前任旧手札",
+                            user_id=user_id,
+                            table="records",
+                            column="title_enc",
+                            row_id=ex_rec_id,
+                        ),
+                        body_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "沈前任旧手札正文SecretSlip",
+                            user_id=user_id,
+                            table="records",
+                            column="body_enc",
+                            row_id=ex_rec_id,
+                        ),
+                        media_object_key=ex_voice_key,
+                        review_state="normal",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    RecordRow(
+                        id=held_rec_id,
+                        user_id=user_id,
+                        person_id=active_person_id,
+                        capture_id=None,
+                        kind="voice",
+                        title_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "深夜气话暂缓",
+                            user_id=user_id,
+                            table="records",
+                            column="title_enc",
+                            row_id=held_rec_id,
+                        ),
+                        body_enc=db_container.cipher.encrypt_str(
+                            dek,
+                            "气头上说的暂缓手札SecretHeldVent",
+                            user_id=user_id,
+                            table="records",
+                            column="body_enc",
+                            row_id=held_rec_id,
+                        ),
+                        media_object_key=held_voice_key,
+                        review_state="held",
+                        created_at=now,
+                        updated_at=now,
+                    ),
+                    ReminderDeliveryRow(
+                        id=new_id(),
+                        user_id=user_id,
+                        reminder_id=ex_rem_id,
+                        scheduled_for=now,
+                        lead_day=0,
+                        channel="ios_apns",
+                        status="delivered",
+                        delivered_at=now,
+                    ),
+                ]
+            )
+            await sess.flush()
+
+            sess.add(
+                FactRow(
+                    id=held_fact_id,
+                    user_id=user_id,
+                    person_id=active_person_id,
+                    record_id=held_rec_id,
+                    capture_id=None,
+                    type="taboo",
+                    polarity="negative",
+                    content_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "暂缓气话抽出的待定雷区SecretHeldFact",
+                        user_id=user_id,
+                        table="facts",
+                        column="content_enc",
+                        row_id=held_fact_id,
+                    ),
+                    status="pending",
+                    pending_reason="venting",
+                    confidence=0.7,
+                    created_by="ai",
+                    valid_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        # Soft-delete 沈前任 via DELETE /v1/persons/{id} (30-day soft delete retains encrypted blobs on disk)
+        del_resp = await client.delete(
+            f"/v1/persons/{ex_id_str}",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+        )
+        assert del_resp.status_code == 204
+
+        # Export user data and inspect archive
+        exp_resp = await client.post(
+            "/v1/me/exports",
+            headers={
+                **auth_headers,
+                "X-Reauth-Token": reauth_tok,
+                "Idempotency-Key": str(new_id()),
+            },
+            json={"asyncMode": False},
+        )
+        assert exp_resp.status_code == 201, exp_resp.text
+        dl_path = exp_resp.json()["downloadPath"]
+
+        dl_resp = await client.get(dl_path, headers=auth_headers)
+        assert dl_resp.status_code == 200
+
+        with zipfile.ZipFile(io.BytesIO(dl_resp.content), mode="r") as zf:
+            archive_names = set(zf.namelist())
+            raw_data_json = zf.read("data.json").decode("utf-8")
+            data_doc = json.loads(raw_data_json)
+            journal_md = zf.read("journal.md").decode("utf-8")
+
+            # Active person data & media remain intact
+            assert "沈清秋" in raw_data_json
+            assert "沈清秋" in journal_md
+            assert "media/ocean_promise.webm" in archive_names
+            assert zf.read("media/ocean_promise.webm") == b"ACTIVE-OCEAN-PROMISE-VOICE"
+            assert active_media_key in {m["objectKey"] for m in data_doc["mediaFiles"]}
+
+            # Zero soft-deleted person data, held venting data, or reverted capture data in journal.md or data.json
+            for forbidden in (
+                "沈前任",
+                "阿沈",
+                "沈前任的私密敏感禁忌记录XYZ",
+                "我再也不想看到沈前任SecretChat999了",
+                "沈前任纪念日提醒SecretRem",
+                "沈前任的语音原声SecretVoice",
+                "沈前任旧手札正文SecretSlip",
+                "气头上说的暂缓手札SecretHeldVent",
+                "暂缓气话抽出的待定雷区SecretHeldFact",
+                "已撤销的截图文字SecretReverted",
+                ex_id_str,
+            ):
+                assert forbidden not in journal_md, f"Leaked {forbidden!r} into journal.md"
+                assert forbidden not in raw_data_json, f"Leaked {forbidden!r} into data.json"
+
+            assert all(a["personId"] != ex_id_str for a in data_doc["personAliases"])
+            assert all(f["personId"] != ex_id_str for f in data_doc["facts"])
+            assert all(r["personId"] != ex_id_str for r in data_doc["reminders"])
+            assert all(str(ex_rem_id) != d["reminderId"] for d in data_doc["reminderDeliveries"])
+            assert all(t["personId"] != ex_id_str for t in data_doc["chatThreads"])
+            assert all(m["personId"] != ex_id_str for m in data_doc["chatMessages"])
+
+            # Soft-deleted / held / reverted blobs on disk must NOT be swept into media/
+            for forbidden_arc in (
+                "media/avatar_ex.webp",
+                "media/ex_voice.webm",
+                "media/held_venting.webm",
+                "media/reverted_shot.webp",
+            ):
+                assert forbidden_arc not in archive_names

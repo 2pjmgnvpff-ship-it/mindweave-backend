@@ -34,7 +34,13 @@ from mindweave.core.orm import (
     UserPreferenceRow,
     UserRow,
 )
-from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    CaptureStatus,
+    FactStatus,
+    RecordReviewState,
+    ReminderStatus,
+)
 from mindweave.shared.scopes import UserScope
 
 
@@ -102,15 +108,20 @@ class DataRightsRepository:
         scope: UserScope,
         cipher: EnvelopeCipher,
         dek: bytes,
-    ) -> tuple[dict[str, Any], list[str]]:
+    ) -> tuple[dict[str, Any], list[str], set[str]]:
         uid = scope.user_id
         media_keys: list[str] = []
         seen_media: set[str] = set()
+        excluded_media_keys: set[str] = set()
 
         def _track_media(key: str | None) -> None:
             if key and key not in seen_media and "/exports/" not in key:
                 seen_media.add(key)
                 media_keys.append(key)
+
+        def _exclude_media(key: str | None) -> None:
+            if key and "/exports/" not in key:
+                excluded_media_keys.add(key)
 
         # 1. auth_identities (system table scoped by user_id)
         ident_rows = (
@@ -206,17 +217,37 @@ class DataRightsRepository:
             for r in device_rows
         ]
 
-        # 5. persons (exclude internal UNASSIGNED_PERSON_SLUG placeholder!)
-        unassigned_person_ids: set[UUID] = set(
-            (
-                await user_session.scalars(
-                    select(PersonRow.id).where(
-                        PersonRow.user_id == uid,
-                        PersonRow.slug == UNASSIGNED_PERSON_SLUG,
-                    )
+        # 5. persons (exclude soft-deleted persons and internal UNASSIGNED_PERSON_SLUG placeholder!)
+        deleted_person_rows = (
+            await user_session.scalars(
+                select(PersonRow).where(
+                    PersonRow.user_id == uid,
+                    PersonRow.deleted_at.is_not(None),
                 )
-            ).all()
+            )
+        ).all()
+        deleted_person_ids: set[UUID] = set()
+        for dp in deleted_person_rows:
+            deleted_person_ids.add(dp.id)
+            _exclude_media(dp.avatar_object_key)
+            _exclude_media(dp.main_photo_object_key)
+            _exclude_media(dp.sub_photo_object_key)
+
+        unassigned_person_ids: set[UUID] = (
+            set(
+                (
+                    await user_session.scalars(
+                        select(PersonRow.id).where(
+                            PersonRow.user_id == uid,
+                            PersonRow.slug == UNASSIGNED_PERSON_SLUG,
+                        )
+                    )
+                ).all()
+            )
+            - deleted_person_ids
         )
+        hidden_person_ids: set[UUID] = deleted_person_ids | unassigned_person_ids
+
         person_rows = (
             await user_session.scalars(
                 select(PersonRow)
@@ -297,7 +328,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 6. person_aliases (exclude aliases attached to internal UNASSIGNED_PERSON_SLUG placeholder)
+        # 6. person_aliases (exclude soft-deleted persons and UNASSIGNED_PERSON_SLUG placeholder)
         alias_rows = (
             await user_session.scalars(
                 select(PersonAliasRow)
@@ -322,7 +353,7 @@ class DataRightsRepository:
                 "createdAt": a.created_at.isoformat(),
             }
             for a in alias_rows
-            if a.person_id not in unassigned_person_ids
+            if a.person_id not in hidden_person_ids
         ]
 
         def _public_person_id(pid: UUID | None) -> str | None:
@@ -330,7 +361,81 @@ class DataRightsRepository:
                 return None
             return str(pid)
 
-        # 7. captures
+        # 7. records -> materials (partition before captures/facts/inbox/chat so deleted/held IDs are known)
+        all_record_rows = (
+            await user_session.scalars(
+                select(RecordRow)
+                .where(RecordRow.user_id == uid)
+                .order_by(RecordRow.created_at.asc())
+            )
+        ).all()
+        deleted_or_held_record_ids: set[UUID] = set()
+        deleted_person_capture_ids: set[UUID] = set()
+        surviving_capture_ids: set[UUID] = set()
+        materials: list[dict[str, Any]] = []
+        for rec in all_record_rows:
+            if (
+                rec.deleted_at is not None
+                or (rec.person_id is not None and rec.person_id in deleted_person_ids)
+                or rec.review_state == RecordReviewState.HELD.value
+            ):
+                deleted_or_held_record_ids.add(rec.id)
+                _exclude_media(rec.media_object_key)
+                if (
+                    rec.person_id is not None
+                    and rec.person_id in deleted_person_ids
+                    and rec.capture_id is not None
+                ):
+                    deleted_person_capture_ids.add(rec.capture_id)
+                continue
+            if rec.capture_id is not None:
+                surviving_capture_ids.add(rec.capture_id)
+            _track_media(rec.media_object_key)
+            materials.append(
+                {
+                    "id": str(rec.id),
+                    "personId": _public_person_id(rec.person_id),
+                    "captureId": str(rec.capture_id) if rec.capture_id else None,
+                    "kind": rec.kind,
+                    "title": cipher.decrypt_str(
+                        dek,
+                        rec.title_enc,
+                        user_id=uid,
+                        table="records",
+                        column="title_enc",
+                        row_id=rec.id,
+                    ),
+                    "body": cipher.decrypt_str(
+                        dek,
+                        rec.body_enc,
+                        user_id=uid,
+                        table="records",
+                        column="body_enc",
+                        row_id=rec.id,
+                    ),
+                    "snippet": _decrypt_opt_str(
+                        cipher,
+                        dek,
+                        rec.snippet_enc,
+                        user_id=uid,
+                        table="records",
+                        column="snippet_enc",
+                        row_id=rec.id,
+                    ),
+                    "mediaObjectKey": rec.media_object_key,
+                    "audioOffsetMs": rec.audio_offset_ms,
+                    "audioDurationMs": rec.audio_duration_ms,
+                    "stampCode": rec.stamp_code,
+                    "happenedOn": rec.happened_on.isoformat() if rec.happened_on else None,
+                    "pinned": rec.pinned,
+                    "reviewState": rec.review_state,
+                    "version": rec.version,
+                    "createdAt": rec.created_at.isoformat(),
+                    "updatedAt": rec.updated_at.isoformat(),
+                }
+            )
+
+        # 8. captures (exclude reverted captures and captures scoped/routed solely to soft-deleted persons)
         capture_rows = (
             await user_session.scalars(
                 select(CaptureRow)
@@ -340,6 +445,17 @@ class DataRightsRepository:
         ).all()
         captures: list[dict[str, Any]] = []
         for c in capture_rows:
+            only_for_deleted_persons = (
+                c.id in deleted_person_capture_ids and c.id not in surviving_capture_ids
+            )
+            if (
+                c.status == CaptureStatus.REVERTED.value
+                or (c.scoped_person_id is not None and c.scoped_person_id in deleted_person_ids)
+                or only_for_deleted_persons
+            ):
+                _exclude_media(c.audio_object_key)
+                _exclude_media(c.image_object_key)
+                continue
             _track_media(c.audio_object_key)
             _track_media(c.image_object_key)
             captures.append(
@@ -399,62 +515,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 8. records -> materials (preserve 100% of user content, mapping unassigned personId -> None)
-        record_rows = (
-            await user_session.scalars(
-                select(RecordRow)
-                .where(RecordRow.user_id == uid, RecordRow.deleted_at.is_(None))
-                .order_by(RecordRow.created_at.asc())
-            )
-        ).all()
-        materials: list[dict[str, Any]] = []
-        for rec in record_rows:
-            _track_media(rec.media_object_key)
-            materials.append(
-                {
-                    "id": str(rec.id),
-                    "personId": _public_person_id(rec.person_id),
-                    "captureId": str(rec.capture_id) if rec.capture_id else None,
-                    "kind": rec.kind,
-                    "title": cipher.decrypt_str(
-                        dek,
-                        rec.title_enc,
-                        user_id=uid,
-                        table="records",
-                        column="title_enc",
-                        row_id=rec.id,
-                    ),
-                    "body": cipher.decrypt_str(
-                        dek,
-                        rec.body_enc,
-                        user_id=uid,
-                        table="records",
-                        column="body_enc",
-                        row_id=rec.id,
-                    ),
-                    "snippet": _decrypt_opt_str(
-                        cipher,
-                        dek,
-                        rec.snippet_enc,
-                        user_id=uid,
-                        table="records",
-                        column="snippet_enc",
-                        row_id=rec.id,
-                    ),
-                    "mediaObjectKey": rec.media_object_key,
-                    "audioOffsetMs": rec.audio_offset_ms,
-                    "audioDurationMs": rec.audio_duration_ms,
-                    "stampCode": rec.stamp_code,
-                    "happenedOn": rec.happened_on.isoformat() if rec.happened_on else None,
-                    "pinned": rec.pinned,
-                    "reviewState": rec.review_state,
-                    "version": rec.version,
-                    "createdAt": rec.created_at.isoformat(),
-                    "updatedAt": rec.updated_at.isoformat(),
-                }
-            )
-
-        # 9. facts (preserve 100% of user facts, mapping unassigned personId -> None)
+        # 9. facts (exclude deleted persons, rejected facts, and facts tied to deleted/held records)
         fact_rows = (
             await user_session.scalars(
                 select(FactRow).where(FactRow.user_id == uid).order_by(FactRow.created_at.asc())
@@ -497,9 +558,14 @@ class DataRightsRepository:
                 "updatedAt": f.updated_at.isoformat(),
             }
             for f in fact_rows
+            if not (
+                (f.person_id is not None and f.person_id in deleted_person_ids)
+                or f.status == FactStatus.REJECTED.value
+                or (f.record_id is not None and f.record_id in deleted_or_held_record_ids)
+            )
         ]
 
-        # 10. inbox_items
+        # 10. inbox_items (exclude deleted persons, deleted/held records, and discarded resolutions)
         inbox_rows = (
             await user_session.scalars(
                 select(InboxItemRow)
@@ -517,9 +583,7 @@ class DataRightsRepository:
                 "status": item.status,
                 "factIds": [str(fid) for fid in item.fact_ids],
                 "candidatePersonIds": [
-                    str(cid)
-                    for cid in item.candidate_person_ids
-                    if cid not in unassigned_person_ids
+                    str(cid) for cid in item.candidate_person_ids if cid not in hidden_person_ids
                 ],
                 "payload": _decrypt_opt_json(
                     cipher,
@@ -536,9 +600,14 @@ class DataRightsRepository:
                 "createdAt": item.created_at.isoformat(),
             }
             for item in inbox_rows
+            if not (
+                (item.person_id is not None and item.person_id in deleted_person_ids)
+                or (item.record_id is not None and item.record_id in deleted_or_held_record_ids)
+                or (item.status == "resolved" and item.resolution_action == "discard")
+            )
         ]
 
-        # 11. reminders
+        # 11. reminders (exclude hidden/deleted persons and cancelled reminders)
         reminder_rows = (
             await user_session.scalars(
                 select(ReminderRow)
@@ -546,42 +615,47 @@ class DataRightsRepository:
                 .order_by(ReminderRow.created_at.asc())
             )
         ).all()
-        reminders = [
-            {
-                "id": str(rem.id),
-                "personId": _public_person_id(rem.person_id),
-                "factId": str(rem.fact_id) if rem.fact_id else None,
-                "title": cipher.decrypt_str(
-                    dek,
-                    rem.title_enc,
-                    user_id=uid,
-                    table="reminders",
-                    column="title_enc",
-                    row_id=rem.id,
-                ),
-                "rule": rem.rule,
-                "isLunar": rem.is_lunar,
-                "targetMonth": rem.target_month,
-                "targetDay": rem.target_day,
-                "isLeapMonth": rem.is_leap_month,
-                "onceDate": rem.once_date.isoformat() if rem.once_date else None,
-                "fireHour": rem.fire_hour,
-                "fireMinute": rem.fire_minute,
-                "leadDays": list(rem.lead_days),
-                "timezone": rem.timezone,
-                "nextFireAt": _iso(rem.next_fire_at),
-                "nextLeadDay": rem.next_lead_day,
-                "status": rem.status,
-                "lastFiredAt": _iso(rem.last_fired_at),
-                "actionDoneAt": _iso(rem.action_done_at),
-                "version": rem.version,
-                "createdAt": rem.created_at.isoformat(),
-                "updatedAt": rem.updated_at.isoformat(),
-            }
-            for rem in reminder_rows
-        ]
+        exported_reminder_ids: set[UUID] = set()
+        reminders: list[dict[str, Any]] = []
+        for rem in reminder_rows:
+            if rem.person_id in hidden_person_ids or rem.status == ReminderStatus.CANCELLED.value:
+                continue
+            exported_reminder_ids.add(rem.id)
+            reminders.append(
+                {
+                    "id": str(rem.id),
+                    "personId": _public_person_id(rem.person_id),
+                    "factId": str(rem.fact_id) if rem.fact_id else None,
+                    "title": cipher.decrypt_str(
+                        dek,
+                        rem.title_enc,
+                        user_id=uid,
+                        table="reminders",
+                        column="title_enc",
+                        row_id=rem.id,
+                    ),
+                    "rule": rem.rule,
+                    "isLunar": rem.is_lunar,
+                    "targetMonth": rem.target_month,
+                    "targetDay": rem.target_day,
+                    "isLeapMonth": rem.is_leap_month,
+                    "onceDate": rem.once_date.isoformat() if rem.once_date else None,
+                    "fireHour": rem.fire_hour,
+                    "fireMinute": rem.fire_minute,
+                    "leadDays": list(rem.lead_days),
+                    "timezone": rem.timezone,
+                    "nextFireAt": _iso(rem.next_fire_at),
+                    "nextLeadDay": rem.next_lead_day,
+                    "status": rem.status,
+                    "lastFiredAt": _iso(rem.last_fired_at),
+                    "actionDoneAt": _iso(rem.action_done_at),
+                    "version": rem.version,
+                    "createdAt": rem.created_at.isoformat(),
+                    "updatedAt": rem.updated_at.isoformat(),
+                }
+            )
 
-        # 12. reminder_deliveries
+        # 12. reminder_deliveries (only for non-excluded reminders)
         delivery_rows = (
             await user_session.scalars(
                 select(ReminderDeliveryRow)
@@ -600,9 +674,10 @@ class DataRightsRepository:
                 "deliveredAt": d.delivered_at.isoformat(),
             }
             for d in delivery_rows
+            if d.reminder_id in exported_reminder_ids
         ]
 
-        # 13. chat_threads
+        # 13. chat_threads (exclude hidden/deleted persons)
         thread_rows = (
             await user_session.scalars(
                 select(ChatThreadRow)
@@ -630,9 +705,10 @@ class DataRightsRepository:
                 "updatedAt": t.updated_at.isoformat(),
             }
             for t in thread_rows
+            if t.person_id not in hidden_person_ids
         ]
 
-        # 14. chat_messages
+        # 14. chat_messages (exclude hidden/deleted persons and filter deleted/held referencedRecordIds)
         message_rows = (
             await user_session.scalars(
                 select(ChatMessageRow)
@@ -640,59 +716,68 @@ class DataRightsRepository:
                 .order_by(ChatMessageRow.created_at.asc())
             )
         ).all()
-        chat_messages = [
-            {
-                "id": str(m.id),
-                "threadId": str(m.thread_id),
-                "personId": _public_person_id(m.person_id),
-                "role": m.role,
-                "content": cipher.decrypt_str(
-                    dek,
-                    m.content_enc,
-                    user_id=uid,
-                    table="chat_messages",
-                    column="content_enc",
-                    row_id=m.id,
-                ),
-                "whisper": _decrypt_opt_str(
-                    cipher,
-                    dek,
-                    m.whisper_enc,
-                    user_id=uid,
-                    table="chat_messages",
-                    column="whisper_enc",
-                    row_id=m.id,
-                ),
-                "perspectives": _decrypt_opt_json(
-                    cipher,
-                    dek,
-                    m.perspectives_enc,
-                    user_id=uid,
-                    table="chat_messages",
-                    column="perspectives_enc",
-                    row_id=m.id,
-                ),
-                "suggestions": _decrypt_opt_json(
-                    cipher,
-                    dek,
-                    m.suggestions_enc,
-                    user_id=uid,
-                    table="chat_messages",
-                    column="suggestions_enc",
-                    row_id=m.id,
-                ),
-                "referencedRecordIds": [str(rid) for rid in m.referenced_record_ids],
-                "tierSnapshot": m.tier_snapshot,
-                "safetyCategory": m.safety_category,
-                "hasUnrecordedGap": m.has_unrecorded_gap,
-                "promptVersion": m.prompt_version,
-                "clientMessageId": m.client_message_id,
-                "createdAt": m.created_at.isoformat(),
-            }
-            for m in message_rows
-        ]
+        exported_message_ids: set[UUID] = set()
+        chat_messages: list[dict[str, Any]] = []
+        for m in message_rows:
+            if m.person_id in hidden_person_ids:
+                continue
+            exported_message_ids.add(m.id)
+            chat_messages.append(
+                {
+                    "id": str(m.id),
+                    "threadId": str(m.thread_id),
+                    "personId": _public_person_id(m.person_id),
+                    "role": m.role,
+                    "content": cipher.decrypt_str(
+                        dek,
+                        m.content_enc,
+                        user_id=uid,
+                        table="chat_messages",
+                        column="content_enc",
+                        row_id=m.id,
+                    ),
+                    "whisper": _decrypt_opt_str(
+                        cipher,
+                        dek,
+                        m.whisper_enc,
+                        user_id=uid,
+                        table="chat_messages",
+                        column="whisper_enc",
+                        row_id=m.id,
+                    ),
+                    "perspectives": _decrypt_opt_json(
+                        cipher,
+                        dek,
+                        m.perspectives_enc,
+                        user_id=uid,
+                        table="chat_messages",
+                        column="perspectives_enc",
+                        row_id=m.id,
+                    ),
+                    "suggestions": _decrypt_opt_json(
+                        cipher,
+                        dek,
+                        m.suggestions_enc,
+                        user_id=uid,
+                        table="chat_messages",
+                        column="suggestions_enc",
+                        row_id=m.id,
+                    ),
+                    "referencedRecordIds": [
+                        str(rid)
+                        for rid in m.referenced_record_ids
+                        if rid not in deleted_or_held_record_ids
+                    ],
+                    "tierSnapshot": m.tier_snapshot,
+                    "safetyCategory": m.safety_category,
+                    "hasUnrecordedGap": m.has_unrecorded_gap,
+                    "promptVersion": m.prompt_version,
+                    "clientMessageId": m.client_message_id,
+                    "createdAt": m.created_at.isoformat(),
+                }
+            )
 
-        # 15. chat_citations
+        # 15. chat_citations (only for exported messages and non-deleted/non-held records)
         citation_rows = (
             await user_session.scalars(
                 select(ChatCitationRow)
@@ -709,6 +794,8 @@ class DataRightsRepository:
                 "createdAt": cit.created_at.isoformat(),
             }
             for cit in citation_rows
+            if cit.message_id in exported_message_ids
+            and cit.record_id not in deleted_or_held_record_ids
         ]
 
         # 16. ai_calls -> aiUsageSummary
@@ -785,7 +872,7 @@ class DataRightsRepository:
             "aiUsageSummary": ai_usage_summary,
             "telemetryEvents": telemetry_events,
         }
-        return sections, media_keys
+        return sections, media_keys, excluded_media_keys - seen_media
 
     async def create_export_job(
         self,

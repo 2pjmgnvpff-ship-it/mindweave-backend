@@ -228,8 +228,15 @@ async def revert_capture_graph(
 
     for rec in records:
         provisional_person_ids_to_check.add(rec.person_id)
+    for fact in facts:
+        if fact.person_id is not None:
+            provisional_person_ids_to_check.add(fact.person_id)
 
-    # Archive any provisional / placeholder person created solely by this reverted capture
+    # Flush mutations first because session uses autoflush=False!
+    await session.flush()
+
+    # Archive & soft-delete any provisional / placeholder person created solely by this reverted capture
+    cleaned_provisional = False
     for pid in provisional_person_ids_to_check:
         person = await session.scalar(
             select(PersonRow).where(
@@ -249,11 +256,25 @@ async def revert_capture_graph(
                     )
                 )
             ).all()
-            if not other_recs:
+            other_facts = (
+                await session.scalars(
+                    select(FactRow.id).where(
+                        FactRow.user_id == scope.user_id,
+                        FactRow.person_id == pid,
+                        FactRow.status != FactStatus.REJECTED.value,
+                        FactRow.invalid_at.is_(None),
+                    )
+                )
+            ).all()
+            if not other_recs and not other_facts:
                 person.state = PersonState.ARCHIVED.value
                 person.archived_at = now
                 person.deleted_at = now
                 person.updated_at = now
+                cleaned_provisional = True
+
+    if cleaned_provisional:
+        await session.flush()
 
     cancelled_reminders = await cancel_reminders_for_facts(
         session,

@@ -102,6 +102,7 @@ def record_row_to_dto(
     *,
     tokens: TokenService | None = None,
     now: datetime | None = None,
+    mask_person_id: bool = False,
 ) -> MaterialDto:
     title, body, snippet = decrypt_record_fields(cipher, dek, row)
     has_media = bool(row.media_object_key)
@@ -116,7 +117,7 @@ def record_row_to_dto(
         )
     return MaterialDto(
         id=row.id,
-        person_id=row.person_id,
+        person_id=None if mask_person_id else row.person_id,
         capture_id=row.capture_id,
         kind=kind_enum,
         type=kind_enum,
@@ -173,6 +174,54 @@ def fact_row_to_dto(
     )
 
 
+async def _load_material_owner_or_404(
+    session: AsyncSession,
+    *,
+    scope: UserScope,
+    person_id: UUID,
+    not_found_msg: str = "Material not found",
+) -> PersonRow:
+    person = await session.scalar(
+        select(PersonRow).where(
+            PersonRow.id == person_id,
+            PersonRow.user_id == scope.user_id,
+        )
+    )
+    if person is None or person.deleted_at is not None:
+        raise NotFoundError(not_found_msg)
+    return person
+
+
+async def _get_or_create_unassigned_placeholder(
+    session: AsyncSession,
+    *,
+    scope: UserScope,
+    dek: bytes,
+    cipher: EnvelopeCipher,
+    now: datetime,
+) -> PersonRow:
+    existing = await session.scalar(
+        select(PersonRow).where(
+            PersonRow.user_id == scope.user_id,
+            PersonRow.slug == UNASSIGNED_PERSON_SLUG,
+            PersonRow.deleted_at.is_(None),
+        )
+    )
+    if existing is not None:
+        return existing
+    return await create_person_with_primary_alias(
+        session,
+        scope=scope,
+        dek=dek,
+        cipher=cipher,
+        display_name="待归档",
+        tier=Tier.CRYSTAL,
+        state=PersonState.PROVISIONAL,
+        now=now,
+        slug=UNASSIGNED_PERSON_SLUG,
+    )
+
+
 async def _cleanup_unassigned_placeholder_if_empty(
     session: AsyncSession,
     *,
@@ -200,6 +249,43 @@ async def _cleanup_unassigned_placeholder_if_empty(
         )
     )
     if int(remaining or 0) == 0:
+        person.state = PersonState.ARCHIVED.value
+        person.archived_at = now
+        person.deleted_at = now
+        person.updated_at = now
+        await session.flush()
+
+
+async def _cleanup_provisional_person_if_empty(
+    session: AsyncSession,
+    *,
+    scope: UserScope,
+    person: PersonRow | None,
+    now: Any,
+) -> None:
+    if (
+        person is None
+        or person.deleted_at is not None
+        or person.state != PersonState.PROVISIONAL.value
+        or person.slug == UNASSIGNED_PERSON_SLUG
+    ):
+        return
+    rem_rec_count = await session.scalar(
+        select(func.count(RecordRow.id)).where(
+            RecordRow.user_id == scope.user_id,
+            RecordRow.person_id == person.id,
+            RecordRow.deleted_at.is_(None),
+        )
+    )
+    rem_fact_count = await session.scalar(
+        select(func.count(FactRow.id)).where(
+            FactRow.user_id == scope.user_id,
+            FactRow.person_id == person.id,
+            FactRow.status != FactStatus.REJECTED.value,
+            FactRow.invalid_at.is_(None),
+        )
+    )
+    if int(rem_rec_count or 0) == 0 and int(rem_fact_count or 0) == 0:
         person.state = PersonState.ARCHIVED.value
         person.archived_at = now
         person.deleted_at = now
@@ -401,6 +487,7 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Material not found")
+            owner = await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
             return record_row_to_dto(
@@ -409,6 +496,7 @@ class MemoryService:
                 row,
                 tokens=self.container.tokens,
                 now=now,
+                mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
             )
 
     async def patch_material(
@@ -455,6 +543,7 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Material not found")
+            owner = await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
             if row.version != expected_version:
                 raise VersionMismatchError(
                     f"Expected version {expected_version}, current version is {row.version}."
@@ -521,6 +610,7 @@ class MemoryService:
                 row,
                 tokens=self.container.tokens,
                 now=now,
+                mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
             )
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -565,6 +655,7 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Material not found")
+            await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
             now = self.container.clock.now()
             row.deleted_at = now
             row.updated_at = now
@@ -596,6 +687,12 @@ class MemoryService:
             )
             if row is None or not row.media_object_key:
                 raise NotFoundError("Material media not found")
+            await _load_material_owner_or_404(
+                session,
+                scope=scope,
+                person_id=row.person_id,
+                not_found_msg="Material media not found",
+            )
             dek = await self.container.load_user_dek(session, scope)
             object_key = row.media_object_key
 
@@ -855,6 +952,8 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Fact not found")
+            if row.person_id is not None:
+                await require_person_row(session, scope, row.person_id)
             if row.version != expected_version:
                 raise VersionMismatchError(
                     f"Expected version {expected_version}, current version is {row.version}."
@@ -885,12 +984,20 @@ class MemoryService:
                 row.trigger_date = req.trigger_date
             if req.is_lunar is not None:
                 row.is_lunar = req.is_lunar
+                if req.is_lunar is False and req.lunar_is_leap_month is None:
+                    row.lunar_is_leap_month = False
             if req.lunar_month is not None:
                 row.lunar_month = req.lunar_month
             if req.lunar_day is not None:
                 row.lunar_day = req.lunar_day
             if req.lunar_is_leap_month is not None:
                 row.lunar_is_leap_month = req.lunar_is_leap_month
+            if row.is_lunar and (row.lunar_month is None or row.lunar_day is None):
+                raise ValidationFailedError(
+                    "lunarMonth and lunarDay are required when isLunar is true"
+                )
+            if row.lunar_is_leap_month and not row.is_lunar:
+                raise ValidationFailedError("lunarIsLeapMonth requires isLunar=true")
             if req.status is not None:
                 row.status = req.status.value
                 if req.status is FactStatus.CONFIRMED:
@@ -974,6 +1081,8 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Fact not found")
+            if row.person_id is not None:
+                await require_person_row(session, scope, row.person_id)
             now = self.container.clock.now()
             row.status = FactStatus.REJECTED.value
             row.invalid_at = now
@@ -1251,6 +1360,15 @@ class MemoryService:
                 if linked_record is not None and linked_record.deleted_at is None:
                     if validated_target_person is not None:
                         linked_record.person_id = validated_target_person.id
+                    elif effective_current_person_id is None:
+                        placeholder = await _get_or_create_unassigned_placeholder(
+                            session,
+                            scope=scope,
+                            dek=dek,
+                            cipher=self.container.cipher,
+                            now=now,
+                        )
+                        linked_record.person_id = placeholder.id
                     linked_record.review_state = RecordReviewState.NOTE_ONLY.value
                     linked_record.updated_at = now
                     linked_record.version += 1
@@ -1261,9 +1379,18 @@ class MemoryService:
                     fact.invalid_at = now
                     fact.updated_at = now
                     fact.version += 1
+                await session.flush()
                 await cancel_reminders_for_facts(
                     session, user_id=scope.user_id, fact_ids=resolved_fact_ids, now=now
                 )
+                if (
+                    validated_target_person is not None
+                    and current_person_row is not None
+                    and current_person_row.id != validated_target_person.id
+                ):
+                    await _cleanup_provisional_person_if_empty(
+                        session, scope=scope, person=current_person_row, now=now
+                    )
                 if validated_target_person is not None:
                     await _cleanup_unassigned_placeholder_if_empty(
                         session, scope=scope, person_id=old_rec_person_id, now=now
@@ -1280,27 +1407,14 @@ class MemoryService:
                     fact.invalid_at = now
                     fact.updated_at = now
                     fact.version += 1
+                await session.flush()
                 await cancel_reminders_for_facts(
                     session, user_id=scope.user_id, fact_ids=resolved_fact_ids, now=now
                 )
-                # If new_person_confirm was discarded and provisional person has no other active records, archive it
-                if (
-                    item.kind == InboxItemKind.NEW_PERSON_CONFIRM.value
-                    and current_person_row is not None
-                    and current_person_row.state == PersonState.PROVISIONAL.value
-                ):
-                    rem_count = await session.scalar(
-                        select(func.count(RecordRow.id)).where(
-                            RecordRow.user_id == scope.user_id,
-                            RecordRow.person_id == current_person_row.id,
-                            RecordRow.deleted_at.is_(None),
-                        )
-                    )
-                    if int(rem_count or 0) == 0:
-                        current_person_row.state = PersonState.ARCHIVED.value
-                        current_person_row.archived_at = now
-                        current_person_row.deleted_at = now
-                        current_person_row.updated_at = now
+                # If provisional person now has no active records/facts, archive & soft-delete it
+                await _cleanup_provisional_person_if_empty(
+                    session, scope=scope, person=current_person_row, now=now
+                )
                 await _cleanup_unassigned_placeholder_if_empty(
                     session, scope=scope, person_id=old_rec_person_id, now=now
                 )
@@ -1342,6 +1456,10 @@ class MemoryService:
                     tz_name=tz_name,
                     now=now,
                 )
+                if current_person_row is not None and current_person_row.id != target_person.id:
+                    await _cleanup_provisional_person_if_empty(
+                        session, scope=scope, person=current_person_row, now=now
+                    )
                 await _cleanup_unassigned_placeholder_if_empty(
                     session, scope=scope, person_id=prev_rec_person_id, now=now
                 )
@@ -1381,6 +1499,10 @@ class MemoryService:
                     tz_name=tz_name,
                     now=now,
                 )
+                if current_person_row is not None and current_person_row.id != target_person.id:
+                    await _cleanup_provisional_person_if_empty(
+                        session, scope=scope, person=current_person_row, now=now
+                    )
                 await _cleanup_unassigned_placeholder_if_empty(
                     session, scope=scope, person_id=prev_rec_person_id, now=now
                 )

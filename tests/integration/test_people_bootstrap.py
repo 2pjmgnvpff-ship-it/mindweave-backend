@@ -964,9 +964,38 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_de
                 )
             )
 
-            # 2 open inbox items + 1 resolved inbox item -> inboxCount == 2
+            for idx, f_status in enumerate(("confirmed", "pending")):
+                fid = new_id()
+                sess.add(
+                    FactRow(
+                        id=fid,
+                        user_id=user_a,
+                        person_id=person_id,
+                        type="preference",
+                        polarity="positive",
+                        content_enc=db_container.cipher.encrypt_str(
+                            dek_a,
+                            f"敏感偏好-{idx}",
+                            user_id=user_a,
+                            table="facts",
+                            column="content_enc",
+                            row_id=fid,
+                        ),
+                        status=f_status,
+                        created_by="user",
+                        valid_at=base_ts,
+                        created_at=base_ts,
+                        updated_at=base_ts,
+                    )
+                )
+
+            # 2 open inbox items + 1 pre-resolved inbox item -> inboxCount == 2
+            open_inbox_ids: set[UUID] = set()
+            preresolved_inbox_id = new_id()
             for idx, st in enumerate(("open", "open", "resolved")):
-                iid = new_id()
+                iid = preresolved_inbox_id if st == "resolved" else new_id()
+                if st == "open":
+                    open_inbox_ids.add(iid)
                 sess.add(
                     InboxItemRow(
                         id=iid,
@@ -974,6 +1003,8 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_de
                         person_id=person_id,
                         kind="fact_confirm",
                         status=st,
+                        resolution_action="confirm" if st == "resolved" else None,
+                        resolved_at=base_ts if st == "resolved" else None,
                         payload_enc=db_container.cipher.encrypt_json(
                             dek_a,
                             {"n": idx},
@@ -1064,6 +1095,12 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_de
             assert len(rec_rows) == 13
             assert all(r.deleted_at is not None for r in rec_rows)
 
+            fact_rows = (
+                await sess.scalars(select(FactRow).where(FactRow.person_id == person_id))
+            ).all()
+            assert len(fact_rows) == 2
+            assert all(f.status == "rejected" and f.invalid_at is not None for f in fact_rows)
+
             rem_row = await sess.scalar(select(ReminderRow).where(ReminderRow.id == rem_id))
             assert rem_row is not None
             assert rem_row.status == "cancelled"
@@ -1072,7 +1109,11 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_de
             inbox_rows = (
                 await sess.scalars(select(InboxItemRow).where(InboxItemRow.person_id == person_id))
             ).all()
-            assert all(it.status == "resolved" for it in inbox_rows)
+            assert all(it.status == "resolved" and it.resolved_at is not None for it in inbox_rows)
+            by_iid = {it.id: it for it in inbox_rows}
+            for oid in open_inbox_ids:
+                assert by_iid[oid].resolution_action == "discard"
+            assert by_iid[preresolved_inbox_id].resolution_action == "confirm"
 
         # Encrypted blobs remain on disk pending the 30-day purge_soft_deleted worker job
         remaining_blobs = [
@@ -1081,3 +1122,84 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_de
             if p.is_file() and not p.name.endswith(".ct")
         ]
         assert len(remaining_blobs) == 3
+
+
+@pytest.mark.asyncio
+async def test_idempotency_replay_resigns_expired_media_urls_after_16m(
+    db_container: AppContainer,
+) -> None:
+    user_id, _, token_t0, _ = await _provision_user(db_container)
+    assert isinstance(db_container.clock, ManualClock)
+    app = _build_test_app(db_container)
+    jpeg_bytes = _make_jpeg_with_exif()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        created = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token_t0, idem_key="r207-create"),
+            json={"nameCn": "宋词", "tier": "gold"},
+        )
+        assert created.status_code == 201
+        person_id = UUID(created.json()["id"])
+
+        up_avatar = await client.post(
+            f"/v1/persons/{person_id}/photos/avatar",
+            headers=_auth_headers(token_t0, idem_key="r207-up-avatar"),
+            files={"file": ("avatar.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert up_avatar.status_code == 200
+        old_avatar_url = up_avatar.json()["avatarUrl"]
+
+        up_main = await client.post(
+            f"/v1/persons/{person_id}/photos/main",
+            headers=_auth_headers(token_t0, idem_key="r207-up-main"),
+            files={"file": ("main.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert up_main.status_code == 200
+
+        up_sub = await client.post(
+            f"/v1/persons/{person_id}/photos/sub",
+            headers=_auth_headers(token_t0, idem_key="r207-up-sub"),
+            files={"file": ("sub.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert up_sub.status_code == 200
+
+        patched = await client.patch(
+            f"/v1/persons/{person_id}",
+            headers=_auth_headers(token_t0, idem_key="r207-patch", if_match=4),
+            json={"shortMemo": "初见于江南"},
+        )
+        assert patched.status_code == 200
+
+        # Advance 16 minutes (> 15m media signature TTL, still inside 24h idempotency TTL)
+        db_container.clock.advance(seconds=960)
+        token_t16, _ = db_container.tokens.create_access_token(
+            user_id, now=db_container.clock.now()
+        )
+
+        # Previously issued signed URL is now expired -> 401
+        assert (await client.get(old_avatar_url)).status_code == 401
+
+        # Replaying photo upload & patch with original Idempotency-Keys freshly re-signs all non-null photo URLs!
+        replay_avatar = await client.post(
+            f"/v1/persons/{person_id}/photos/avatar",
+            headers=_auth_headers(token_t16, idem_key="r207-up-avatar"),
+            files={"file": ("avatar.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert replay_avatar.status_code == 200
+        fresh_avatar_url = replay_avatar.json()["avatarUrl"]
+        assert fresh_avatar_url != old_avatar_url
+        assert (await client.get(fresh_avatar_url)).status_code == 200
+
+        replay_patch = await client.patch(
+            f"/v1/persons/{person_id}",
+            headers=_auth_headers(token_t16, idem_key="r207-patch", if_match=4),
+            json={"shortMemo": "初见于江南"},
+        )
+        assert replay_patch.status_code == 200
+        rp_json = replay_patch.json()
+        for url_key in ("avatarUrl", "mainPhotoUrl", "subPhotoUrl"):
+            assert rp_json[url_key] is not None
+            assert (await client.get(rp_json[url_key])).status_code == 200

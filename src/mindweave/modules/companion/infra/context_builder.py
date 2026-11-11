@@ -149,6 +149,7 @@ class ContextBuilder:
         user_message: str,
         referenced_material_ids: Sequence[UUID] = (),
         safety_override: SafetyCategory = SafetyCategory.NORMAL,
+        exclude_message_id: UUID | None = None,
     ) -> BuiltCompanionContext:
         # 1. Verify PersonRow strictly belongs to (scope.user_id, scope.person_id), not deleted & not unassigned
         person_row = await session.scalar(
@@ -369,16 +370,19 @@ class ContextBuilder:
             )
             rolling_summary = mask_hard_pii(raw_summary).masked_text
 
+        recent_stmt = select(ChatMessageRow).where(
+            ChatMessageRow.user_id == scope.user_id,
+            ChatMessageRow.person_id == scope.person_id,
+        )
+        if exclude_message_id is not None:
+            recent_stmt = recent_stmt.where(ChatMessageRow.id != exclude_message_id)
+
         recent_msg_rows = list(
             (
                 await session.scalars(
-                    select(ChatMessageRow)
-                    .where(
-                        ChatMessageRow.user_id == scope.user_id,
-                        ChatMessageRow.person_id == scope.person_id,
-                    )
-                    .order_by(ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc())
-                    .limit(self._recent_turn_limit)
+                    recent_stmt.order_by(
+                        ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc()
+                    ).limit(self._recent_turn_limit)
                 )
             ).all()
         )

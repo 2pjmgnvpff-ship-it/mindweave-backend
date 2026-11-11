@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from mindweave.core.dto import CamelModel
 from mindweave.shared.enums import (
@@ -28,7 +28,7 @@ from mindweave.shared.enums import (
 
 class MaterialDto(CamelModel):
     id: UUID
-    person_id: UUID
+    person_id: UUID | None = None
     capture_id: UUID | None = None
     kind: RecordKind
     type: RecordKind
@@ -109,6 +109,14 @@ class FactCreateRequest(CamelModel):
     lunar_day: int | None = Field(default=None, ge=1, le=30)
     lunar_is_leap_month: bool = False
     supersedes_fact_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _validate_lunar_fields(self) -> FactCreateRequest:
+        if self.is_lunar and (self.lunar_month is None or self.lunar_day is None):
+            raise ValueError("lunarMonth and lunarDay are required when isLunar is true")
+        if self.lunar_is_leap_month and not self.is_lunar:
+            raise ValueError("lunarIsLeapMonth requires isLunar=true")
+        return self
 
 
 class FactPatchRequest(CamelModel):
