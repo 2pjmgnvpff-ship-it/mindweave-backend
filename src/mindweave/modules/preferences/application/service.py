@@ -129,8 +129,8 @@ class PreferencesService:
         scope: UserScope,
         *,
         raw_bytes: bytes,
-        idem_key: str | None = None,
-        serializer: Callable[[UserPreferences], dict[str, Any]] | None = None,
+        idem_key: str,
+        serializer: Callable[[UserPreferences], dict[str, Any]],
     ) -> tuple[UserPreferences | None, IdempotencyHit | None]:
         max_bytes = self._container.settings.max_image_bytes
         if not raw_bytes:
@@ -140,18 +140,7 @@ class PreferencesService:
                 f"Wallpaper image exceeds maximum allowed size ({max_bytes} bytes)"
             )
 
-        cleaned_idem: str | None = None
-        if idem_key is not None and idem_key.strip():
-            cleaned_idem = idem_key.strip()
-            if len(cleaned_idem) > 128:
-                raise ValidationFailedError("Idempotency-Key exceeds 128 characters")
-
-        sanitized = await asyncio.to_thread(
-            sanitize_wallpaper_image,
-            raw_bytes,
-            max_bytes=max_bytes,
-        )
-
+        req_hash = hash_request_payload(raw_bytes)
         new_object_key = f"{scope.user_id}/wallpaper/{new_id()}"
         old_object_key: str | None = None
         blob_written = False
@@ -159,18 +148,22 @@ class PreferencesService:
 
         try:
             async with self._container.db.user_session(scope) as session:
-                idem_row = None
-                if cleaned_idem is not None:
-                    idem_row, hit = await self._container.idempotency.claim_or_replay(
-                        session,
-                        scope=scope,
-                        idem_key=cleaned_idem,
-                        method="POST",
-                        path="/me/wallpaper",
-                        request_hash=hash_request_payload(raw_bytes),
-                    )
-                    if hit is not None:
-                        return None, hit
+                idem_row, hit = await self._container.idempotency.claim_or_replay(
+                    session,
+                    scope=scope,
+                    idem_key=idem_key,
+                    method="POST",
+                    path="/me/wallpaper",
+                    request_hash=req_hash,
+                )
+                if hit is not None:
+                    return None, hit
+
+                sanitized = await asyncio.to_thread(
+                    sanitize_wallpaper_image,
+                    raw_bytes,
+                    max_bytes=max_bytes,
+                )
 
                 dek = await self._container.load_user_dek(session, scope)
                 current = await self._repo.get_or_create(
@@ -199,13 +192,13 @@ class PreferencesService:
                 )
                 saved = await self._repo.save(session, scope, updated)
 
-                if idem_row is not None and serializer is not None:
-                    await self._container.idempotency.complete(
-                        session,
-                        idem_row,
-                        status_code=200,
-                        response_body=serializer(saved),
-                    )
+                assert idem_row is not None
+                await self._container.idempotency.complete(
+                    session,
+                    idem_row,
+                    status_code=200,
+                    response_body=serializer(saved),
+                )
         except Exception:
             if blob_written:
                 await self._container.storage.delete_object(object_key=new_object_key)
@@ -230,11 +223,28 @@ class PreferencesService:
             object_key=object_key,
         )
 
-    async def delete_wallpaper(self, scope: UserScope) -> None:
+    async def delete_wallpaper(
+        self,
+        scope: UserScope,
+        *,
+        idem_key: str,
+    ) -> IdempotencyHit | None:
         now = self._container.clock.now()
         old_object_key: str | None = None
+        req_hash = hash_request_payload({"action": "delete_wallpaper"})
 
         async with self._container.db.user_session(scope) as session:
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="DELETE",
+                path="/me/wallpaper",
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit
+
             current = await self._repo.get_optional(session, scope, for_update=True)
             if current is not None and current.wallpaper_object_key is not None:
                 old_object_key = current.wallpaper_object_key
@@ -246,5 +256,15 @@ class PreferencesService:
                 )
                 await self._repo.save(session, scope, updated)
 
+            assert idem_row is not None
+            await self._container.idempotency.complete(
+                session,
+                idem_row,
+                status_code=204,
+                response_body={"deleted": True},
+            )
+
         if old_object_key is not None:
             await self._container.storage.delete_object(object_key=old_object_key)
+
+        return None

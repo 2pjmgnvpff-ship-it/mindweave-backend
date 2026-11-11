@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
 from mindweave.core.dependencies import AppContainer
@@ -56,17 +57,42 @@ class BootstrapService:
         self._people_repo = PeopleRepository(container.cipher)
         self._query_repo = BootstrapQueryRepository(container.cipher)
 
-    def _photo_url(self, person_id: UUID, slot: PhotoSlot, object_key: str | None) -> str | None:
+    def _photo_url(
+        self,
+        scope: UserScope,
+        person_id: UUID,
+        slot: PhotoSlot,
+        object_key: str | None,
+        *,
+        now: datetime,
+    ) -> str | None:
         if not object_key:
             return None
         prefix = self._container.settings.api_prefix.rstrip("/")
-        return f"{prefix}/persons/{person_id}/photos/{slot.value}"
+        raw_path = f"{prefix}/persons/{person_id}/photos/{slot.value}"
+        return self._container.tokens.sign_media_path(
+            raw_path,
+            user_id=scope.user_id,
+            now=now,
+        )
 
-    def _material_media_url(self, record_id: UUID, media_object_key: str | None) -> str | None:
+    def _material_media_url(
+        self,
+        scope: UserScope,
+        record_id: UUID,
+        media_object_key: str | None,
+        *,
+        now: datetime,
+    ) -> str | None:
         if not media_object_key:
             return None
         prefix = self._container.settings.api_prefix.rstrip("/")
-        return f"{prefix}/materials/{record_id}/media"
+        raw_path = f"{prefix}/materials/{record_id}/media"
+        return self._container.tokens.sign_media_path(
+            raw_path,
+            user_id=scope.user_id,
+            now=now,
+        )
 
     async def load_workspace(self, scope: UserScope) -> WorkspaceBootstrapSnapshot:
         prefix = self._container.settings.api_prefix.rstrip("/")
@@ -81,12 +107,21 @@ class BootstrapService:
                 now=now,
             )
             has_wallpaper = bool(pref_row.wallpaper_object_key)
+            signed_wallpaper_url = (
+                self._container.tokens.sign_media_path(
+                    f"{prefix}/me/wallpaper",
+                    user_id=scope.user_id,
+                    now=now,
+                )
+                if has_wallpaper
+                else None
+            )
             prefs = BootstrapPreferencesSnapshot(
                 preferred_edition=Edition(pref_row.preferred_edition),
                 cupid_layout=CupidLayout(pref_row.cupid_layout),
                 wallpaper_preset=pref_row.wallpaper_preset,
                 has_custom_wallpaper=has_wallpaper,
-                wallpaper_url=f"{prefix}/me/wallpaper" if has_wallpaper else None,
+                wallpaper_url=signed_wallpaper_url,
                 wallpaper_blur=pref_row.wallpaper_blur,
                 wallpaper_vignette=pref_row.wallpaper_vignette,
                 app_lock_enabled=pref_row.app_lock_enabled,
@@ -122,16 +157,23 @@ class BootstrapService:
                     continue
                 profile = self._people_repo.decrypt_person_row(row, scope=scope, dek=dek)
                 mat_items = [
-                    (m, self._material_media_url(m.id, m.media_object_key))
+                    (
+                        m,
+                        self._material_media_url(scope, m.id, m.media_object_key, now=now),
+                    )
                     for m in materials_by_pid.get(pid, ())
                 ]
                 people_dict[str(pid)] = BootstrapPersonAggregate(
                     profile=profile,
-                    avatar_url=self._photo_url(pid, PhotoSlot.AVATAR, profile.avatar_object_key),
-                    main_photo_url=self._photo_url(
-                        pid, PhotoSlot.MAIN, profile.main_photo_object_key
+                    avatar_url=self._photo_url(
+                        scope, pid, PhotoSlot.AVATAR, profile.avatar_object_key, now=now
                     ),
-                    sub_photo_url=self._photo_url(pid, PhotoSlot.SUB, profile.sub_photo_object_key),
+                    main_photo_url=self._photo_url(
+                        scope, pid, PhotoSlot.MAIN, profile.main_photo_object_key, now=now
+                    ),
+                    sub_photo_url=self._photo_url(
+                        scope, pid, PhotoSlot.SUB, profile.sub_photo_object_key, now=now
+                    ),
                     materials=mat_items,
                 )
 

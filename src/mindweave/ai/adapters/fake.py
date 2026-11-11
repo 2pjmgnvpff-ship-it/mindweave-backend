@@ -583,10 +583,19 @@ class FakeAdapter:
         has_angry_retraction = bool(
             re.search(r"(?:其实刚才全是气话|刚才说的(?:全)?是气话)", clean_text)
         )
+        has_factual_pivot = l1_res.is_hyperbole_excluded or bool(
+            re.search(
+                r"(?:言归正传|不过说正事|(?:另外|顺便|赶紧)?(?:帮我)?记一下)",
+                payload.text,
+            )
+        )
         is_pure_angry_outburst = bool(
             not has_angry_retraction
+            and not has_factual_pivot
             and re.search(
-                r"(?:自私透顶|满嘴跑火车|这辈子再也不想理|谁再(?:跟|给)(?:她|他).{0,20}谁就是狗)",
+                r"(?:自私透顶|满嘴跑火车|(?:这辈子)?再也不(?:想)?理(?:她|他|TA|你)?|"
+                r"(?:气死我了|气炸了|烦死我了)[^。！？\n]{0,30}(?:不想理|拉黑|分手|绝交|受够了)|"
+                r"谁再(?:跟|给)(?:她|他).{0,20}谁就是狗)",
                 clean_text,
             )
         )
@@ -1264,8 +1273,162 @@ class FakeAdapter:
         hits.sort(key=lambda pair: pair[0])
         return [ref for _, ref in hits]
 
-    @staticmethod
-    def _detect_new_person_name(text: str, known_persons: list[KnownPersonRef]) -> str | None:
+    _NON_PERSON_EXACT: frozenset[str] = frozenset(
+        {
+            "他",
+            "她",
+            "它",
+            "我",
+            "你",
+            "您",
+            "咱",
+            "咱们",
+            "我们",
+            "你们",
+            "他们",
+            "她们",
+            "它们",
+            "他说",
+            "她说",
+            "它说",
+            "我说",
+            "他严重",
+            "她严重",
+            "他不能",
+            "她不能",
+            "今天",
+            "明天",
+            "昨天",
+            "前天",
+            "后天",
+            "今晚",
+            "明早",
+            "明晚",
+            "昨晚",
+            "最近",
+            "近期",
+            "平时",
+            "以前",
+            "现在",
+            "目前",
+            "刚才",
+            "刚刚",
+            "周末",
+            "周末记",
+            "下周",
+            "上周",
+            "本周",
+            "这周",
+            "有人",
+            "大家",
+            "自己",
+            "本人",
+            "对方",
+            "别人",
+            "人家",
+            "某人",
+            "朋友",
+            "同事",
+            "室友",
+            "同学",
+            "老板",
+            "领导",
+            "客户",
+            "前任",
+            "邻居",
+            "表弟",
+            "表姐",
+            "顺便",
+            "赶紧",
+            "记录",
+            "备忘",
+        }
+    )
+    _NON_PERSON_PREFIXES: tuple[str, ...] = (
+        "他",
+        "她",
+        "它",
+        "我",
+        "你",
+        "您",
+        "这",
+        "那个",
+        "那位",
+        "那天",
+        "那次",
+        "今天",
+        "今晚",
+        "今年",
+        "今早",
+        "明天",
+        "明早",
+        "明晚",
+        "明年",
+        "昨天",
+        "昨晚",
+        "前天",
+        "后天",
+        "周末",
+        "下周",
+        "上周",
+        "本周",
+        "这周",
+        "刚才",
+        "刚刚",
+        "最近",
+        "近期",
+        "平时",
+        "以前",
+        "现在",
+        "目前",
+        "有人",
+        "大家",
+        "自己",
+        "本人",
+        "对方",
+        "顺便",
+        "赶紧",
+        "记一",
+        "记录",
+        "备忘",
+    )
+    _NON_PERSON_SUBSTRINGS: tuple[str, ...] = (
+        "说",
+        "不能",
+        "不会",
+        "不吃",
+        "不喝",
+        "严重",
+        "非常",
+        "特别",
+        "其实",
+        "已经",
+        "准备",
+        "打算",
+        "喜欢",
+        "讨厌",
+        "过敏",
+        "周末",
+        "今天",
+        "明天",
+        "昨天",
+        "下周",
+        "上周",
+        "刚才",
+        "记一",
+        "顺便记",
+    )
+
+    @classmethod
+    def _is_valid_new_person_candidate(cls, cand: str, known_tokens: set[str]) -> bool:
+        if not cand or cand in known_tokens or cand in cls._NON_PERSON_EXACT:
+            return False
+        if cand.startswith(cls._NON_PERSON_PREFIXES):
+            return False
+        return not any(sub in cand for sub in cls._NON_PERSON_SUBSTRINGS)
+
+    @classmethod
+    def _detect_new_person_name(cls, text: str, known_persons: list[KnownPersonRef]) -> str | None:
         known_tokens = {r.display_name for r in known_persons} | {
             a for r in known_persons for a in r.aliases
         }
@@ -1278,11 +1441,7 @@ class FakeAdapter:
             m = re.search(pat, text)
             if m:
                 cand = m.group(1).strip()
-                if (
-                    cand
-                    and cand not in known_tokens
-                    and cand not in {"今天", "明天", "最近", "周末"}
-                ):
+                if cls._is_valid_new_person_candidate(cand, known_tokens):
                     return cand
         return None
 

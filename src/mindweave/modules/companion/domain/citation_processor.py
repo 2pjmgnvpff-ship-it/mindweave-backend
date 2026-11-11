@@ -117,12 +117,17 @@ class CitationProcessSummary:
     stripped_hallucinated_count: int
 
 
+_CANDIDATE_TAG_FIRST_CHARS = frozenset("rR记0123456789abcdefABCDEF")
+
+
 class StreamingCitationProcessor:
     """Chunk-boundary-invariant streaming citation processor (Invariants I4 & I6).
 
     - Buffers `[` / `【` tags across arbitrary SSE chunk splits.
-    - Tracks Markdown triple-backtick (```` ``` ````) and tilde (`~~~`) code fences across chunk
-      splits so bracket literals inside code blocks are never altered.
+    - Tracks Markdown triple-backtick (```` ``` ````) and tilde (`~~~`) code fences as well as
+      inline single/double-backtick code spans (`` `[rec_...]` ``) across chunk splits so bracket
+      literals inside code blocks/spans are never altered.
+    - Handles nested square brackets (e.g. `[重点：忌口 [rec_...] 必看]`) cleanly.
     - Verifies every cited UUID against `allowed_record_ids`:
       - Valid (`id in allowed_record_ids`): strips raw `[rec_<uuid>]` internal tag (or replaces
         with clean superscript/footnote marker when configured) and emits deduplicated
@@ -148,6 +153,9 @@ class StreamingCitationProcessor:
         self._in_code_fence: bool = False
         self._fence_char: str = ""
         self._fence_run_buf: str = ""
+        self._in_inline_code: bool = False
+        self._inline_tick_len: int = 0
+        self._inline_close_buf: str = ""
         self._tag_buf: str = ""
         self._pending_space: str = ""
         self._just_stripped_citation: bool = False
@@ -209,14 +217,53 @@ class StreamingCitationProcessor:
             self._last_emitted_char = ch[-1]
 
     def _emit_plain_char(self, ch: str, out: list[str]) -> None:
-        if ch == " " and not self._pending_space:
-            self._pending_space = " "
-            return
+        if ch == " ":
+            if not self._pending_space:
+                self._pending_space = " "
+                return
+            if self._just_stripped_citation:
+                # Collapse spaces on both sides of a stripped citation while keeping holdback active
+                return
         self._emit_char(ch, out)
 
     def _emit_plain_str(self, s: str, out: list[str]) -> None:
         for ch in s:
             self._emit_plain_char(ch, out)
+
+    def _flush_pending_space_before_code(self, out: list[str]) -> None:
+        if self._pending_space:
+            if not self._just_stripped_citation:
+                out.append(self._pending_space)
+                self._last_emitted_char = self._pending_space[-1]
+            self._pending_space = ""
+        self._just_stripped_citation = False
+
+    def _feed_inline_code_char(self, ch: str, out: list[str]) -> None:
+        if ch == "`":
+            self._inline_close_buf += ch
+            if len(self._inline_close_buf) == self._inline_tick_len:
+                out.append(self._inline_close_buf)
+                self._last_emitted_char = "`"
+                self._inline_close_buf = ""
+                self._in_inline_code = False
+                self._inline_tick_len = 0
+            return
+
+        if self._inline_close_buf:
+            out.append(self._inline_close_buf)
+            self._last_emitted_char = "`"
+            self._inline_close_buf = ""
+
+        if ch in ("\n", "\r"):
+            # Unclosed inline backticks do not span across line breaks
+            self._in_inline_code = False
+            self._inline_tick_len = 0
+            out.append(ch)
+            self._last_emitted_char = ch
+            return
+
+        out.append(ch)
+        self._last_emitted_char = ch
 
     def _process_outside_fence_char(
         self,
@@ -240,7 +287,7 @@ class StreamingCitationProcessor:
                 prev_tag = self._tag_buf
                 self._tag_buf = ""
                 self._emit_plain_str(prev_tag, out)
-                self._process_outside_fence_char(ch, out, step_new)
+                self._process_non_fenced_char(ch, out, step_new)
                 return 0
 
             if ch in _CLOSE_BRACKETS:
@@ -275,6 +322,17 @@ class StreamingCitationProcessor:
                     self._just_stripped_citation = True
                 return hallucinated_delta
 
+            # Early exit if first non-whitespace char inside `[...` cannot start a citation token
+            if (
+                not self._tag_buf[1:].strip()
+                and not ch.isspace()
+                and ch not in _CANDIDATE_TAG_FIRST_CHARS
+            ):
+                prev_tag = self._tag_buf
+                self._tag_buf = ""
+                self._emit_plain_str(prev_tag, out)
+                return self._process_non_fenced_char(ch, out, step_new)
+
             self._tag_buf += ch
             return 0
 
@@ -286,7 +344,7 @@ class StreamingCitationProcessor:
         self._emit_plain_char(ch, out)
         return 0
 
-    def _flush_fence_run_outside(
+    def _flush_tilde_run_outside(
         self,
         out: list[str],
         step_new: list[VerifiedCitation],
@@ -299,6 +357,64 @@ class StreamingCitationProcessor:
         for c in run:
             delta += self._process_outside_fence_char(c, out, step_new)
         return delta
+
+    def _process_non_fenced_char(
+        self,
+        ch: str,
+        out: list[str],
+        step_new: list[VerifiedCitation],
+    ) -> int:
+        hallucinated_delta = 0
+
+        if not self._tag_buf and ch in ("`", "~"):
+            if not self._fence_run_buf or self._fence_run_buf[0] == ch:
+                self._fence_run_buf += ch
+                if len(self._fence_run_buf) == 3:
+                    self._flush_pending_space_before_code(out)
+                    out.append(self._fence_run_buf)
+                    self._last_emitted_char = ch
+                    self._in_code_fence = True
+                    self._fence_char = ch
+                    self._fence_run_buf = ""
+                return 0
+
+            # Mismatched delimiter (`~` followed by `` ` ``, or `` ` `` followed by `~`)
+            if self._fence_run_buf[0] == "`":
+                tick_run = self._fence_run_buf
+                self._fence_run_buf = ""
+                self._flush_pending_space_before_code(out)
+                out.append(tick_run)
+                self._last_emitted_char = "`"
+                self._in_inline_code = True
+                self._inline_tick_len = len(tick_run)
+                self._inline_close_buf = ""
+                self._feed_inline_code_char(ch, out)
+                return 0
+
+            hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
+            self._fence_run_buf = ch
+            return hallucinated_delta
+
+        if self._fence_run_buf:
+            if self._fence_run_buf[0] == "`":
+                tick_run = self._fence_run_buf
+                self._fence_run_buf = ""
+                self._flush_pending_space_before_code(out)
+                out.append(tick_run)
+                self._last_emitted_char = "`"
+                if ch in ("\n", "\r"):
+                    out.append(ch)
+                    self._last_emitted_char = ch
+                else:
+                    self._in_inline_code = True
+                    self._inline_tick_len = len(tick_run)
+                    self._inline_close_buf = ""
+                    self._feed_inline_code_char(ch, out)
+                return 0
+            hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
+
+        hallucinated_delta += self._process_outside_fence_char(ch, out, step_new)
+        return hallucinated_delta
 
     def feed(self, chunk: str) -> CitationStepResult:
         if not chunk:
@@ -326,29 +442,11 @@ class StreamingCitationProcessor:
                     self._last_emitted_char = ch
                 continue
 
-            # Outside code fence: only recognize fence openers when not mid-tag
-            if not self._tag_buf and ch in ("`", "~"):
-                if not self._fence_run_buf or self._fence_run_buf[0] == ch:
-                    self._fence_run_buf += ch
-                    if len(self._fence_run_buf) == 3:
-                        if self._pending_space:
-                            out.append(self._pending_space)
-                            self._pending_space = ""
-                        self._just_stripped_citation = False
-                        out.append(self._fence_run_buf)
-                        self._last_emitted_char = ch
-                        self._in_code_fence = True
-                        self._fence_char = ch
-                        self._fence_run_buf = ""
-                    continue
-                hallucinated_delta += self._flush_fence_run_outside(out, step_new)
-                self._fence_run_buf = ch
+            if self._in_inline_code:
+                self._feed_inline_code_char(ch, out)
                 continue
 
-            if self._fence_run_buf:
-                hallucinated_delta += self._flush_fence_run_outside(out, step_new)
-
-            hallucinated_delta += self._process_outside_fence_char(ch, out, step_new)
+            hallucinated_delta += self._process_non_fenced_char(ch, out, step_new)
 
         return CitationStepResult(
             delta_text="".join(out),
@@ -367,9 +465,15 @@ class StreamingCitationProcessor:
                 self._fence_run_buf = ""
             self._in_code_fence = False
             self._fence_char = ""
+        elif self._in_inline_code:
+            if self._inline_close_buf:
+                out.append(self._inline_close_buf)
+                self._inline_close_buf = ""
+            self._in_inline_code = False
+            self._inline_tick_len = 0
         else:
             if self._fence_run_buf:
-                hallucinated_delta += self._flush_fence_run_outside(out, step_new)
+                hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
 
             if self._tag_buf:
                 tail = self._tag_buf

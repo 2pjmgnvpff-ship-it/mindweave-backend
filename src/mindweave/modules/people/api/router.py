@@ -6,17 +6,17 @@ from collections.abc import Iterator
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Header, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from mindweave.core.dependencies import (
     AppContainer,
     get_container,
     get_current_user_scope,
+    get_media_user_scope,
     parse_if_match_version,
     require_idempotency_key,
 )
-from mindweave.core.errors import ValidationFailedError
 from mindweave.modules.people.api.schemas import (
     AliasSeedItem,
     PersonAliasCreateRequest,
@@ -45,16 +45,7 @@ router = APIRouter(tags=["people"])
 _STREAM_CHUNK_BYTES = 64 * 1024
 
 
-def _normalize_optional_idem_key(raw_key: str | None) -> str | None:
-    if raw_key is None or not raw_key.strip():
-        return None
-    cleaned = raw_key.strip()
-    if len(cleaned) > 128:
-        raise ValidationFailedError("Idempotency-Key exceeds 128 characters")
-    return cleaned
-
-
-def _profile_to_dto(service: PeopleService, profile: PersonProfile) -> PersonDTO:
+def _profile_to_dto(service: PeopleService, scope: UserScope, profile: PersonProfile) -> PersonDTO:
     return PersonDTO(
         id=profile.id,
         slug=profile.slug,
@@ -70,9 +61,15 @@ def _profile_to_dto(service: PeopleService, profile: PersonProfile) -> PersonDTO
         short_memo=profile.short_memo,
         traits=profile.traits,
         visual_tokens=profile.visual_tokens,
-        avatar_url=service.photo_url(profile.id, PhotoSlot.AVATAR, profile.avatar_object_key),
-        main_photo_url=service.photo_url(profile.id, PhotoSlot.MAIN, profile.main_photo_object_key),
-        sub_photo_url=service.photo_url(profile.id, PhotoSlot.SUB, profile.sub_photo_object_key),
+        avatar_url=service.photo_url(
+            scope, profile.id, PhotoSlot.AVATAR, profile.avatar_object_key
+        ),
+        main_photo_url=service.photo_url(
+            scope, profile.id, PhotoSlot.MAIN, profile.main_photo_object_key
+        ),
+        sub_photo_url=service.photo_url(
+            scope, profile.id, PhotoSlot.SUB, profile.sub_photo_object_key
+        ),
         version=profile.version,
         archived_at=profile.archived_at,
         created_at=profile.created_at,
@@ -97,21 +94,33 @@ def _alias_to_dto(alias: PersonAlias) -> PersonAliasDTO:
     response_model_by_alias=True,
 )
 async def list_persons(
-    include_archived: bool = Query(default=False, alias="includeArchived"),
-    include_provisional: bool = Query(default=True, alias="includeProvisional"),
+    include_archived_camel: bool | None = Query(default=None, alias="includeArchived"),
+    include_archived_snake: bool | None = Query(default=None, alias="include_archived"),
+    include_provisional_camel: bool | None = Query(default=None, alias="includeProvisional"),
+    include_provisional_snake: bool | None = Query(default=None, alias="include_provisional"),
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> PersonListResponse:
+    resolved_include_archived = (
+        include_archived_camel
+        if include_archived_camel is not None
+        else (include_archived_snake if include_archived_snake is not None else False)
+    )
+    resolved_include_provisional = (
+        include_provisional_camel
+        if include_provisional_camel is not None
+        else (include_provisional_snake if include_provisional_snake is not None else True)
+    )
     service = PeopleService(container)
     result = await service.list_persons(
         scope,
-        include_archived=include_archived,
-        include_provisional=include_provisional,
+        include_archived=resolved_include_archived,
+        include_provisional=resolved_include_provisional,
     )
     return PersonListResponse(
         core_ids=result.core_ids,
         casual_ids=result.casual_ids,
-        items=[_profile_to_dto(service, p) for p in result.items],
+        items=[_profile_to_dto(service, scope, p) for p in result.items],
     )
 
 
@@ -137,7 +146,7 @@ async def create_person(
             extra_aliases.append((entry, AliasKind.NICKNAME))
 
     def _serialize(profile: PersonProfile) -> dict[str, Any]:
-        return _profile_to_dto(service, profile).model_dump(mode="json", by_alias=True)
+        return _profile_to_dto(service, scope, profile).model_dump(mode="json", by_alias=True)
 
     body, code = await service.create_person(
         scope,
@@ -172,7 +181,7 @@ async def get_person(
 ) -> PersonDTO:
     service = PeopleService(container)
     profile = await service.get_person(scope, person_id)
-    return _profile_to_dto(service, profile)
+    return _profile_to_dto(service, scope, profile)
 
 
 @router.patch(
@@ -193,7 +202,7 @@ async def patch_person(
     patch_fields = payload.model_dump(exclude_unset=True)
 
     def _serialize(profile: PersonProfile) -> dict[str, Any]:
-        return _profile_to_dto(service, profile).model_dump(mode="json", by_alias=True)
+        return _profile_to_dto(service, scope, profile).model_dump(mode="json", by_alias=True)
 
     body, code = await service.update_person(
         scope,
@@ -214,14 +223,14 @@ async def patch_person(
 async def delete_person(
     person_id: UUID,
     scope: UserScope = Depends(get_current_user_scope),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     service = PeopleService(container)
     await service.delete_person(
         scope,
         person_id,
-        idem_key=_normalize_optional_idem_key(idempotency_key),
+        idem_key=idem_key,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -327,7 +336,7 @@ async def create_person_alias(
     payload: PersonAliasCreateRequest,
     response: Response,
     scope: UserScope = Depends(get_current_user_scope),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> PersonAliasDTO:
     service = PeopleService(container)
@@ -340,7 +349,7 @@ async def create_person_alias(
         person_id,
         alias=payload.alias,
         kind=payload.kind,
-        idem_key=_normalize_optional_idem_key(idempotency_key),
+        idem_key=idem_key,
         serialize_alias=_serialize,
     )
     response.status_code = code
@@ -355,7 +364,7 @@ async def delete_person_alias(
     person_id: UUID,
     alias_id: UUID,
     scope: UserScope = Depends(get_current_user_scope),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     service = PeopleService(container)
@@ -363,7 +372,7 @@ async def delete_person_alias(
         scope,
         person_id,
         alias_id,
-        idem_key=_normalize_optional_idem_key(idempotency_key),
+        idem_key=idem_key,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -379,7 +388,7 @@ async def upload_person_photo(
     response: Response,
     file: UploadFile = File(...),
     scope: UserScope = Depends(get_current_user_scope),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> PersonDTO:
     service = PeopleService(container)
@@ -387,14 +396,14 @@ async def upload_person_photo(
     raw_bytes = await file.read(max_read)
 
     def _serialize(profile: PersonProfile) -> dict[str, Any]:
-        return _profile_to_dto(service, profile).model_dump(mode="json", by_alias=True)
+        return _profile_to_dto(service, scope, profile).model_dump(mode="json", by_alias=True)
 
     body, code = await service.upload_photo(
         scope,
         person_id,
         slot,
         raw_bytes=raw_bytes,
-        idem_key=_normalize_optional_idem_key(idempotency_key),
+        idem_key=idem_key,
         serialize_profile=_serialize,
     )
     response.status_code = code
@@ -408,7 +417,7 @@ async def upload_person_photo(
 async def get_person_photo(
     person_id: UUID,
     slot: PhotoSlot,
-    scope: UserScope = Depends(get_current_user_scope),
+    scope: UserScope = Depends(get_media_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
     service = PeopleService(container)

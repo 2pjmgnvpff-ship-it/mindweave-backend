@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 import pytest
@@ -27,9 +27,18 @@ from mindweave.core.orm import (
     UserRow,
 )
 from mindweave.modules.reminders.api.router import router as reminders_router
-from mindweave.modules.reminders.application.service import scan_and_deliver_due_reminders
+from mindweave.modules.reminders.application.service import (
+    ReminderService,
+    scan_and_deliver_due_reminders,
+)
 from mindweave.modules.reminders.infra.push import InMemoryPushRecorder
-from mindweave.shared.enums import JobStatus
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    JobStatus,
+    PersonState,
+    ReminderRule,
+    ReminderStatus,
+)
 from mindweave.shared.scopes import UserScope
 from mindweave.workers.__main__ import build_default_worker_runner
 from mindweave.workers.ports import TASK_PROCESS_CAPTURE, TASK_SCAN_DUE_REMINDERS
@@ -379,12 +388,28 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
         # User B sees zero of User A's devices and cannot delete User A's device (RLS + scope!)
         list_devs_b = await client.get("/v1/devices", headers=headers_b)
         assert list_devs_b.json()["items"] == []
-        del_cross = await client.delete(f"/v1/devices/{dev_web_id}", headers=headers_b)
+        del_cross = await client.delete(
+            f"/v1/devices/{dev_web_id}",
+            headers={**headers_b, "Idempotency-Key": "del-cross-1"},
+        )
         assert del_cross.status_code == 404
 
-        # Delete second device so User A has 1 active iOS device
-        del_ok = await client.delete(f"/v1/devices/{dev_web_id}", headers=headers_a)
+        # Missing Idempotency-Key on DELETE /devices/{id} -> 400 (P1-7)
+        assert (
+            await client.delete(f"/v1/devices/{dev_web_id}", headers=headers_a)
+        ).status_code == 400
+
+        # Delete second device with Idempotency-Key + verify 204 replay!
+        del_ok = await client.delete(
+            f"/v1/devices/{dev_web_id}",
+            headers={**headers_a, "Idempotency-Key": "del-dev-web-1"},
+        )
         assert del_ok.status_code == 204
+        del_replay = await client.delete(
+            f"/v1/devices/{dev_web_id}",
+            headers={**headers_a, "Idempotency-Key": "del-dev-web-1"},
+        )
+        assert del_replay.status_code == 204
 
         # 3. Create a PROPOSED Chinese Lunar yearly reminder (30-day lunar birthday edge case!)
         lunar_create = await client.post(
@@ -418,17 +443,24 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
         )
         assert [r["id"] for r in prop_list.json()["items"]] == [lunar_id]
 
-        # 4. Activate proposed -> active via PATCH with If-Match optimistic locking
+        # 4. Activate proposed -> active via PATCH with If-Match + Idempotency-Key
+        patch_no_idem = await client.patch(
+            f"/v1/reminders/{lunar_id}",
+            headers={**headers_a, "If-Match": '"1"'},
+            json={"status": "active"},
+        )
+        assert patch_no_idem.status_code == 400
+
         patch_no_if_match = await client.patch(
             f"/v1/reminders/{lunar_id}",
-            headers=headers_a,
+            headers={**headers_a, "Idempotency-Key": "patch-no-if-match"},
             json={"status": "active"},
         )
         assert patch_no_if_match.status_code == 400
 
         patch_ok = await client.patch(
             f"/v1/reminders/{lunar_id}",
-            headers={**headers_a, "If-Match": '"1"'},
+            headers={**headers_a, "If-Match": '"1"', "Idempotency-Key": "patch-act-1"},
             json={"status": "active"},
         )
         assert patch_ok.status_code == 200
@@ -438,10 +470,20 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
         assert activated_lunar["nextFireAt"] is not None
         assert activated_lunar["nextLeadDay"] == 7
 
+        # Replay PATCH with same Idempotency-Key returns identical 200 + ETag
+        patch_replay = await client.patch(
+            f"/v1/reminders/{lunar_id}",
+            headers={**headers_a, "If-Match": '"1"', "Idempotency-Key": "patch-act-1"},
+            json={"status": "active"},
+        )
+        assert patch_replay.status_code == 200
+        assert patch_replay.json() == activated_lunar
+        assert patch_replay.headers.get("ETag") == '"2"'
+
         # Stale version If-Match -> 412 Precondition Failed!
         patch_stale = await client.patch(
             f"/v1/reminders/{lunar_id}",
-            headers={**headers_a, "If-Match": '"1"'},
+            headers={**headers_a, "If-Match": '"1"', "Idempotency-Key": "patch-stale-1"},
             json={"fireHour": 10},
         )
         assert patch_stale.status_code == 412
@@ -451,7 +493,7 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
         assert (
             await client.patch(
                 f"/v1/reminders/{lunar_id}",
-                headers={**headers_b, "If-Match": '"2"'},
+                headers={**headers_b, "If-Match": '"2"', "Idempotency-Key": "forged-patch"},
                 json={"fireHour": 10},
             )
         ).status_code == 404
@@ -559,11 +601,24 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
             assert len(telemetry_rows) == 1
             assert telemetry_rows[0].metadata_json == {"rule": "yearly"}
 
-        # 7. Cancel reminder via DELETE /v1/reminders/{id} -> status="cancelled"
-        del_rem = await client.delete(f"/v1/reminders/{lunar_id}", headers=headers_a)
+        # 7. Cancel reminder via DELETE /v1/reminders/{id} (requires Idempotency-Key + replays!)
+        assert (
+            await client.delete(f"/v1/reminders/{lunar_id}", headers=headers_a)
+        ).status_code == 400
+        del_rem = await client.delete(
+            f"/v1/reminders/{lunar_id}",
+            headers={**headers_a, "Idempotency-Key": "del-rem-lunar-1"},
+        )
         assert del_rem.status_code == 200
         assert del_rem.json()["status"] == "cancelled"
         assert del_rem.json()["nextFireAt"] is None
+
+        del_rem_replay = await client.delete(
+            f"/v1/reminders/{lunar_id}",
+            headers={**headers_a, "Idempotency-Key": "del-rem-lunar-1"},
+        )
+        assert del_rem_replay.status_code == 200
+        assert del_rem_replay.json() == del_rem.json()
 
         # Verify encrypted title at rest in PostgreSQL
         async with db_container.db.system_session() as sys_sess:
@@ -571,3 +626,206 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
             assert raw_rem is not None
             assert "沈清秋".encode() not in raw_rem.title_enc
             assert person_b != person_a
+
+
+@pytest.mark.asyncio
+async def test_archived_deleted_unassigned_filtering_and_lunar_once_activation(
+    db_container: AppContainer,
+    manual_clock: ManualClock,
+) -> None:
+    manual_clock.set(datetime(2026, 11, 11, 0, 30, 0, tzinfo=UTC))
+    recorder = InMemoryPushRecorder()
+    db_container.extras["push_provider"] = recorder
+
+    user_id, active_person_id, token = await _provision_user_and_person(
+        db_container, person_name="阿哲", timezone="Asia/Shanghai"
+    )
+    scope = UserScope(user_id)
+    app = _build_test_app(db_container)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Register a push device
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        dev_resp = await client.post(
+            "/v1/devices",
+            headers={**headers, "Idempotency-Key": "dev-rt-test"},
+            json={"platform": "ios_apns", "pushToken": "apns-rt-token"},
+        )
+        assert dev_resp.status_code == 201
+
+    now = manual_clock.now()
+    archived_person_id = new_id()
+    deleted_person_id = new_id()
+    unassigned_person_id = new_id()
+    due_archived_rem_id = new_id()
+    due_deleted_rem_id = new_id()
+    due_unassigned_rem_id = new_id()
+    lunar_once_rem_id = new_id()
+
+    async with db_container.db.user_session(scope) as sess:
+        dek = await db_container.load_user_dek(sess, scope)
+        for pid, name, state, slug, archived_at, deleted_at in (
+            (archived_person_id, "前任", PersonState.ARCHIVED.value, None, now, None),
+            (deleted_person_id, "已删除", PersonState.ACTIVE.value, None, None, now),
+            (
+                unassigned_person_id,
+                "未归属",
+                PersonState.PROVISIONAL.value,
+                UNASSIGNED_PERSON_SLUG,
+                None,
+                None,
+            ),
+        ):
+            sess.add(
+                PersonRow(
+                    id=pid,
+                    user_id=user_id,
+                    slug=slug,
+                    tier="gold",
+                    rank="m",
+                    state=state,
+                    display_name_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        name,
+                        user_id=user_id,
+                        table="persons",
+                        column="display_name_enc",
+                        row_id=pid,
+                    ),
+                    monogram=name[0],
+                    visual_tokens={},
+                    version=1,
+                    archived_at=archived_at,
+                    deleted_at=deleted_at,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        await sess.flush()
+
+        for rid, pid in (
+            (due_archived_rem_id, archived_person_id),
+            (due_deleted_rem_id, deleted_person_id),
+            (due_unassigned_rem_id, unassigned_person_id),
+        ):
+            sess.add(
+                ReminderRow(
+                    id=rid,
+                    user_id=user_id,
+                    person_id=pid,
+                    fact_id=None,
+                    title_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "旧纪念日",
+                        user_id=user_id,
+                        table="reminders",
+                        column="title_enc",
+                        row_id=rid,
+                    ),
+                    rule=ReminderRule.ONCE.value,
+                    is_lunar=False,
+                    once_date=date(2026, 11, 11),
+                    fire_hour=8,
+                    fire_minute=0,
+                    lead_days=[0],
+                    timezone="Asia/Shanghai",
+                    next_fire_at=now,
+                    next_lead_day=0,
+                    status=ReminderStatus.ACTIVE.value,
+                    version=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        # Proposed lunar ONCE reminder with once_date=None (RT-07)
+        sess.add(
+            ReminderRow(
+                id=lunar_once_rem_id,
+                user_id=user_id,
+                person_id=active_person_id,
+                fact_id=None,
+                title_enc=db_container.cipher.encrypt_str(
+                    dek,
+                    "答应中秋陪阿哲赏月",
+                    user_id=user_id,
+                    table="reminders",
+                    column="title_enc",
+                    row_id=lunar_once_rem_id,
+                ),
+                rule=ReminderRule.ONCE.value,
+                is_lunar=True,
+                target_month=8,
+                target_day=15,
+                is_leap_month=False,
+                once_date=None,
+                fire_hour=9,
+                fire_minute=0,
+                lead_days=[1, 0],
+                timezone="Asia/Shanghai",
+                next_fire_at=None,
+                next_lead_day=None,
+                status=ReminderStatus.PROPOSED.value,
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    # 1. OPT-2 + RT-03: system_session SQL scan skips archived, soft-deleted, and __unassigned__
+    scan_res = await scan_and_deliver_due_reminders(db_container, push_provider=recorder)
+    assert scan_res.scanned_count == 0
+    assert scan_res.pushed_messages == 0
+    assert recorder.deliveries == []
+
+    # 2. Race-window check inside _deliver_single_due_reminder pauses archived & cancels deleted/unassigned
+    svc = ReminderService(db_container, push_provider=recorder)
+    assert await svc._deliver_single_due_reminder(
+        scope=scope, reminder_id=due_archived_rem_id, now=now
+    ) == (False, 0, False)
+    assert await svc._deliver_single_due_reminder(
+        scope=scope, reminder_id=due_deleted_rem_id, now=now
+    ) == (False, 0, False)
+    assert await svc._deliver_single_due_reminder(
+        scope=scope, reminder_id=due_unassigned_rem_id, now=now
+    ) == (False, 0, False)
+    assert recorder.deliveries == []
+
+    async with db_container.db.user_session(scope) as sess:
+        arch_row = await sess.get(ReminderRow, due_archived_rem_id)
+        del_row = await sess.get(ReminderRow, due_deleted_rem_id)
+        unassigned_row = await sess.get(ReminderRow, due_unassigned_rem_id)
+        assert arch_row is not None and arch_row.status == ReminderStatus.PAUSED.value
+        assert arch_row.next_fire_at is None
+        assert del_row is not None and del_row.status == ReminderStatus.CANCELLED.value
+        assert (
+            unassigned_row is not None and unassigned_row.status == ReminderStatus.CANCELLED.value
+        )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 3. list_reminders excludes archived, soft-deleted, and __unassigned__ by default
+        default_list = await client.get("/v1/reminders", headers=headers)
+        assert [r["id"] for r in default_list.json()["items"]] == [str(lunar_once_rem_id)]
+
+        # includeArchived=true includes archived person's reminder, still hiding deleted & __unassigned__
+        incl_arch = await client.get(
+            "/v1/reminders", params={"includeArchived": "true"}, headers=headers
+        )
+        assert {r["id"] for r in incl_arch.json()["items"]} == {
+            str(lunar_once_rem_id),
+            str(due_archived_rem_id),
+        }
+
+        # 4. RT-07: Activating proposed lunar ONCE reminder resolves onceDate & schedules nextFireAt!
+        act_resp = await client.patch(
+            f"/v1/reminders/{lunar_once_rem_id}",
+            headers={**headers, "If-Match": '"1"', "Idempotency-Key": "act-lunar-once-1"},
+            json={"status": "active"},
+        )
+        assert act_resp.status_code == 200
+        act_body = act_resp.json()
+        assert act_body["status"] == "active"
+        assert act_body["onceDate"] == "2027-09-15"
+        assert act_body["isLunar"] is True
+        assert act_body["nextLeadDay"] == 1
+        assert act_body["nextFireAt"] is not None

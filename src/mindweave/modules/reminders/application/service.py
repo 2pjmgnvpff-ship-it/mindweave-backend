@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.crypto import KeyShreddedError
@@ -36,6 +36,7 @@ from mindweave.modules.reminders.domain.schedule import (
     ReminderScheduleError,
     compute_next_fire_slot,
     normalize_lead_days,
+    resolve_next_lunar_occurrence_date,
     validate_timezone_name,
 )
 from mindweave.modules.reminders.infra.push import (
@@ -49,7 +50,13 @@ from mindweave.modules.reminders.infra.repositories import (
     DeviceRepository,
     ReminderRepository,
 )
-from mindweave.shared.enums import PushPlatform, ReminderRule, ReminderStatus
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    PersonState,
+    PushPlatform,
+    ReminderRule,
+    ReminderStatus,
+)
 from mindweave.shared.scopes import UserScope
 
 logger = get_logger(__name__)
@@ -186,6 +193,7 @@ class ReminderService:
         *,
         status: ReminderStatus | None = None,
         person_id: UUID | None = None,
+        include_archived: bool = False,
         cursor: str | None = None,
         limit: int = 50,
     ) -> tuple[list[DecryptedReminder], str | None, bool]:
@@ -196,6 +204,7 @@ class ReminderService:
             dek=dek,
             status=status,
             person_id=person_id,
+            include_archived=include_archived,
             cursor=cursor,
             limit=limit,
         )
@@ -215,15 +224,16 @@ class ReminderService:
                 "Initial reminder status must be either 'active' or 'proposed'"
             )
 
-        person_exists = await session.scalar(
-            select(PersonRow.id).where(
+        person = await session.scalar(
+            select(PersonRow).where(
                 PersonRow.id == inp.person_id,
                 PersonRow.user_id == scope.user_id,
-                PersonRow.deleted_at.is_(None),
             )
         )
-        if person_exists is None:
+        if person is None or person.deleted_at is not None or person.slug == UNASSIGNED_PERSON_SLUG:
             raise NotFoundError("Person not found")
+        if person.archived_at is not None or person.state == PersonState.ARCHIVED.value:
+            raise ValidationFailedError("Cannot create reminder for an archived person")
 
         if inp.fact_id is not None:
             fact_exists = await session.scalar(
@@ -251,16 +261,34 @@ class ReminderService:
         resolved_tz = resolved_tz.strip()
 
         now = _ensure_utc(self._container.clock.now())
+        resolved_once_date = inp.once_date
         try:
             validate_timezone_name(resolved_tz)
             normalized_leads = list(normalize_lead_days(inp.lead_days))
+            if (
+                inp.rule is ReminderRule.ONCE
+                and resolved_once_date is None
+                and inp.is_lunar
+                and inp.target_month is not None
+                and inp.target_day is not None
+            ):
+                resolved_once_date = resolve_next_lunar_occurrence_date(
+                    target_month=inp.target_month,
+                    target_day=inp.target_day,
+                    is_leap_month=inp.is_leap_month,
+                    timezone=resolved_tz,
+                    reference_utc=now,
+                    fire_hour=inp.fire_hour,
+                    fire_minute=inp.fire_minute,
+                    lead_days=normalized_leads,
+                )
             slot = compute_next_fire_slot(
                 rule=inp.rule,
                 timezone=resolved_tz,
                 fire_hour=inp.fire_hour,
                 fire_minute=inp.fire_minute,
                 lead_days=normalized_leads,
-                once_date=inp.once_date,
+                once_date=resolved_once_date,
                 is_lunar=inp.is_lunar,
                 target_month=inp.target_month,
                 target_day=inp.target_day,
@@ -281,6 +309,7 @@ class ReminderService:
             next_fire_at = None
             next_lead_day = None
 
+        keep_lunar_meta = inp.rule is ReminderRule.YEARLY or inp.is_lunar
         dek = await self._container.load_user_dek(session, scope)
         row_id = inp.requested_id or new_id()
         row = ReminderRow(
@@ -290,13 +319,11 @@ class ReminderService:
             fact_id=inp.fact_id,
             title_enc=self._reminders.encrypt_title(dek, scope, row_id, cleaned_title),
             rule=inp.rule.value,
-            is_lunar=inp.is_lunar if inp.rule is ReminderRule.YEARLY else False,
-            target_month=inp.target_month if inp.rule is ReminderRule.YEARLY else None,
-            target_day=inp.target_day if inp.rule is ReminderRule.YEARLY else None,
-            is_leap_month=(
-                inp.is_leap_month if (inp.rule is ReminderRule.YEARLY and inp.is_lunar) else False
-            ),
-            once_date=inp.once_date if inp.rule is ReminderRule.ONCE else None,
+            is_lunar=inp.is_lunar if keep_lunar_meta else False,
+            target_month=inp.target_month if keep_lunar_meta else None,
+            target_day=inp.target_day if keep_lunar_meta else None,
+            is_leap_month=inp.is_leap_month if (keep_lunar_meta and inp.is_lunar) else False,
+            once_date=resolved_once_date if inp.rule is ReminderRule.ONCE else None,
             fire_hour=inp.fire_hour,
             fire_minute=inp.fire_minute,
             lead_days=normalized_leads,
@@ -355,6 +382,33 @@ class ReminderService:
         new_tz = inp.timezone.strip() if inp.timezone is not None else row.timezone
         new_status = inp.status if inp.status is not None else ReminderStatus(row.status)
 
+        if (
+            new_rule is ReminderRule.ONCE
+            and new_once_date is None
+            and row.fact_id is not None
+            and inp.is_lunar is not False
+            and (not new_is_lunar or new_target_month is None or new_target_day is None)
+        ):
+            linked_fact = await session.scalar(
+                select(FactRow).where(
+                    FactRow.id == row.fact_id,
+                    FactRow.user_id == scope.user_id,
+                )
+            )
+            if (
+                linked_fact is not None
+                and linked_fact.is_lunar
+                and linked_fact.lunar_month is not None
+                and linked_fact.lunar_day is not None
+            ):
+                new_is_lunar = True
+                if new_target_month is None:
+                    new_target_month = linked_fact.lunar_month
+                if new_target_day is None:
+                    new_target_day = linked_fact.lunar_day
+                if inp.is_leap_month is None:
+                    new_is_leap = linked_fact.lunar_is_leap_month
+
         try:
             validate_timezone_name(new_tz)
             new_leads = (
@@ -362,6 +416,25 @@ class ReminderService:
                 if inp.lead_days is not None
                 else list(normalize_lead_days(row.lead_days))
             )
+            if (
+                new_rule is ReminderRule.ONCE
+                and new_once_date is None
+                and new_is_lunar
+                and new_target_month is not None
+                and new_target_day is not None
+            ):
+                new_once_date = resolve_next_lunar_occurrence_date(
+                    target_month=new_target_month,
+                    target_day=new_target_day,
+                    is_leap_month=new_is_leap,
+                    timezone=new_tz,
+                    reference_utc=now,
+                    fire_hour=new_fire_hour,
+                    fire_minute=new_fire_minute,
+                    lead_days=new_leads,
+                )
+
+            keep_lunar_meta = new_rule is ReminderRule.YEARLY or new_is_lunar
             slot = compute_next_fire_slot(
                 rule=new_rule,
                 timezone=new_tz,
@@ -369,24 +442,20 @@ class ReminderService:
                 fire_minute=new_fire_minute,
                 lead_days=new_leads,
                 once_date=new_once_date if new_rule is ReminderRule.ONCE else None,
-                is_lunar=new_is_lunar if new_rule is ReminderRule.YEARLY else False,
-                target_month=new_target_month if new_rule is ReminderRule.YEARLY else None,
-                target_day=new_target_day if new_rule is ReminderRule.YEARLY else None,
-                is_leap_month=(
-                    new_is_leap if (new_rule is ReminderRule.YEARLY and new_is_lunar) else False
-                ),
+                is_lunar=new_is_lunar if keep_lunar_meta else False,
+                target_month=new_target_month if keep_lunar_meta else None,
+                target_day=new_target_day if keep_lunar_meta else None,
+                is_leap_month=new_is_leap if (keep_lunar_meta and new_is_lunar) else False,
                 reference_utc=now,
             )
         except ReminderScheduleError as exc:
             raise ValidationFailedError(str(exc)) from exc
 
         row.rule = new_rule.value
-        row.is_lunar = new_is_lunar if new_rule is ReminderRule.YEARLY else False
-        row.target_month = new_target_month if new_rule is ReminderRule.YEARLY else None
-        row.target_day = new_target_day if new_rule is ReminderRule.YEARLY else None
-        row.is_leap_month = (
-            new_is_leap if (new_rule is ReminderRule.YEARLY and new_is_lunar) else False
-        )
+        row.is_lunar = new_is_lunar if keep_lunar_meta else False
+        row.target_month = new_target_month if keep_lunar_meta else None
+        row.target_day = new_target_day if keep_lunar_meta else None
+        row.is_leap_month = new_is_leap if (keep_lunar_meta and new_is_lunar) else False
         row.once_date = new_once_date if new_rule is ReminderRule.ONCE else None
         row.fire_hour = new_fire_hour
         row.fire_minute = new_fire_minute
@@ -484,12 +553,23 @@ class ReminderService:
                 await sys_sess.execute(
                     select(ReminderRow.id, ReminderRow.user_id)
                     .join(UserRow, UserRow.id == ReminderRow.user_id)
+                    .outerjoin(PersonRow, PersonRow.id == ReminderRow.person_id)
                     .where(
                         ReminderRow.status == ReminderStatus.ACTIVE.value,
                         ReminderRow.next_fire_at.is_not(None),
                         ReminderRow.next_fire_at <= now,
                         UserRow.status == "active",
                         UserRow.deleted_at.is_(None),
+                        or_(
+                            ReminderRow.person_id.is_(None),
+                            and_(
+                                PersonRow.id.is_not(None),
+                                PersonRow.deleted_at.is_(None),
+                                PersonRow.archived_at.is_(None),
+                                PersonRow.state != PersonState.ARCHIVED.value,
+                                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
+                            ),
+                        ),
                     )
                     .order_by(ReminderRow.next_fire_at.asc(), ReminderRow.id.asc())
                     .limit(batch_limit)
@@ -547,6 +627,34 @@ class ReminderService:
             if row is None or row.next_fire_at is None:
                 return False, 0, False
 
+            if row.person_id is not None:
+                person = await session.scalar(
+                    select(PersonRow).where(
+                        PersonRow.id == row.person_id,
+                        PersonRow.user_id == scope.user_id,
+                    )
+                )
+                if (
+                    person is None
+                    or person.deleted_at is not None
+                    or person.slug == UNASSIGNED_PERSON_SLUG
+                ):
+                    row.status = ReminderStatus.CANCELLED.value
+                    row.next_fire_at = None
+                    row.next_lead_day = None
+                    row.version += 1
+                    row.updated_at = now
+                    await session.flush()
+                    return False, 0, False
+                if person.archived_at is not None or person.state == PersonState.ARCHIVED.value:
+                    row.status = ReminderStatus.PAUSED.value
+                    row.next_fire_at = None
+                    row.next_lead_day = None
+                    row.version += 1
+                    row.updated_at = now
+                    await session.flush()
+                    return False, 0, False
+
             scheduled_for = _ensure_utc(row.next_fire_at)
             lead_day = row.next_lead_day if row.next_lead_day is not None else 0
 
@@ -599,13 +707,21 @@ class ReminderService:
                         sent_count += 1
                 row.last_fired_at = now
 
+            effective_once_date = row.once_date
+            if row.rule == ReminderRule.ONCE.value and effective_once_date is None:
+                tz_obj = validate_timezone_name(row.timezone)
+                effective_once_date = scheduled_for.astimezone(tz_obj).date() + timedelta(
+                    days=lead_day
+                )
+                row.once_date = effective_once_date
+
             next_slot = compute_next_fire_slot(
                 rule=row.rule,
                 timezone=row.timezone,
                 fire_hour=row.fire_hour,
                 fire_minute=row.fire_minute,
                 lead_days=row.lead_days,
-                once_date=row.once_date,
+                once_date=effective_once_date,
                 is_lunar=row.is_lunar,
                 target_month=row.target_month,
                 target_day=row.target_day,

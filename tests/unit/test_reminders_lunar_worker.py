@@ -15,6 +15,7 @@ from mindweave.modules.reminders.domain import (
     build_desensitized_push_copy,
     compute_next_fire_slot,
     resolve_lunar_yearly_date,
+    resolve_next_lunar_occurrence_date,
     resolve_solar_yearly_date,
     validate_push_copy_safety,
 )
@@ -188,6 +189,49 @@ def test_lunar_schedule_handles_january_before_chinese_new_year() -> None:
     assert slot.occurrence_date == date(2025, 1, 22)
     assert slot.lead_day == 1
     assert slot.scheduled_for_utc == datetime(2025, 1, 21, 1, 0, 0, tzinfo=UTC)
+
+
+def test_lunar_once_resolves_next_gregorian_date_when_once_date_is_none() -> None:
+    # Relative to 2026-11-12 UTC, 2026's lunar 8-15 (2026-09-25) already passed -> resolves 2027-09-15!
+    ref = datetime(2026, 11, 12, 4, 0, 0, tzinfo=UTC)
+    next_mid_autumn = resolve_next_lunar_occurrence_date(
+        target_month=8,
+        target_day=15,
+        is_leap_month=False,
+        timezone="Asia/Shanghai",
+        reference_utc=ref,
+        fire_hour=9,
+        fire_minute=0,
+        lead_days=[1, 0],
+    )
+    assert next_mid_autumn == date(2027, 9, 15)
+
+    slot = compute_next_fire_slot(
+        rule=ReminderRule.ONCE,
+        once_date=None,
+        is_lunar=True,
+        target_month=8,
+        target_day=15,
+        is_leap_month=False,
+        lead_days=[1, 0],
+        fire_hour=9,
+        fire_minute=0,
+        timezone="Asia/Shanghai",
+        reference_utc=ref,
+    )
+    assert slot is not None
+    assert slot.occurrence_date == date(2027, 9, 15)
+    assert slot.lead_day == 1
+    assert slot.scheduled_for_utc == datetime(2027, 9, 14, 1, 0, 0, tzinfo=UTC)
+
+    # Non-lunar ONCE without once_date still raises ReminderScheduleError
+    with pytest.raises(ReminderScheduleError):
+        compute_next_fire_slot(
+            rule=ReminderRule.ONCE,
+            once_date=None,
+            is_lunar=False,
+            reference_utc=ref,
+        )
 
 
 @pytest.mark.asyncio

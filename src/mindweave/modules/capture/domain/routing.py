@@ -9,20 +9,94 @@ from uuid import UUID
 
 from mindweave.shared.enums import PersonState, RouteMode, Tier
 
-_PRONOUN_MENTIONS = frozenset(
+_NON_PERSON_STOPWORDS = frozenset(
     {
         "",
         "ta",
         "他",
         "她",
         "它",
+        "我",
+        "你",
+        "您",
+        "自己",
+        "本人",
+        "咱",
+        "咱们",
+        "我们",
+        "他们",
+        "她们",
+        "它们",
+        "有人",
+        "大家",
+        "别人",
         "对方",
         "那位",
         "这个人",
         "这人",
+        "某人",
         "target",
         "target_person",
+        "今天",
+        "明天",
+        "昨天",
+        "前天",
+        "后天",
+        "今晚",
+        "今早",
+        "刚才",
+        "刚刚",
+        "最近",
+        "平时",
+        "以前",
+        "现在",
+        "周末",
+        "周末记",
+        "下周",
+        "上周",
+        "这周",
+        "本周",
+        "下个月",
+        "上个月",
+        "这个月",
+        "今年",
+        "明年",
+        "去年",
+        "每天",
+        "每次",
+        "上午",
+        "下午",
+        "晚上",
+        "中午",
+        "凌晨",
+        "半夜",
+        "日常",
+        "随手",
+        "随手记",
+        "备忘",
+        "手札",
+        "记录",
+        "他说",
+        "她说",
+        "它说",
+        "我说",
+        "你说",
+        "他严重",
+        "她严重",
+        "他不能",
+        "她不能",
+        "他喜欢",
+        "她喜欢",
+        "他不喜欢",
+        "她不喜欢",
+        "他讨厌",
+        "她讨厌",
     }
+)
+
+_PRONOUN_STARTERS = ("他", "她", "它", "我", "你")
+_TEMPORAL_MENTION_RE = re.compile(
+    r"^(?:(?:周|星期|礼拜)[一二三四五六日天末].*|(?:上|下|本|这)(?:周|星期|礼拜|个月).*|\d{1,2}月(?:\d{1,2}[日号]?)?)$"
 )
 
 
@@ -30,8 +104,18 @@ def normalize_mention(text: str) -> str:
     return "".join(text.strip().lower().split())
 
 
+def is_non_person_stopword_mention(mention: str) -> bool:
+    """Return True if `mention` is a pronoun, temporal word, or pronoun+predicate clause."""
+    norm = normalize_mention(mention)
+    if norm in _NON_PERSON_STOPWORDS:
+        return True
+    if norm.startswith(_PRONOUN_STARTERS):
+        return True
+    return bool(_TEMPORAL_MENTION_RE.match(norm))
+
+
 def is_pronoun_or_empty_mention(mention: str) -> bool:
-    return normalize_mention(mention) in _PRONOUN_MENTIONS
+    return is_non_person_stopword_mention(mention)
 
 
 @dataclass(frozen=True, slots=True)

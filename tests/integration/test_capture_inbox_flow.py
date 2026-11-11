@@ -918,10 +918,18 @@ async def test_materials_and_facts_crud_optimistic_locking_and_bitemporal_supers
         ).json()
         assert len(page2["items"]) == 1
 
+        # Missing Idempotency-Key on PATCH / DELETE is rejected (P1-7)
+        no_idem_patch = await client.patch(
+            f"/v1/materials/{mat1_id}",
+            headers=_auth(token, if_match='"1"'),
+            json={"title": "缺少幂等键"},
+        )
+        assert no_idem_patch.status_code == 400
+
         # PATCH material with valid If-Match: "1" -> version 2; stale If-Match: "1" -> 412
         patched_m = await client.patch(
             f"/v1/materials/{mat1_id}",
-            headers=_auth(token, if_match='"1"'),
+            headers=_auth(token, idem="patch-m-1", if_match='"1"'),
             json={"title": "初见手札·修订"},
         )
         assert patched_m.status_code == 200
@@ -929,7 +937,7 @@ async def test_materials_and_facts_crud_optimistic_locking_and_bitemporal_supers
 
         stale_m = await client.patch(
             f"/v1/materials/{mat1_id}",
-            headers=_auth(token, if_match='"1"'),
+            headers=_auth(token, idem="patch-m-stale", if_match='"1"'),
             json={"title": "旧版本冲突"},
         )
         assert stale_m.status_code == 412
@@ -978,19 +986,33 @@ async def test_materials_and_facts_crud_optimistic_locking_and_bitemporal_supers
         assert by_fid[fact1_id]["invalidAt"] is not None
         assert by_fid[fact1_id]["supersededById"] == fact2_id
 
-        # Fact PATCH If-Match optimistic lock + DELETE
+        # Fact PATCH If-Match optimistic lock + DELETE (with Idempotency-Key & 204 replay)
+        assert (
+            await client.delete(f"/v1/facts/{fact2_id}", headers=_auth(token))
+        ).status_code == 400
+
         stale_f = await client.patch(
             f"/v1/facts/{fact2_id}",
-            headers=_auth(token, if_match='"99"'),
+            headers=_auth(token, idem="patch-f-stale", if_match='"99"'),
             json={"content": "版本不匹配"},
         )
         assert stale_f.status_code == 412
 
-        del_f = await client.delete(f"/v1/facts/{fact2_id}", headers=_auth(token))
+        del_f = await client.delete(f"/v1/facts/{fact2_id}", headers=_auth(token, idem="del-f-1"))
         assert del_f.status_code == 204
+        del_f_replay = await client.delete(
+            f"/v1/facts/{fact2_id}", headers=_auth(token, idem="del-f-1")
+        )
+        assert del_f_replay.status_code == 204
 
-        del_m = await client.delete(f"/v1/materials/{mat1_id}", headers=_auth(token))
+        del_m = await client.delete(
+            f"/v1/materials/{mat1_id}", headers=_auth(token, idem="del-m-1")
+        )
         assert del_m.status_code == 204
+        del_m_replay = await client.delete(
+            f"/v1/materials/{mat1_id}", headers=_auth(token, idem="del-m-1")
+        )
+        assert del_m_replay.status_code == 204
         get_del_m = await client.get(f"/v1/materials/{mat1_id}", headers=_auth(token))
         assert get_del_m.status_code == 404
 
@@ -1387,3 +1409,221 @@ async def test_capture_and_memory_endpoints_enforce_strict_tenant_isolation(
         ).status_code == 404
         b_inbox = (await client.get("/v1/inbox", headers=_auth(token_b))).json()["items"]
         assert b_inbox == []
+
+
+# ============================================================================
+# 9. Red-Team Remediations: RT-02 Held Disambiguation & Target Validation,
+#    RT-07 Lunar Promise `once_date` Activation, and P2-1 Signed Media URLs
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_redteam_remediations_rt02_rt07_and_p2_1_signed_media(
+    db_container: AppContainer,
+) -> None:
+    from mindweave.modules.capture.infra.repository import get_or_create_unassigned_placeholder
+    from mindweave.modules.reminders.api.router import router as reminders_router
+
+    scope, token, dek = await _provision_user(db_container)
+    scope_other, _token_other, dek_other = await _provision_user(db_container)
+    foreign_person_id = await _seed_person(
+        db_container, scope_other, dek_other, display_name="外租户人", tier=Tier.SILVER
+    )
+
+    chen1_id = await _seed_person(
+        db_container, scope, dek, display_name="陈明", tier=Tier.CRYSTAL, aliases=("老陈",)
+    )
+    chen2_id = await _seed_person(
+        db_container, scope, dek, display_name="陈叔", tier=Tier.SILVER, aliases=("老陈",)
+    )
+    deleted_person_id = await _seed_person(
+        db_container, scope, dek, display_name="已删联系人", tier=Tier.CRYSTAL
+    )
+    linxi_id = await _seed_person(db_container, scope, dek, display_name="林溪", tier=Tier.GOLD)
+
+    async with db_container.db.user_session(scope) as sess:
+        del_row = await sess.get(PersonRow, deleted_person_id)
+        assert del_row is not None
+        del_row.deleted_at = db_container.clock.now()
+        unassigned_row = await get_or_create_unassigned_placeholder(
+            sess, scope=scope, dek=dek, cipher=db_container.cipher, now=db_container.clock.now()
+        )
+        unassigned_id = unassigned_row.id
+
+    gateway = ProgrammableGateway(transcript_text="老陈只喝白毫银针", duration_ms=5100)
+    app = _build_test_app(db_container, gateway)
+    app.include_router(reminders_router, prefix="/v1")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # ------------------------------------------------------------------
+        # 1. RT-02: Manual materials/facts on `__unassigned__` or deleted person -> 404
+        # ------------------------------------------------------------------
+        for invalid_pid in (unassigned_id, deleted_person_id):
+            assert (
+                await client.post(
+                    f"/v1/persons/{invalid_pid}/materials",
+                    headers=_auth(token, idem=f"bad-mat-{invalid_pid}"),
+                    json={"kind": "note", "title": "不该写入标题", "body": "不该写入"},
+                )
+            ).status_code == 404
+            assert (
+                await client.post(
+                    f"/v1/persons/{invalid_pid}/facts",
+                    headers=_auth(token, idem=f"bad-fact-{invalid_pid}"),
+                    json={"type": "preference", "content": "不该写入"},
+                )
+            ).status_code == 404
+
+        # ------------------------------------------------------------------
+        # 2. RT-02: Ambiguous voice capture holds RecordRow (`review_state='held'`)
+        #    so candidate_person_ids[0]'s active materials are NEVER contaminated!
+        # ------------------------------------------------------------------
+        gateway.extract_handler = lambda _s, _i: ExtractRecordOutput(
+            persons=[
+                ExtractedPersonCandidate(
+                    mention="老陈",
+                    candidate_person_ids=[chen1_id, chen2_id],
+                    confidence=0.68,
+                )
+            ],
+            facts=[
+                ExtractedFactItem(
+                    person_mention="老陈",
+                    fact_type=FactType.PREFERENCE,
+                    polarity=Polarity.POSITIVE,
+                    title="饮茶偏好",
+                    content="只喝白毫银针",
+                    confidence=0.95,
+                )
+            ],
+        )
+        amb_resp = await client.post(
+            "/v1/voice/ingest",
+            headers=_auth(token, idem="rt02-voice-amb"),
+            data={"routeMode": "global", "activePersonId": ""},
+            files={"audio": ("amb.webm", VALID_WEBM_BYTES, "audio/webm")},
+        )
+        assert amb_resp.status_code == 200
+        amb_body = amb_resp.json()
+        assert amb_body["splits"] == []
+        assert amb_body["pendingCount"] == 1
+
+        # Neither chen1 nor chen2 has any active normal material before disambiguation!
+        chen1_mats_before = (
+            await client.get(f"/v1/persons/{chen1_id}/materials", headers=_auth(token))
+        ).json()["items"]
+        chen2_mats_before = (
+            await client.get(f"/v1/persons/{chen2_id}/materials", headers=_auth(token))
+        ).json()["items"]
+        assert chen1_mats_before == []
+        assert chen2_mats_before == []
+
+        inbox_items = (await client.get("/v1/inbox", headers=_auth(token))).json()["items"]
+        amb_inbox = inbox_items[0]
+        amb_inbox_id = amb_inbox["id"]
+
+        # Verify held RecordRow exists in DB and is linked to InboxItemRow
+        async with db_container.db.user_session(scope) as sess:
+            inbox_row = await sess.get(InboxItemRow, UUID(amb_inbox_id))
+            assert inbox_row is not None and inbox_row.record_id is not None
+            held_rec = await sess.get(RecordRow, inbox_row.record_id)
+            assert held_rec is not None
+            assert held_rec.review_state == "held"
+            held_rec_id = held_rec.id
+
+        # Supplying foreign, soft-deleted, or `__unassigned__` targetPersonId MUST fail with 404!
+        for bad_target in (foreign_person_id, deleted_person_id, unassigned_id):
+            bad_res = await client.post(
+                f"/v1/inbox/{amb_inbox_id}:resolve",
+                headers=_auth(token, idem=f"rt02-bad-{bad_target}"),
+                json={"action": "assign_person", "targetPersonId": str(bad_target)},
+            )
+            assert bad_res.status_code == 404
+
+        # Resolving to chen2_id promotes the held RecordRow to `normal` on chen2_id!
+        ok_res = await client.post(
+            f"/v1/inbox/{amb_inbox_id}:resolve",
+            headers=_auth(token, idem="rt02-good-chen2"),
+            json={"action": "assign_person", "targetPersonId": str(chen2_id)},
+        )
+        assert ok_res.status_code == 200
+
+        chen1_mats_after = (
+            await client.get(f"/v1/persons/{chen1_id}/materials", headers=_auth(token))
+        ).json()["items"]
+        chen2_mats_after = (
+            await client.get(f"/v1/persons/{chen2_id}/materials", headers=_auth(token))
+        ).json()["items"]
+        assert chen1_mats_after == []
+        assert [m["id"] for m in chen2_mats_after] == [str(held_rec_id)]
+        assert chen2_mats_after[0]["reviewState"] == "normal"
+
+        # ------------------------------------------------------------------
+        # 3. P2-1: Material `mediaUrl` is HMAC-signed & streamable without Bearer header
+        # ------------------------------------------------------------------
+        signed_media_url = chen2_mats_after[0]["mediaUrl"]
+        assert signed_media_url is not None
+        assert "uid=" in signed_media_url
+        assert "exp=" in signed_media_url
+        assert "sig=" in signed_media_url
+
+        # Browser `<audio src="...">` GET without Authorization header succeeds via signed query
+        browser_media_resp = await client.get(signed_media_url)
+        assert browser_media_resp.status_code == 200
+        assert browser_media_resp.content == VALID_WEBM_BYTES
+
+        # Unsigned media path without Authorization header MUST fail with 401
+        unsigned_resp = await client.get(f"/v1/materials/{held_rec_id}/media")
+        assert unsigned_resp.status_code == 401
+
+        # ------------------------------------------------------------------
+        # 4. RT-07: Lunar `promise` capture populates Gregorian `once_date` so
+        #    activating the proposed reminder via `PATCH /v1/reminders/{id}` returns 200!
+        # ------------------------------------------------------------------
+        gateway.extract_handler = lambda _s, _i: ExtractRecordOutput(
+            facts=[
+                ExtractedFactItem(
+                    person_mention="林溪",
+                    person_id=linxi_id,
+                    fact_type=FactType.PROMISE,
+                    polarity=Polarity.POSITIVE,
+                    title="中秋海边看月亮",
+                    content="答应林溪农历八月十五一起去海边看月亮",
+                    is_lunar=True,
+                    lunar_month=8,
+                    lunar_day=15,
+                    trigger_date=None,
+                    confidence=0.96,
+                )
+            ]
+        )
+        lunar_promise_cap = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(token, idem="rt07-lunar-promise"),
+            json={
+                "source": "text",
+                "text": "答应林溪农历八月十五一起去海边看月亮",
+                "routeMode": "current",
+                "activePersonId": str(linxi_id),
+            },
+        )
+        assert lunar_promise_cap.status_code == 201
+
+        async with db_container.db.user_session(scope) as sess:
+            rem_row = await sess.scalar(
+                select(ReminderRow).where(ReminderRow.person_id == linxi_id)
+            )
+            assert rem_row is not None
+            assert rem_row.rule == "once"
+            assert rem_row.status == "proposed"
+            assert rem_row.once_date is not None
+            assert rem_row.next_fire_at is not None
+            rem_id = rem_row.id
+
+        act_resp = await client.patch(
+            f"/v1/reminders/{rem_id}",
+            headers=_auth(token, idem="rt07-activate-rem", if_match='"1"'),
+            json={"status": "active"},
+        )
+        assert act_resp.status_code == 200, act_resp.text
+        assert act_resp.json()["status"] == "active"

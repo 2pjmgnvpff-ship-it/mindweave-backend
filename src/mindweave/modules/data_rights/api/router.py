@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response, status
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from mindweave.core.dependencies import (
     AppContainer,
@@ -27,7 +28,6 @@ from mindweave.modules.data_rights.application.service import DataRightsService
 from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["data-rights"])
-_optional_bearer = HTTPBearer(auto_error=False)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -73,6 +73,7 @@ async def create_data_export(
 ) -> ExportJobResponse | JSONResponse:
     effective_payload = payload or CreateExportRequest()
     req_hash = hash_request_payload(effective_payload.model_dump(mode="json", by_alias=True))
+    service = DataRightsService(container)
 
     async with container.db.user_session(scope) as session:
         idem_row, hit = await container.idempotency.claim_or_replay(
@@ -83,10 +84,27 @@ async def create_data_export(
             path="/me/exports",
             request_hash=req_hash,
         )
-        if hit is not None:
-            return JSONResponse(status_code=hit.status_code, content=hit.response_body)
 
-    service = DataRightsService(container)
+    if hit is not None:
+        replay_body = dict(hit.response_body)
+        raw_export_id = replay_body.get("exportId")
+        if raw_export_id is not None:
+            row, fresh_token = await service.get_export_job(
+                scope=scope,
+                export_id=UUID(str(raw_export_id)),
+                issue_download_token=True,
+            )
+            replayed = _row_to_response(
+                row,
+                api_prefix=container.settings.api_prefix,
+                download_token=fresh_token,
+            )
+            return JSONResponse(
+                status_code=hit.status_code,
+                content=replayed.model_dump(mode="json", by_alias=True),
+            )
+        return JSONResponse(status_code=hit.status_code, content=replay_body)
+
     built = await service.create_export(
         scope=scope,
         async_mode=effective_payload.async_mode,
@@ -111,6 +129,10 @@ async def create_data_export(
         download_path=download_path,
     )
 
+    stored_body = response.model_dump(mode="json", by_alias=True)
+    stored_body["downloadToken"] = None
+    stored_body["downloadPath"] = None
+
     async with container.db.user_session(scope) as session:
         if idem_row is not None:
             persisted = await session.merge(idem_row)
@@ -118,7 +140,7 @@ async def create_data_export(
                 session,
                 persisted,
                 status_code=status.HTTP_201_CREATED,
-                response_body=response.model_dump(mode="json", by_alias=True),
+                response_body=stored_body,
             )
 
     return response
@@ -180,7 +202,7 @@ async def download_data_export(
     export_id: str,
     request: Request,
     token: str | None = Query(default=None),
-    creds: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+    scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     export_uuid = parse_uuid_param(export_id, field_name="export_id")
@@ -190,15 +212,11 @@ async def download_data_export(
             error_code="export_missing_token",
         )
 
-    authenticated_scope: UserScope | None = None
-    if creds is not None:
-        authenticated_scope = await get_current_user_scope(container=container, creds=creds)
-
     service = DataRightsService(container)
     zip_bytes, filename = await service.download_export(
+        scope=scope,
         export_id=export_uuid,
         token=token,
-        authenticated_scope=authenticated_scope,
         client_ip=_client_ip(request),
     )
     return Response(

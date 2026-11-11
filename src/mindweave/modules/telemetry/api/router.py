@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 
-from mindweave.core.dependencies import AppContainer, get_container, get_current_user_scope
+from mindweave.core.dependencies import (
+    AppContainer,
+    get_container,
+    get_current_user_scope,
+    require_idempotency_key,
+)
 from mindweave.core.idempotency import hash_request_payload
 from mindweave.modules.telemetry.api.schemas import (
     TelemetryBatchRequest,
@@ -29,8 +34,8 @@ router = APIRouter(tags=["telemetry"])
 async def ingest_telemetry_events(
     payload: TelemetryBatchRequest | TelemetryEventItemRequest,
     scope: UserScope = Depends(get_current_user_scope),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> TelemetryIngestResponse | JSONResponse:
     items = payload.events if isinstance(payload, TelemetryBatchRequest) else [payload]
     raw_events = [(item.event_name, item.metadata, item.occurred_at) for item in items]
@@ -39,18 +44,16 @@ async def ingest_telemetry_events(
 
     service = TelemetryService(clock=container.clock)
     async with container.db.user_session(scope) as session:
-        idem_row = None
-        if idempotency_key is not None:
-            idem_row, hit = await container.idempotency.claim_or_replay(
-                session,
-                scope=scope,
-                idem_key=idempotency_key,
-                method="POST",
-                path="/telemetry/events",
-                request_hash=req_hash,
-            )
-            if hit is not None:
-                return JSONResponse(status_code=hit.status_code, content=hit.response_body)
+        idem_row, hit = await container.idempotency.claim_or_replay(
+            session,
+            scope=scope,
+            idem_key=idem_key,
+            method="POST",
+            path="/telemetry/events",
+            request_hash=req_hash,
+        )
+        if hit is not None:
+            return JSONResponse(status_code=hit.status_code, content=hit.response_body)
 
         event_ids = await service.ingest_events(
             session,

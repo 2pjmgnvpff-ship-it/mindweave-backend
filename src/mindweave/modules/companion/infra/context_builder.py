@@ -31,6 +31,7 @@ from mindweave.modules.companion.domain.tier_policy import (
     trim_facts_to_token_budget,
 )
 from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
     FactStatus,
     FactType,
     PersonState,
@@ -149,12 +150,13 @@ class ContextBuilder:
         referenced_material_ids: Sequence[UUID] = (),
         safety_override: SafetyCategory = SafetyCategory.NORMAL,
     ) -> BuiltCompanionContext:
-        # 1. Verify PersonRow strictly belongs to (scope.user_id, scope.person_id) & not deleted
+        # 1. Verify PersonRow strictly belongs to (scope.user_id, scope.person_id), not deleted & not unassigned
         person_row = await session.scalar(
             select(PersonRow).where(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.id == scope.person_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
         )
         if person_row is None:

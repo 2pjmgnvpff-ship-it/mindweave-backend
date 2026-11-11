@@ -34,6 +34,7 @@ from mindweave.core.orm import (
     UserPreferenceRow,
     UserRow,
 )
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG
 from mindweave.shared.scopes import UserScope
 
 
@@ -205,11 +206,25 @@ class DataRightsRepository:
             for r in device_rows
         ]
 
-        # 5. persons
+        # 5. persons (exclude internal UNASSIGNED_PERSON_SLUG placeholder!)
+        unassigned_person_ids: set[UUID] = set(
+            (
+                await user_session.scalars(
+                    select(PersonRow.id).where(
+                        PersonRow.user_id == uid,
+                        PersonRow.slug == UNASSIGNED_PERSON_SLUG,
+                    )
+                )
+            ).all()
+        )
         person_rows = (
             await user_session.scalars(
                 select(PersonRow)
-                .where(PersonRow.user_id == uid, PersonRow.deleted_at.is_(None))
+                .where(
+                    PersonRow.user_id == uid,
+                    PersonRow.deleted_at.is_(None),
+                    PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
+                )
                 .order_by(PersonRow.tier.asc(), PersonRow.rank.asc())
             )
         ).all()
@@ -282,7 +297,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 6. person_aliases
+        # 6. person_aliases (exclude aliases attached to internal UNASSIGNED_PERSON_SLUG placeholder)
         alias_rows = (
             await user_session.scalars(
                 select(PersonAliasRow)
@@ -307,7 +322,13 @@ class DataRightsRepository:
                 "createdAt": a.created_at.isoformat(),
             }
             for a in alias_rows
+            if a.person_id not in unassigned_person_ids
         ]
+
+        def _public_person_id(pid: UUID | None) -> str | None:
+            if pid is None or pid in unassigned_person_ids:
+                return None
+            return str(pid)
 
         # 7. captures
         capture_rows = (
@@ -326,7 +347,7 @@ class DataRightsRepository:
                     "id": str(c.id),
                     "source": c.source,
                     "routeMode": c.route_mode,
-                    "scopedPersonId": str(c.scoped_person_id) if c.scoped_person_id else None,
+                    "scopedPersonId": _public_person_id(c.scoped_person_id),
                     "status": c.status,
                     "audioObjectKey": c.audio_object_key,
                     "imageObjectKey": c.image_object_key,
@@ -378,7 +399,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 8. records -> materials
+        # 8. records -> materials (preserve 100% of user content, mapping unassigned personId -> None)
         record_rows = (
             await user_session.scalars(
                 select(RecordRow)
@@ -392,7 +413,7 @@ class DataRightsRepository:
             materials.append(
                 {
                     "id": str(rec.id),
-                    "personId": str(rec.person_id),
+                    "personId": _public_person_id(rec.person_id),
                     "captureId": str(rec.capture_id) if rec.capture_id else None,
                     "kind": rec.kind,
                     "title": cipher.decrypt_str(
@@ -433,7 +454,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 9. facts
+        # 9. facts (preserve 100% of user facts, mapping unassigned personId -> None)
         fact_rows = (
             await user_session.scalars(
                 select(FactRow).where(FactRow.user_id == uid).order_by(FactRow.created_at.asc())
@@ -442,7 +463,7 @@ class DataRightsRepository:
         facts = [
             {
                 "id": str(f.id),
-                "personId": str(f.person_id) if f.person_id else None,
+                "personId": _public_person_id(f.person_id),
                 "recordId": str(f.record_id) if f.record_id else None,
                 "captureId": str(f.capture_id) if f.capture_id else None,
                 "type": f.type,
@@ -489,13 +510,17 @@ class DataRightsRepository:
         inbox_items = [
             {
                 "id": str(item.id),
-                "personId": str(item.person_id) if item.person_id else None,
+                "personId": _public_person_id(item.person_id),
                 "captureId": str(item.capture_id) if item.capture_id else None,
                 "recordId": str(item.record_id) if item.record_id else None,
                 "kind": item.kind,
                 "status": item.status,
                 "factIds": [str(fid) for fid in item.fact_ids],
-                "candidatePersonIds": [str(cid) for cid in item.candidate_person_ids],
+                "candidatePersonIds": [
+                    str(cid)
+                    for cid in item.candidate_person_ids
+                    if cid not in unassigned_person_ids
+                ],
                 "payload": _decrypt_opt_json(
                     cipher,
                     dek,
@@ -524,7 +549,7 @@ class DataRightsRepository:
         reminders = [
             {
                 "id": str(rem.id),
-                "personId": str(rem.person_id),
+                "personId": _public_person_id(rem.person_id),
                 "factId": str(rem.fact_id) if rem.fact_id else None,
                 "title": cipher.decrypt_str(
                     dek,
@@ -588,7 +613,7 @@ class DataRightsRepository:
         chat_threads = [
             {
                 "id": str(t.id),
-                "personId": str(t.person_id),
+                "personId": _public_person_id(t.person_id),
                 "rollingSummary": _decrypt_opt_str(
                     cipher,
                     dek,
@@ -619,7 +644,7 @@ class DataRightsRepository:
             {
                 "id": str(m.id),
                 "threadId": str(m.thread_id),
-                "personId": str(m.person_id),
+                "personId": _public_person_id(m.person_id),
                 "role": m.role,
                 "content": cipher.decrypt_str(
                     dek,
@@ -813,22 +838,6 @@ class DataRightsRepository:
             )
         ).all()
         return list(rows)
-
-    async def resolve_export_owner_via_system(
-        self,
-        system_session: AsyncSession,
-        *,
-        export_id: UUID,
-    ) -> UUID | None:
-        return await system_session.scalar(
-            select(ExportJobRow.user_id)
-            .join(UserRow, UserRow.id == ExportJobRow.user_id)
-            .where(
-                ExportJobRow.id == export_id,
-                UserRow.status == "active",
-                UserRow.deleted_at.is_(None),
-            )
-        )
 
     async def consume_download_token_once(
         self,

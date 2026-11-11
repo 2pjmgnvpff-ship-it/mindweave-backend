@@ -17,7 +17,15 @@ from mindweave.modules.bootstrap.domain.formatting import (
     format_duration_ms,
     sanitize_material_preview_text,
 )
-from mindweave.shared.enums import CupidLayout, Edition, InboxItemStatus, PersonState, RecordKind
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    CupidLayout,
+    Edition,
+    InboxItemStatus,
+    PersonState,
+    RecordKind,
+    RecordReviewState,
+)
 from mindweave.shared.scopes import UserScope
 
 TOP_MATERIALS_PER_PERSON = 10
@@ -77,6 +85,7 @@ class BootstrapQueryRepository:
                 PersonRow.deleted_at.is_(None),
                 PersonRow.archived_at.is_(None),
                 PersonRow.state != PersonState.ARCHIVED.value,
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.rank.asc(), PersonRow.id.asc())
         )
@@ -108,6 +117,7 @@ class BootstrapQueryRepository:
                 RecordRow.user_id == scope.user_id,
                 RecordRow.person_id.in_(person_ids),
                 RecordRow.deleted_at.is_(None),
+                RecordRow.review_state != RecordReviewState.HELD.value,
             )
             .subquery()
         )

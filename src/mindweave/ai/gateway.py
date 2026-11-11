@@ -106,6 +106,9 @@ class TaskRouteSpec:
     models: dict[str, str]
 
 
+_PROD_CN_FORBIDDEN_PROVIDERS: frozenset[str] = frozenset({"gemini", "fake"})
+
+
 @dataclass(frozen=True, slots=True)
 class RoutingConfig:
     semantic_cache_enabled: bool
@@ -116,6 +119,7 @@ class RoutingConfig:
     retry_max_wait_seconds: float
     retry_jitter_seconds: float
     tasks: dict[str, TaskRouteSpec]
+    fallback_providers: tuple[str, ...] = ()
 
 
 def load_routing_config(routing_path: Path | None = None) -> RoutingConfig:
@@ -130,6 +134,10 @@ def load_routing_config(routing_path: Path | None = None) -> RoutingConfig:
 
     cb = raw.get("circuit_breaker") or {}
     rt = raw.get("retry") or {}
+    fb_raw = raw.get("fallback_providers") or ()
+    fallback_providers = tuple(
+        str(p).strip() for p in fb_raw if str(p).strip() and str(p).strip() != "none"
+    )
     tasks_raw = raw.get("tasks") or {}
     tasks: dict[str, TaskRouteSpec] = {}
     for task_name, t_cfg in tasks_raw.items():
@@ -149,6 +157,7 @@ def load_routing_config(routing_path: Path | None = None) -> RoutingConfig:
         retry_max_wait_seconds=float(rt.get("max_wait_seconds", 0.5)),
         retry_jitter_seconds=float(rt.get("jitter_seconds", 0.05)),
         tasks=tasks,
+        fallback_providers=fallback_providers,
     )
 
 
@@ -274,11 +283,24 @@ class ModelGateway(ModelGatewayPort):
     def get_circuit_breaker(self, provider: str) -> CircuitBreaker:
         return self._breakers[provider]
 
+    def _assert_provider_allowed(self, provider_name: str) -> None:
+        normalized = provider_name.strip().lower()
+        if self._settings.environment == "prod_cn" and normalized in _PROD_CN_FORBIDDEN_PROVIDERS:
+            raise UpstreamAIError(
+                f"Compliance Gate M6: provider '{provider_name}' is prohibited in prod_cn",
+                extensions={"provider": provider_name, "environment": "prod_cn"},
+            )
+
     def _provider_chain(self) -> list[str]:
         chain: list[str] = [self._settings.ai_primary_provider]
         fb = self._settings.ai_fallback_provider
         if fb != "none" and fb not in chain:
             chain.append(fb)
+        for route_fb in self._routing.fallback_providers:
+            if route_fb not in chain:
+                chain.append(route_fb)
+        for provider_name in chain:
+            self._assert_provider_allowed(provider_name)
         return chain
 
     def _resolve_model(self, task: str, provider: str) -> str:
@@ -312,6 +334,8 @@ class ModelGateway(ModelGatewayPort):
         breaker: CircuitBreaker,
         request: AdapterCallRequest,
     ) -> AdapterCallResponse:
+        self._assert_provider_allowed(adapter.provider_name)
+
         def _on_before_sleep(_retry_state: Any) -> None:
             breaker.record_failure()
 
@@ -501,6 +525,8 @@ class ModelGateway(ModelGatewayPort):
                         rendered_prompt.version_tag,
                         f"{provider_name}:{rep_resp.model}",
                     )
+                except UpstreamAIError:
+                    raise
                 except Exception as rep_exc:
                     rep_lat = int((time.perf_counter() - t_rep) * 1000)
                     await self._meter.record(
@@ -672,9 +698,11 @@ class ModelGateway(ModelGatewayPort):
 
         last_err: Exception | None = None
         for provider_name in self._provider_chain():
+            self._assert_provider_allowed(provider_name)
             adapter = self._adapters.get(provider_name)
             if adapter is None:
                 continue
+            self._assert_provider_allowed(adapter.provider_name)
             breaker = self._breakers[provider_name]
             model_name = self._resolve_model("ask_relationship", provider_name)
             if not breaker.allow_request():
@@ -719,6 +747,8 @@ class ModelGateway(ModelGatewayPort):
                     session=session,
                 )
                 return
+            except UpstreamAIError:
+                raise
             except Exception as exc:
                 last_err = exc
                 breaker.record_failure()
@@ -785,9 +815,11 @@ class ModelGateway(ModelGatewayPort):
         timeout_sec = self._resolve_timeout("summarize_thread")
 
         for provider_name in self._provider_chain():
+            self._assert_provider_allowed(provider_name)
             adapter = self._adapters.get(provider_name)
             if adapter is None:
                 continue
+            self._assert_provider_allowed(adapter.provider_name)
             breaker = self._breakers[provider_name]
             model_name = self._resolve_model("summarize_thread", provider_name)
             if not breaker.allow_request():
@@ -823,6 +855,8 @@ class ModelGateway(ModelGatewayPort):
                     session=session,
                 )
                 return resp.text.strip()
+            except UpstreamAIError:
+                raise
             except Exception as exc:
                 lat_ms = int((time.perf_counter() - t0) * 1000)
                 await self._meter.record(

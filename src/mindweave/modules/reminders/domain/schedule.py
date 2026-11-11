@@ -151,6 +151,61 @@ def _local_slot_to_utc(
     return local_dt.astimezone(UTC)
 
 
+def resolve_next_lunar_occurrence_date(
+    *,
+    target_month: int,
+    target_day: int,
+    is_leap_month: bool = False,
+    timezone: str = "Asia/Shanghai",
+    reference_utc: datetime,
+    fire_hour: int = 9,
+    fire_minute: int = 0,
+    lead_days: Sequence[int] = DEFAULT_LEAD_DAYS,
+) -> date:
+    """Resolve the next upcoming Gregorian solar `date` for a Chinese lunar month/day."""
+    if isinstance(fire_hour, bool) or not (0 <= fire_hour <= 23):
+        raise ReminderScheduleError(f"fire_hour {fire_hour} must be in 0..23")
+    if isinstance(fire_minute, bool) or not (0 <= fire_minute <= 59):
+        raise ReminderScheduleError(f"fire_minute {fire_minute} must be in 0..59")
+
+    tz = validate_timezone_name(timezone)
+    normalized_leads = normalize_lead_days(lead_days)
+    ref_norm = _ensure_utc(reference_utc)
+
+    # Validate lunar month/day upfront
+    resolve_lunar_yearly_date(2024, target_month, target_day, is_leap_month=is_leap_month)
+
+    anchor_local = ref_norm.astimezone(tz)
+    anchor_lunar_year = int(
+        Solar.fromYmd(anchor_local.year, anchor_local.month, anchor_local.day).getLunar().getYear()
+    )
+
+    for year_offset in (-1, 0, 1, 2):
+        cand_lunar_year = anchor_lunar_year + year_offset
+        if not (MIN_SUPPORTED_YEAR <= cand_lunar_year <= MAX_SUPPORTED_YEAR):
+            continue
+        occ_date = resolve_lunar_yearly_date(
+            cand_lunar_year,
+            target_month,
+            target_day,
+            is_leap_month=is_leap_month,
+        )
+        for lead_day in normalized_leads:
+            slot_utc = _local_slot_to_utc(
+                occ_date,
+                lead_day=lead_day,
+                fire_hour=fire_hour,
+                fire_minute=fire_minute,
+                tz=tz,
+            )
+            if slot_utc >= ref_norm:
+                return occ_date
+
+    raise ReminderScheduleError(
+        f"Unable to resolve next lunar occurrence for month={target_month}, day={target_day}"
+    )
+
+
 def compute_next_fire_slot(
     *,
     rule: ReminderRule | str,
@@ -207,18 +262,36 @@ def compute_next_fire_slot(
     candidates: list[tuple[datetime, int, date]] = []
 
     if rule_enum is ReminderRule.ONCE:
-        if once_date is None:
+        resolved_once = once_date
+        if (
+            resolved_once is None
+            and after_norm is None
+            and is_lunar
+            and target_month is not None
+            and target_day is not None
+        ):
+            resolved_once = resolve_next_lunar_occurrence_date(
+                target_month=target_month,
+                target_day=target_day,
+                is_leap_month=is_leap_month,
+                timezone=timezone,
+                reference_utc=anchor_utc,
+                fire_hour=fire_hour,
+                fire_minute=fire_minute,
+                lead_days=normalized_leads,
+            )
+        if resolved_once is None:
             raise ReminderScheduleError("once_date is required when rule is 'once'")
         for lead_day in normalized_leads:
             slot_utc = _local_slot_to_utc(
-                once_date,
+                resolved_once,
                 lead_day=lead_day,
                 fire_hour=fire_hour,
                 fire_minute=fire_minute,
                 tz=tz,
             )
             if _is_eligible(slot_utc):
-                candidates.append((slot_utc, lead_day, once_date))
+                candidates.append((slot_utc, lead_day, resolved_once))
     else:
         if target_month is None or target_day is None:
             raise ReminderScheduleError(

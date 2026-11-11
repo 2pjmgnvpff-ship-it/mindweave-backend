@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 
-from mindweave.shared.enums import Tier
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, Tier
 
 EXPORT_SCHEMA_VERSION = "1.0"
 AIGC_STANDARD_GB45438 = "GB 45438-2025"
@@ -125,11 +125,22 @@ def render_journal_markdown(
     chat_messages: Sequence[Mapping[str, Any]],
 ) -> str:
     """Render a warm, human-readable Markdown journal organized by Arrow Tier and Person."""
+    visible_persons: list[Mapping[str, Any]] = []
+    excluded_person_ids: set[str] = set()
+    for person in persons:
+        if str(person.get("slug") or "") == UNASSIGNED_PERSON_SLUG:
+            if person.get("id") is not None:
+                excluded_person_ids.add(str(person["id"]))
+            continue
+        visible_persons.append(person)
+
+    known_person_ids = {str(p["id"]) for p in visible_persons if p.get("id") is not None}
+
     lines: list[str] = [
         "# 心络 · 私密手账导出卷",
         "",
         f"- 导出时间：{exported_at_iso}",
-        f"- 收录人物：{len(persons)} 位",
+        f"- 收录人物：{len(visible_persons)} 位",
         "",
     ]
 
@@ -138,7 +149,7 @@ def render_journal_markdown(
         Tier.SILVER.value: [],
         Tier.CRYSTAL.value: [],
     }
-    for person in persons:
+    for person in visible_persons:
         tier_key = str(person.get("tier", Tier.CRYSTAL.value))
         persons_by_tier.setdefault(tier_key, []).append(person)
 
@@ -148,27 +159,30 @@ def render_journal_markdown(
         if fact.get("status") == "rejected":
             continue
         pid = fact.get("personId")
-        if pid:
+        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             facts_by_person.setdefault(str(pid), []).append(fact)
         else:
             unassigned_facts.append(fact)
 
     materials_by_person: dict[str, list[Mapping[str, Any]]] = {}
+    unassigned_materials: list[Mapping[str, Any]] = []
     for mat in materials:
         pid = mat.get("personId")
-        if pid:
+        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             materials_by_person.setdefault(str(pid), []).append(mat)
+        else:
+            unassigned_materials.append(mat)
 
     reminders_by_person: dict[str, list[Mapping[str, Any]]] = {}
     for rem in reminders:
         pid = rem.get("personId")
-        if pid:
+        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             reminders_by_person.setdefault(str(pid), []).append(rem)
 
     messages_by_person: dict[str, list[Mapping[str, Any]]] = {}
     for msg in chat_messages:
         pid = msg.get("personId")
-        if pid:
+        if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             messages_by_person.setdefault(str(pid), []).append(msg)
 
     for tier_enum in (Tier.GOLD, Tier.SILVER, Tier.CRYSTAL):
@@ -240,13 +254,20 @@ def render_journal_markdown(
                     lines.append(f"- **{speaker}**：{m_content}")
                 lines.append("")
 
-    if unassigned_facts:
-        lines.append("## 待归属收件箱备忘")
+    if unassigned_materials or unassigned_facts:
+        lines.append("## 未归属随手记")
         lines.append("")
+        for m in unassigned_materials:
+            kind_label = RECORD_KIND_LABELS.get(str(m.get("kind", "")), "便签")
+            m_title = sanitize_journal_text(str(m.get("title", "")))
+            m_body = sanitize_journal_text(str(m.get("body", "")))
+            when_str = f"（{m['happenedOn']}）" if m.get("happenedOn") else ""
+            lines.append(f"- [{kind_label}] **{m_title}**{when_str}：{m_body}")
         for f in unassigned_facts:
             ftype_label = FACT_TYPE_LABELS.get(str(f.get("type", "")), "备忘")
             content = sanitize_journal_text(str(f.get("content", "")))
-            lines.append(f"- **{ftype_label}**（待确认）：{content}")
+            status_note = "（待确认）" if f.get("status") == "pending" else ""
+            lines.append(f"- **{ftype_label}**{status_note}：{content}")
         lines.append("")
 
     lines.extend(
@@ -260,6 +281,48 @@ def render_journal_markdown(
     return "\n".join(lines)
 
 
+def _sanitize_export_sections(sections: Mapping[str, Any]) -> dict[str, Any]:
+    cleaned = dict(sections)
+    raw_persons = cleaned.get("persons")
+    if not isinstance(raw_persons, Sequence) or isinstance(raw_persons, str | bytes):
+        return cleaned
+
+    unassigned_ids: set[str] = set()
+    visible_persons: list[Any] = []
+    for p in raw_persons:
+        if isinstance(p, Mapping) and str(p.get("slug") or "") == UNASSIGNED_PERSON_SLUG:
+            if p.get("id") is not None:
+                unassigned_ids.add(str(p["id"]))
+            continue
+        visible_persons.append(p)
+
+    if not unassigned_ids:
+        return cleaned
+
+    cleaned["persons"] = visible_persons
+    if isinstance(cleaned.get("personAliases"), list):
+        cleaned["personAliases"] = [
+            a
+            for a in cleaned["personAliases"]
+            if not (isinstance(a, Mapping) and str(a.get("personId") or "") in unassigned_ids)
+        ]
+    for key in ("materials", "facts", "inboxItems"):
+        if isinstance(cleaned.get(key), list):
+            remapped: list[Any] = []
+            for entry in cleaned[key]:
+                if (
+                    isinstance(entry, Mapping)
+                    and str(entry.get("personId") or "") in unassigned_ids
+                ):
+                    item_copy = dict(entry)
+                    item_copy["personId"] = None
+                    remapped.append(item_copy)
+                else:
+                    remapped.append(entry)
+            cleaned[key] = remapped
+    return cleaned
+
+
 def package_export_zip(
     *,
     export_id: str,
@@ -269,6 +332,7 @@ def package_export_zip(
     media_items: Sequence[ExportMediaItem],
 ) -> ExportArchiveBundle:
     """Build portable in-memory ZIP archive with `data.json`, `journal.md`, and `media/*`."""
+    sanitized_sections = _sanitize_export_sections(sections)
     media_manifest = [
         {
             "objectKey": item.object_key,
@@ -286,7 +350,7 @@ def package_export_zip(
         "userId": user_id,
         "exportedAt": exported_at_iso,
         "mediaFiles": media_manifest,
-        **dict(sections),
+        **sanitized_sections,
     }
 
     canonical_bytes = json.dumps(
@@ -308,7 +372,7 @@ def package_export_zip(
         "userId": user_id,
         "exportedAt": exported_at_iso,
         "mediaFiles": media_manifest,
-        **dict(sections),
+        **sanitized_sections,
     }
     data_json_bytes = json.dumps(
         data_json_doc,
@@ -318,11 +382,11 @@ def package_export_zip(
 
     journal_md = render_journal_markdown(
         exported_at_iso=exported_at_iso,
-        persons=sections.get("persons", []),
-        materials=sections.get("materials", []),
-        facts=sections.get("facts", []),
-        reminders=sections.get("reminders", []),
-        chat_messages=sections.get("chatMessages", []),
+        persons=sanitized_sections.get("persons", []),
+        materials=sanitized_sections.get("materials", []),
+        facts=sanitized_sections.get("facts", []),
+        reminders=sanitized_sections.get("reminders", []),
+        chat_messages=sanitized_sections.get("chatMessages", []),
     )
     journal_bytes = journal_md.encode("utf-8")
 

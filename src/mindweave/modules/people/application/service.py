@@ -47,7 +47,7 @@ from mindweave.modules.people.domain.tier_transition import (
 )
 from mindweave.modules.people.infra.media import verify_and_strip_exif
 from mindweave.modules.people.infra.repository import PeopleRepository
-from mindweave.shared.enums import AliasKind, PersonState, Tier
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, AliasKind, PersonState, Tier
 from mindweave.shared.scopes import UserScope
 
 
@@ -90,11 +90,22 @@ class PeopleService:
         self._container = container
         self._repo = PeopleRepository(container.cipher)
 
-    def photo_url(self, person_id: UUID, slot: PhotoSlot, object_key: str | None) -> str | None:
+    def photo_url(
+        self,
+        scope: UserScope,
+        person_id: UUID,
+        slot: PhotoSlot,
+        object_key: str | None,
+    ) -> str | None:
         if not object_key:
             return None
         prefix = self._container.settings.api_prefix.rstrip("/")
-        return f"{prefix}/persons/{person_id}/photos/{slot.value}"
+        raw_path = f"{prefix}/persons/{person_id}/photos/{slot.value}"
+        return self._container.tokens.sign_media_path(
+            raw_path,
+            user_id=scope.user_id,
+            now=self._container.clock.now(),
+        )
 
     async def list_persons(
         self,
@@ -184,6 +195,11 @@ class PeopleService:
                 if slug is not None
                 else None
             )
+            if cleaned_slug == UNASSIGNED_PERSON_SLUG:
+                raise ValidationFailedError(
+                    "Reserved internal slug.",
+                    extensions={"field": "slug"},
+                )
             resolved_tokens = (
                 validate_visual_tokens(visual_tokens)
                 if visual_tokens is not None
@@ -318,7 +334,7 @@ class PeopleService:
 
                 if "slug" in patch_fields:
                     raw_slug = patch_fields["slug"]
-                    row.slug = (
+                    next_slug = (
                         validate_optional_copy_field(
                             str(raw_slug), field_name="slug", max_length=64
                         )
@@ -326,6 +342,12 @@ class PeopleService:
                         if raw_slug is not None
                         else None
                     )
+                    if next_slug == UNASSIGNED_PERSON_SLUG:
+                        raise ValidationFailedError(
+                            "Reserved internal slug.",
+                            extensions={"field": "slug"},
+                        )
+                    row.slug = next_slug
 
                 if "role_tag" in patch_fields and patch_fields["role_tag"] is not None:
                     cleaned_role = validate_optional_copy_field(
@@ -391,6 +413,9 @@ class PeopleService:
                 row.state = PersonState.ARCHIVED.value
                 if row.archived_at is None:
                     row.archived_at = now
+                await self._repo.pause_active_reminders_for_person(
+                    session, scope, person_id=row.id, now=now
+                )
             elif archived_flag is False or (
                 explicit_state in (PersonState.ACTIVE, PersonState.PROVISIONAL)
             ):
@@ -436,36 +461,34 @@ class PeopleService:
         scope: UserScope,
         person_id: UUID,
         *,
-        idem_key: str | None = None,
+        idem_key: str,
     ) -> None:
         path = f"/v1/persons/{person_id}"
         req_hash = hash_request_payload({"delete": str(person_id)})
-        media_keys: list[str] = []
 
         async with self._container.db.user_session(scope) as session:
-            idem_row = None
-            if idem_key:
-                idem_row, hit = await self._container.idempotency.claim_or_replay(
-                    session,
-                    scope=scope,
-                    idem_key=idem_key,
-                    method="DELETE",
-                    path=path,
-                    request_hash=req_hash,
-                )
-                if hit is not None:
-                    return
-
-            media_keys = await self._repo.delete_person_and_collect_media_keys(
-                session, scope, person_id
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="DELETE",
+                path=path,
+                request_hash=req_hash,
             )
-            if idem_row is not None:
-                await IdempotencyService.complete(
-                    session, idem_row, status_code=204, response_body={"deleted": True}
-                )
+            if hit is not None:
+                return
+            assert idem_row is not None
 
-        for key in media_keys:
-            await self._container.storage.delete_object(object_key=key)
+            now = self._container.clock.now()
+            await self._repo.soft_delete_person(
+                session,
+                scope,
+                person_id=person_id,
+                now=now,
+            )
+            await IdempotencyService.complete(
+                session, idem_row, status_code=204, response_body={"deleted": True}
+            )
 
     async def transition_tier(
         self,
@@ -609,7 +632,7 @@ class PeopleService:
         *,
         alias: str,
         kind: AliasKind,
-        idem_key: str | None,
+        idem_key: str,
         serialize_alias: Any,
     ) -> tuple[dict[str, Any], int]:
         try:
@@ -621,18 +644,17 @@ class PeopleService:
         req_hash = hash_request_payload({"alias": cleaned_alias, "kind": kind.value})
 
         async with self._container.db.user_session(scope) as session:
-            idem_row = None
-            if idem_key:
-                idem_row, hit = await self._container.idempotency.claim_or_replay(
-                    session,
-                    scope=scope,
-                    idem_key=idem_key,
-                    method="POST",
-                    path=path,
-                    request_hash=req_hash,
-                )
-                if hit is not None:
-                    return hit.response_body, hit.status_code
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="POST",
+                path=path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit.response_body, hit.status_code
+            assert idem_row is not None
 
             await self._repo.get_person_row(session, scope, person_id, for_update=True)
             dek = await self._container.load_user_dek(session, scope)
@@ -648,10 +670,9 @@ class PeopleService:
             )
             decrypted = self._repo.decrypt_alias_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_alias(decrypted)
-            if idem_row is not None:
-                await IdempotencyService.complete(
-                    session, idem_row, status_code=201, response_body=body
-                )
+            await IdempotencyService.complete(
+                session, idem_row, status_code=201, response_body=body
+            )
             return body, 201
 
     async def delete_alias(
@@ -660,33 +681,31 @@ class PeopleService:
         person_id: UUID,
         alias_id: UUID,
         *,
-        idem_key: str | None = None,
+        idem_key: str,
     ) -> None:
         path = f"/v1/persons/{person_id}/aliases/{alias_id}"
         req_hash = hash_request_payload({"aliasId": str(alias_id)})
 
         async with self._container.db.user_session(scope) as session:
-            idem_row = None
-            if idem_key:
-                idem_row, hit = await self._container.idempotency.claim_or_replay(
-                    session,
-                    scope=scope,
-                    idem_key=idem_key,
-                    method="DELETE",
-                    path=path,
-                    request_hash=req_hash,
-                )
-                if hit is not None:
-                    return
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="DELETE",
+                path=path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return
+            assert idem_row is not None
 
             await self._repo.get_person_row(session, scope, person_id)
             await self._repo.delete_alias_row(
                 session, scope, person_id=person_id, alias_id=alias_id
             )
-            if idem_row is not None:
-                await IdempotencyService.complete(
-                    session, idem_row, status_code=204, response_body={"deleted": True}
-                )
+            await IdempotencyService.complete(
+                session, idem_row, status_code=204, response_body={"deleted": True}
+            )
 
     async def upload_photo(
         self,
@@ -695,7 +714,7 @@ class PeopleService:
         slot: PhotoSlot,
         *,
         raw_bytes: bytes,
-        idem_key: str | None,
+        idem_key: str,
         serialize_profile: Any,
     ) -> tuple[dict[str, Any], int]:
         path = f"/v1/persons/{person_id}/photos/{slot.value}"
@@ -713,18 +732,17 @@ class PeopleService:
         )
 
         async with self._container.db.user_session(scope) as session:
-            idem_row = None
-            if idem_key:
-                idem_row, hit = await self._container.idempotency.claim_or_replay(
-                    session,
-                    scope=scope,
-                    idem_key=idem_key,
-                    method="POST",
-                    path=path,
-                    request_hash=req_hash,
-                )
-                if hit is not None:
-                    return hit.response_body, hit.status_code
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="POST",
+                path=path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit.response_body, hit.status_code
+            assert idem_row is not None
 
             await self._repo.get_person_row(session, scope, person_id, for_update=True)
             dek = await self._container.load_user_dek(session, scope)
@@ -747,10 +765,9 @@ class PeopleService:
             )
             profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_profile(profile)
-            if idem_row is not None:
-                await IdempotencyService.complete(
-                    session, idem_row, status_code=200, response_body=body
-                )
+            await IdempotencyService.complete(
+                session, idem_row, status_code=200, response_body=body
+            )
 
         if old_object_key and old_object_key != new_object_key:
             await self._container.storage.delete_object(object_key=old_object_key)

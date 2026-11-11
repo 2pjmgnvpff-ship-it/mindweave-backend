@@ -123,6 +123,7 @@ def decide_gate(
         return _pending(
             PendingReason.AMBIGUOUS_PERSON,
             inbox_kind=InboxItemKind.PERSON_DISAMBIGUATION,
+            record_review_state=RecordReviewState.HELD,
         )
 
     # 4. Multi-person entangled clause when not scoped-locked

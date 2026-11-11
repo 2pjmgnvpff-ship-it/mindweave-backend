@@ -132,6 +132,53 @@ class TokenService:
         except Exception as exc:
             raise UnauthorizedError("Invalid or expired authentication token") from exc
 
+    def sign_media_path(
+        self,
+        path: str,
+        *,
+        user_id: UUID,
+        now: datetime | None = None,
+        ttl_seconds: int = 900,
+    ) -> str:
+        """Append short-lived user-bound HMAC query parameters (`uid`, `exp`, `sig`) for `<img src>`/`<audio src>`."""
+        clean_path = path.split("?", 1)[0]
+        canonical = "/" + clean_path.lstrip("/").removeprefix("api/")
+        iat = (now or datetime.now(UTC)).astimezone(UTC)
+        exp = int((iat + timedelta(seconds=ttl_seconds)).timestamp())
+        sig = hmac.new(
+            self._secret.encode("utf-8"),
+            f"media:{user_id}:{canonical}:{exp}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        sep = "&" if "?" in path else "?"
+        return f"{path}{sep}uid={user_id}&exp={exp}&sig={sig}"
+
+    def verify_media_signature(
+        self,
+        *,
+        path: str,
+        uid: str,
+        exp: int,
+        sig: str,
+        now: datetime | None = None,
+    ) -> UUID:
+        try:
+            user_id = UUID(uid)
+        except ValueError as exc:
+            raise UnauthorizedError("Invalid media signature user ID") from exc
+        current_ts = int((now or datetime.now(UTC)).astimezone(UTC).timestamp())
+        if current_ts >= exp:
+            raise UnauthorizedError("Signed media URL has expired")
+        canonical = "/" + path.split("?", 1)[0].lstrip("/").removeprefix("api/")
+        expected = hmac.new(
+            self._secret.encode("utf-8"),
+            f"media:{user_id}:{canonical}:{exp}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(expected, sig.strip().lower()):
+            raise UnauthorizedError("Invalid media URL signature")
+        return user_id
+
 
 def generate_refresh_token() -> str:
     return secrets.token_urlsafe(48)

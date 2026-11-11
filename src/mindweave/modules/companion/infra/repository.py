@@ -26,7 +26,13 @@ from mindweave.core.orm import (
 )
 from mindweave.modules.companion.domain.citation_processor import VerifiedCitation
 from mindweave.modules.companion.domain.output_guard import sanitize_text
-from mindweave.shared.enums import ChatRole, RecordReviewState, SafetyCategory, Tier
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    ChatRole,
+    RecordReviewState,
+    SafetyCategory,
+    Tier,
+)
 from mindweave.shared.scopes import PersonScope
 
 
@@ -70,6 +76,7 @@ class CompanionRepository:
                 PersonRow.user_id == scope.user_id,
                 PersonRow.id == scope.person_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
         )
         if person is None:
@@ -83,6 +90,7 @@ class CompanionRepository:
         *,
         now: datetime,
     ) -> ChatThreadRow:
+        await self.verify_person(session, scope)
         candidate_id = new_id()
         stmt = (
             pg_insert(ChatThreadRow)

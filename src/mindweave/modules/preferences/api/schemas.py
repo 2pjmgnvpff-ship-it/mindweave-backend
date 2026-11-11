@@ -24,6 +24,7 @@ class PreferencesResponse(CamelModel):
     cupid_layout: CupidLayout
     wallpaper_preset: str
     has_custom_wallpaper: bool
+    wallpaper_url: str | None = None
     wallpaper_blur: int = Field(ge=MIN_WALLPAPER_BLUR, le=MAX_WALLPAPER_BLUR)
     wallpaper_vignette: int = Field(ge=MIN_WALLPAPER_VIGNETTE, le=MAX_WALLPAPER_VIGNETTE)
     app_lock_enabled: bool
@@ -32,12 +33,18 @@ class PreferencesResponse(CamelModel):
     version: int = Field(ge=1)
 
     @classmethod
-    def from_domain(cls, prefs: UserPreferences) -> PreferencesResponse:
+    def from_domain(
+        cls,
+        prefs: UserPreferences,
+        *,
+        wallpaper_url: str | None = None,
+    ) -> PreferencesResponse:
         return cls(
             preferred_edition=prefs.preferred_edition,
             cupid_layout=prefs.cupid_layout,
             wallpaper_preset=prefs.wallpaper_preset,
             has_custom_wallpaper=prefs.has_custom_wallpaper,
+            wallpaper_url=wallpaper_url if prefs.has_custom_wallpaper else None,
             wallpaper_blur=prefs.wallpaper_blur,
             wallpaper_vignette=prefs.wallpaper_vignette,
             app_lock_enabled=prefs.app_lock_enabled,

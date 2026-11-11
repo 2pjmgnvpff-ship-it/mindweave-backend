@@ -34,7 +34,7 @@ from mindweave.core.orm import (
 from mindweave.modules.bootstrap.api.router import router as bootstrap_router
 from mindweave.modules.people.api.router import router as people_router
 from mindweave.modules.people.application.entity_resolver import EntityResolver
-from mindweave.shared.enums import PersonState, RouteMode, Tier
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, PersonState, RouteMode, Tier
 from mindweave.shared.scopes import UserScope
 
 
@@ -255,7 +255,48 @@ async def test_person_crud_aad_encryption_idempotency_and_optimistic_locking(
         assert primary["alias"] == "沈清秋Chloé"
         assert primary["kind"] == "name"
 
-        # Archive & unarchive lifecycle
+        # Seed an active reminder on Chloe + internal __unassigned__ placeholder row
+        arch_rem_id = new_id()
+        unassigned_id = new_id()
+        async with db_container.db.user_session(scope) as sess:
+            sess.add(
+                ReminderRow(
+                    id=arch_rem_id,
+                    user_id=user_id,
+                    person_id=chloe_id,
+                    title_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "海边纪念日",
+                        user_id=user_id,
+                        table="reminders",
+                        column="title_enc",
+                        row_id=arch_rem_id,
+                    ),
+                    status="active",
+                    next_fire_at=db_container.clock.now() + timedelta(days=1),
+                )
+            )
+            sess.add(
+                PersonRow(
+                    id=unassigned_id,
+                    user_id=user_id,
+                    slug=UNASSIGNED_PERSON_SLUG,
+                    tier="crystal",
+                    rank="zzzz",
+                    state="provisional",
+                    display_name_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "待归档",
+                        user_id=user_id,
+                        table="persons",
+                        column="display_name_enc",
+                        row_id=unassigned_id,
+                    ),
+                    monogram="待",
+                )
+            )
+
+        # Archive & unarchive lifecycle (archiving pauses active reminders & hides __unassigned__)
         archived = await client.patch(
             f"/v1/persons/{chloe_id}",
             headers=_auth_headers(token, idem_key="idem-archive", if_match=2),
@@ -264,15 +305,32 @@ async def test_person_crud_aad_encryption_idempotency_and_optimistic_locking(
         assert archived.status_code == 200
         assert archived.json()["state"] == "archived"
 
+        async with db_container.db.user_session(scope) as sess:
+            paused_rem = await sess.get(ReminderRow, arch_rem_id)
+            assert paused_rem is not None
+            assert paused_rem.status == "paused"
+
         default_list = await client.get("/v1/persons", headers=_auth_headers(token))
         assert default_list.json()["coreIds"] == []
+        assert default_list.json()["casualIds"] == []
         assert default_list.json()["items"] == []
+        assert (
+            await client.get(f"/v1/persons/{unassigned_id}", headers=_auth_headers(token))
+        ).status_code == 404
+        assert (await client.get("/v1/bootstrap", headers=_auth_headers(token))).json()[
+            "people"
+        ] == {}
 
         with_arch = await client.get(
             "/v1/persons?includeArchived=true", headers=_auth_headers(token)
         )
         assert len(with_arch.json()["items"]) == 1
         assert with_arch.json()["coreIds"] == []
+
+        with_arch_snake = await client.get(
+            "/v1/persons?include_archived=true", headers=_auth_headers(token)
+        )
+        assert len(with_arch_snake.json()["items"]) == 1
 
         unarchived = await client.patch(
             f"/v1/persons/{chloe_id}",
@@ -554,10 +612,18 @@ async def test_aliases_homonyms_and_entity_resolver_four_priorities(
         )
         assert dup_same.status_code == 409
 
+        # Missing Idempotency-Key on POST /aliases -> 400
+        no_idem_alias = await client.post(
+            f"/v1/persons/{sumin_id}/aliases",
+            headers=_auth_headers(token),
+            json={"alias": "敏姐", "kind": "nickname"},
+        )
+        assert no_idem_alias.status_code == 400
+
         # Add unique alias "敏姐" to 苏敏姐
         sumin_alias = await client.post(
             f"/v1/persons/{sumin_id}/aliases",
-            headers=_auth_headers(token),
+            headers=_auth_headers(token, idem_key="alias-minjie"),
             json={"alias": "敏姐", "kind": "nickname"},
         )
         assert sumin_alias.status_code == 201
@@ -592,7 +658,7 @@ async def test_aliases_homonyms_and_entity_resolver_four_priorities(
         primary_mgr_alias_id = next(a["id"] for a in mgr_aliases if a["isPrimary"])
         del_primary = await client.delete(
             f"/v1/persons/{mgr_id}/aliases/{primary_mgr_alias_id}",
-            headers=_auth_headers(token),
+            headers=_auth_headers(token, idem_key="del-primary-mgr"),
         )
         assert del_primary.status_code == 409
 
@@ -692,7 +758,7 @@ async def test_aliases_homonyms_and_entity_resolver_four_priorities(
         # Delete secondary alias on 陈经理 -> "老陈" now uniquely resolves to 陈教授!
         del_sec = await client.delete(
             f"/v1/persons/{mgr_id}/aliases/{mgr_laochen_alias_id}",
-            headers=_auth_headers(token),
+            headers=_auth_headers(token, idem_key="del-sec-laochen"),
         )
         assert del_sec.status_code == 204
 
@@ -712,7 +778,7 @@ async def test_aliases_homonyms_and_entity_resolver_four_priorities(
 
 
 @pytest.mark.asyncio
-async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade_delete(
+async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_soft_delete(
     db_container: AppContainer,
 ) -> None:
     user_a, scope_a, token_a, dek_a = await _provision_user(db_container)
@@ -734,10 +800,18 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         )
         person_id = UUID(r_person.json()["id"])
 
-        # Reject invalid non-image payload
-        bad_img = await client.post(
+        # Missing Idempotency-Key on photo upload must return 400
+        missing_idem_up = await client.post(
             f"/v1/persons/{person_id}/photos/avatar",
             headers=_auth_headers(token_a),
+            files={"file": ("broken.jpg", b"not-a-real-image", "image/jpeg")},
+        )
+        assert missing_idem_up.status_code == 400
+
+        # Reject invalid non-image payload when Idempotency-Key is supplied
+        bad_img = await client.post(
+            f"/v1/persons/{person_id}/photos/avatar",
+            headers=_auth_headers(token_a, idem_key="bad-img-1"),
             files={"file": ("broken.jpg", b"not-a-real-image", "image/jpeg")},
         )
         assert bad_img.status_code == 422
@@ -752,7 +826,11 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         assert uploaded.status_code == 200
         up_json = uploaded.json()
         assert up_json["hasPhoto"] is True
-        assert up_json["avatarUrl"] == f"/v1/persons/{person_id}/photos/avatar"
+        signed_avatar_url = up_json["avatarUrl"]
+        assert signed_avatar_url.startswith(
+            f"/v1/persons/{person_id}/photos/avatar?uid={user_a}&exp="
+        )
+        assert "&sig=" in signed_avatar_url
 
         # Verify blob on disk is encrypted (no plaintext JPEG header or EXIF string on disk!)
         blob_files = [
@@ -765,7 +843,7 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         assert not disk_bytes.startswith(b"\xff\xd8\xff")
         assert b"SecretAuthorName" not in disk_bytes
 
-        # Stream decrypted photo back -> valid JPEG with ZERO EXIF metadata!
+        # Stream decrypted photo back via Bearer JWT -> valid JPEG with ZERO EXIF metadata!
         dl = await client.get(
             f"/v1/persons/{person_id}/photos/avatar", headers=_auth_headers(token_a)
         )
@@ -774,6 +852,17 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         with Image.open(BytesIO(dl.content)) as stripped_img:
             assert stripped_img.size == (64, 48)
             assert len(stripped_img.getexif()) == 0
+
+        # Browser <img src> signed URL works WITHOUT Authorization header, while tampered sig fails!
+        dl_signed = await client.get(signed_avatar_url)
+        assert dl_signed.status_code == 200
+        assert dl_signed.content == dl.content
+
+        tampered_url = signed_avatar_url[:-4] + (
+            "0000" if signed_avatar_url[-4:] != "0000" else "ffff"
+        )
+        dl_tampered = await client.get(tampered_url)
+        assert dl_tampered.status_code == 401
 
         # Tenant B cannot access Tenant A's person or photo (RLS + scope isolation)
         assert (
@@ -785,9 +874,10 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
             )
         ).status_code == 404
 
-        # Seed 12 records (11 active + 1 soft-deleted) + 1 voice media blob + inbox items
+        # Seed 13 records (10 normal + 1 photo + 1 held + 1 soft-deleted), 1 active reminder, and 3 inbox items
         base_ts = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
         voice_media_key = f"{user_a}/records/voice_{new_id()}.webm"
+        photo_media_key = f"{user_a}/records/photo_{new_id()}.jpg"
         await db_container.storage.put_encrypted(
             user_id=user_a,
             dek=dek_a,
@@ -795,18 +885,30 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
             plaintext=b"fake-webm-audio",
             content_type="audio/webm",
         )
+        await db_container.storage.put_encrypted(
+            user_id=user_a,
+            dek=dek_a,
+            object_key=photo_media_key,
+            plaintext=dl.content,
+            content_type="image/jpeg",
+        )
 
+        rem_id = new_id()
         async with db_container.db.user_session(scope_a) as sess:
-            for idx in range(12):
+            for idx in range(13):
                 rid = new_id()
-                is_deleted = idx == 11
+                is_deleted = idx == 12
+                is_held = idx == 11
                 is_voice = idx == 10
+                is_photo = idx == 9
+                kind = "voice" if is_voice else ("photo" if is_photo else "note")
+                media_key = voice_media_key if is_voice else (photo_media_key if is_photo else None)
                 sess.add(
                     RecordRow(
                         id=rid,
                         user_id=user_a,
                         person_id=person_id,
-                        kind="voice" if is_voice else "note",
+                        kind=kind,
                         title_enc=db_container.cipher.encrypt_str(
                             dek_a,
                             f"手札标题-{idx:02d}",
@@ -831,15 +933,36 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
                             column="snippet_enc",
                             row_id=rid,
                         ),
-                        media_object_key=voice_media_key if is_voice else None,
+                        media_object_key=media_key,
                         audio_duration_ms=18_000 if is_voice else None,
                         stamp_code="KAMAKURA · 04.17" if is_voice else None,
                         happened_on=date(2026, 4, 17),
+                        review_state="held" if is_held else "normal",
                         deleted_at=base_ts if is_deleted else None,
                         created_at=base_ts + timedelta(minutes=idx),
                         updated_at=base_ts + timedelta(minutes=idx),
                     )
                 )
+
+            sess.add(
+                ReminderRow(
+                    id=rem_id,
+                    user_id=user_a,
+                    person_id=person_id,
+                    title_enc=db_container.cipher.encrypt_str(
+                        dek_a,
+                        "恋爱纪念日提醒",
+                        user_id=user_a,
+                        table="reminders",
+                        column="title_enc",
+                        row_id=rem_id,
+                    ),
+                    rule="once",
+                    once_date=date(2026, 12, 25),
+                    next_fire_at=base_ts + timedelta(days=30),
+                    status="active",
+                )
+            )
 
             # 2 open inbox items + 1 resolved inbox item -> inboxCount == 2
             for idx, st in enumerate(("open", "open", "resolved")):
@@ -862,7 +985,7 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
                     )
                 )
 
-        # Verify GET /v1/bootstrap returns exact V10 PEOPLE_DB structure & top-10 non-deleted materials
+        # Verify GET /v1/bootstrap returns V10 gleb-app.mjs fields, signed URLs, & excludes held/deleted records
         boot = await client.get("/v1/bootstrap", headers=_auth_headers(token_a))
         assert boot.status_code == 200
         bdata = boot.json()
@@ -874,19 +997,49 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         assert p_entry["nameCn"] == "沈清秋"
         assert p_entry["cupidTitle"] == "沈清秋的丘比特"
         assert p_entry["hasPhoto"] is True
-        assert p_entry["avatarUrl"] == f"/v1/persons/{person_id}/photos/avatar"
+        assert p_entry["avatarUrl"].startswith(
+            f"/v1/persons/{person_id}/photos/avatar?uid={user_a}&exp="
+        )
+        assert p_entry["avatar"] == p_entry["avatarUrl"]
+        assert "mainPhoto" in p_entry and p_entry["mainPhoto"] is None
+        assert "subPhoto" in p_entry and p_entry["subPhoto"] is None
+        assert p_entry["sealBg"] == p_entry["visualTokens"]["sealBg"]
+        assert p_entry["sealColor"] == p_entry["visualTokens"]["sealColor"]
+        assert p_entry["tapeColor"] == p_entry["visualTokens"]["tapeColor"]
+        assert p_entry["tabColor"] == p_entry["visualTokens"]["tabColor"]
+        assert all(bool(p_entry[k]) for k in ("sealBg", "sealColor", "tapeColor", "tabColor"))
+
         mats = p_entry["materials"]
         assert len(mats) == 10
-        # Newest non-deleted is idx=10 (idx=11 was soft-deleted!)
+        # idx=12 was soft-deleted and idx=11 was review_state='held', so newest visible is idx=10!
+        assert all(m["title"] not in ("手札标题-11", "手札标题-12") for m in mats)
         assert mats[0]["title"] == "手札标题-10"
         assert mats[0]["type"] == "voice"
         assert mats[0]["dur"] == "0:18"
         assert mats[0]["stampCode"] == "KAMAKURA · 04.17"
         assert mats[0]["happenedOn"] == "2026-04-17"
-        assert mats[0]["mediaUrl"] is not None
+        assert mats[0]["mediaUrl"].startswith(
+            f"/v1/materials/{mats[0]['id']}/media?uid={user_a}&exp="
+        )
+        assert "thumb" in mats[0] and mats[0]["thumb"] is None
+
+        # idx=9 is kind='photo', so thumb must equal signed mediaUrl!
+        assert mats[1]["title"] == "手札标题-09"
+        assert mats[1]["type"] == "photo"
+        assert mats[1]["mediaUrl"].startswith(
+            f"/v1/materials/{mats[1]['id']}/media?uid={user_a}&exp="
+        )
+        assert mats[1]["thumb"] == mats[1]["mediaUrl"]
         assert mats[-1]["title"] == "手札标题-01"
 
-        # DELETE /v1/persons/{id} cascades DB rows AND purges all encrypted media blobs!
+        # DELETE /v1/persons/{id} requires Idempotency-Key -> 400 when omitted
+        del_no_idem = await client.delete(
+            f"/v1/persons/{person_id}",
+            headers=_auth_headers(token_a),
+        )
+        assert del_no_idem.status_code == 400
+
+        # DELETE /v1/persons/{id} performs 30-day soft-delete (defers physical blob purge to worker)
         deleted = await client.delete(
             f"/v1/persons/{person_id}",
             headers=_auth_headers(token_a, idem_key="del-person-a"),
@@ -895,10 +1048,36 @@ async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade
         assert (
             await client.get(f"/v1/persons/{person_id}", headers=_auth_headers(token_a))
         ).status_code == 404
+        assert (await client.get(signed_avatar_url)).status_code == 404
+        boot_after_del = (await client.get("/v1/bootstrap", headers=_auth_headers(token_a))).json()
+        assert str(person_id) not in boot_after_del["people"]
+        assert str(person_id) not in boot_after_del["coreIds"]
 
+        async with db_container.db.user_session(scope_a) as sess:
+            p_row = await sess.scalar(select(PersonRow).where(PersonRow.id == person_id))
+            assert p_row is not None
+            assert p_row.deleted_at is not None
+
+            rec_rows = (
+                await sess.scalars(select(RecordRow).where(RecordRow.person_id == person_id))
+            ).all()
+            assert len(rec_rows) == 13
+            assert all(r.deleted_at is not None for r in rec_rows)
+
+            rem_row = await sess.scalar(select(ReminderRow).where(ReminderRow.id == rem_id))
+            assert rem_row is not None
+            assert rem_row.status == "cancelled"
+            assert rem_row.next_fire_at is None
+
+            inbox_rows = (
+                await sess.scalars(select(InboxItemRow).where(InboxItemRow.person_id == person_id))
+            ).all()
+            assert all(it.status == "resolved" for it in inbox_rows)
+
+        # Encrypted blobs remain on disk pending the 30-day purge_soft_deleted worker job
         remaining_blobs = [
             p
             for p in db_container.settings.blob_storage_dir.rglob("*")
             if p.is_file() and not p.name.endswith(".ct")
         ]
-        assert remaining_blobs == []
+        assert len(remaining_blobs) == 3

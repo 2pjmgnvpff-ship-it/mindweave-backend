@@ -342,23 +342,11 @@ class DataRightsService:
     async def download_export(
         self,
         *,
+        scope: UserScope,
         export_id: UUID,
         token: str,
-        authenticated_scope: UserScope | None = None,
         client_ip: str | None = None,
     ) -> tuple[bytes, str]:
-        if authenticated_scope is not None:
-            scope = authenticated_scope
-        else:
-            async with self._container.db.system_session() as sys_sess:
-                owner_id = await self._repo.resolve_export_owner_via_system(
-                    sys_sess,
-                    export_id=export_id,
-                )
-            if owner_id is None:
-                raise NotFoundError("Export job not found")
-            scope = UserScope(user_id=owner_id)
-
         now = self._container.clock.now()
         async with self._container.db.user_session(scope) as user_sess:
             row = await self._repo.get_export_job(

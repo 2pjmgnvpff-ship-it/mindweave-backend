@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.ids import new_id
@@ -90,6 +90,55 @@ class IdentitySystemRepository:
         session.add(identity_row)
         await session.flush()
         return user_row, identity_row
+
+    async def acquire_email_otp_advisory_lock(
+        self,
+        session: AsyncSession,
+        *,
+        email_hmac: bytes,
+    ) -> None:
+        """Acquire a transaction-scoped advisory lock keyed on email_hmac[:8] to serialize OTP issuance."""
+        lock_key = int.from_bytes(email_hmac[:8], "big", signed=True)
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": lock_key},
+        )
+
+    async def count_recent_otp_challenges(
+        self,
+        session: AsyncSession,
+        *,
+        email_hmac: bytes,
+        window_start: datetime,
+    ) -> int:
+        """Count all OTP challenges issued in the rate-limit window regardless of consumed_at."""
+        stmt = select(func.count(EmailOtpChallengeRow.id)).where(
+            EmailOtpChallengeRow.email_hmac == email_hmac,
+            EmailOtpChallengeRow.created_at >= window_start,
+        )
+        count = await session.scalar(stmt)
+        return int(count or 0)
+
+    async def invalidate_unconsumed_otp_challenges(
+        self,
+        session: AsyncSession,
+        *,
+        email_hmac: bytes,
+        purpose: OtpPurpose,
+        now: datetime,
+    ) -> int:
+        """Mark all prior unconsumed challenges for (email_hmac, purpose) as consumed before re-issuing."""
+        result = await session.execute(
+            update(EmailOtpChallengeRow)
+            .where(
+                EmailOtpChallengeRow.email_hmac == email_hmac,
+                EmailOtpChallengeRow.purpose == purpose.value,
+                EmailOtpChallengeRow.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
+        await session.flush()
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
     async def create_otp_challenge(
         self,

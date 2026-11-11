@@ -33,6 +33,7 @@ from mindweave.modules.memory.domain.bitemporal import (
 )
 from mindweave.modules.memory.infra.reminders_helper import cancel_reminders_for_facts
 from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
     FactStatus,
     FactType,
     InboxItemKind,
@@ -82,6 +83,7 @@ async def require_person_row(
             PersonRow.id == person_id,
             PersonRow.user_id == scope.user_id,
             PersonRow.deleted_at.is_(None),
+            PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
         )
     )
     if row is None:
@@ -205,6 +207,7 @@ async def next_rank_for_tier(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.tier == tier.value,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.rank.asc())
         )
@@ -256,7 +259,7 @@ async def create_person_with_primary_alias(
     await session.flush()
 
     norm = normalize_alias_for_index(cleaned_name)
-    if norm and slug != "__unassigned__":
+    if norm and slug != UNASSIGNED_PERSON_SLUG:
         alias_id = new_id()
         alias_hmac = cipher.compute_blind_index(
             dek,

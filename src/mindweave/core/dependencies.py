@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -127,6 +127,38 @@ async def get_current_user_scope(
         if status != "active":
             raise UnauthorizedError("Account is inactive or has been deleted")
     return UserScope(user_id=claims.user_id)
+
+
+async def get_media_user_scope(
+    request: Request,
+    container: AppContainer = Depends(get_container),
+    creds: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+    uid: str | None = Query(default=None),
+    exp: int | None = Query(default=None),
+    sig: str | None = Query(default=None),
+) -> UserScope:
+    """Authenticate media reads via Bearer JWT OR short-lived HMAC-signed URL (`uid`, `exp`, `sig`)."""
+    if creds is not None and creds.scheme.lower() == "bearer" and creds.credentials:
+        return await get_current_user_scope(container=container, creds=creds)
+    if uid is not None and exp is not None and sig is not None:
+        user_id = container.tokens.verify_media_signature(
+            path=request.url.path,
+            uid=uid,
+            exp=exp,
+            sig=sig,
+            now=container.clock.now(),
+        )
+        async with container.db.system_session() as sys_sess:
+            status = await sys_sess.scalar(
+                select(UserRow.status).where(
+                    UserRow.id == user_id,
+                    UserRow.deleted_at.is_(None),
+                )
+            )
+            if status != "active":
+                raise UnauthorizedError("Account is inactive or has been deleted")
+        return UserScope(user_id=user_id)
+    raise UnauthorizedError("Missing Bearer authentication token or signed media ticket")
 
 
 async def require_step_up_reauth(

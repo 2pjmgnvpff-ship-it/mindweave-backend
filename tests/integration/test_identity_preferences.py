@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 from collections.abc import AsyncIterator
 from uuid import UUID
@@ -299,6 +300,56 @@ async def test_email_otp_login_lockout_expiry_ratelimit_and_dev_otp_hiding(
     assert rate_limited.status_code == 429
     assert rate_limited.json()["code"] == "rate_limited"
 
+    # 5. Re-issuing OTP invalidates older unconsumed OTPs (RT-11) & advisory-locked concurrency
+    db_container.settings.expose_dev_otp_in_response = True
+    r1 = await api_client.post(
+        "/v1/auth/email/otp:request",
+        json={"email": "reissue@example.com", "purpose": "login"},
+    )
+    r2 = await api_client.post(
+        "/v1/auth/email/otp:request",
+        json={"email": "reissue@example.com", "purpose": "login"},
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+
+    # OTP #1 MUST now fail with 401 Unauthorized because OTP #2 invalidated it
+    v1 = await api_client.post(
+        "/v1/auth/email/otp:verify",
+        json={
+            "challengeId": r1.json()["challengeId"],
+            "email": "reissue@example.com",
+            "code": r1.json()["devOtpCode"],
+        },
+    )
+    assert v1.status_code == 401
+    assert v1.json()["code"] == "otp_already_consumed"
+
+    # OTP #2 succeeds!
+    v2 = await api_client.post(
+        "/v1/auth/email/otp:verify",
+        json={
+            "challengeId": r2.json()["challengeId"],
+            "email": "reissue@example.com",
+            "code": r2.json()["devOtpCode"],
+        },
+    )
+    assert v2.status_code == 200
+
+    # Concurrent burst of 8 OTP requests for the same email is serialized by pg_advisory_xact_lock:
+    # exactly 5 succeed (200) and 3 are rate-limited (429)!
+    burst_resps = await asyncio.gather(
+        *[
+            api_client.post(
+                "/v1/auth/email/otp:request",
+                json={"email": "concurrent-lock@example.com", "purpose": "login"},
+            )
+            for _ in range(8)
+        ]
+    )
+    status_codes = [resp.status_code for resp in burst_resps]
+    assert status_codes.count(200) == 5
+    assert status_codes.count(429) == 3
+
 
 @pytest.mark.asyncio
 async def test_step_up_reauth_email_and_apple_end_to_end(
@@ -586,6 +637,7 @@ async def test_pipl_consents_idempotency_revocation_and_rls_isolation(
 async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wallpaper(
     api_client: httpx.AsyncClient,
     db_container: AppContainer,
+    manual_clock: ManualClock,
 ) -> None:
     u1 = (
         await api_client.post("/v1/auth/apple", json={"identityToken": "dev_apple:prefs-u1"})
@@ -606,6 +658,7 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
         "cupidLayout": "a",
         "wallpaperPreset": "warm_paper",
         "hasCustomWallpaper": False,
+        "wallpaperUrl": None,
         "wallpaperBlur": 12,
         "wallpaperVignette": 20,
         "appLockEnabled": False,
@@ -650,6 +703,7 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
     assert patched.json()["preferredEdition"] == "hobonichi"
     assert patched.json()["cupidLayout"] == "c"
     assert patched.json()["timezone"] == "Asia/Tokyo"
+    assert patched.json()["wallpaperUrl"] is None
 
     # Idempotent replay with same Idempotency-Key + If-Match: 1 returns cached 200!
     patch_replay = await api_client.patch(
@@ -669,14 +723,24 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
     assert stale_patch.status_code == 412
     assert stale_patch.json()["code"] == "version_mismatch"
 
-    # 4. Wallpaper lifecycle: initially 404
+    # 4. Wallpaper lifecycle: initially 404; missing Idempotency-Key on POST/DELETE -> 400 (P1-7)
     no_wp = await api_client.get("/v1/me/wallpaper", headers=h1)
     assert no_wp.status_code == 404
+
+    missing_idem_post = await api_client.post(
+        "/v1/me/wallpaper",
+        headers=h1,
+        files={"file": ("photo.jpg", _make_exif_jpeg(), "image/jpeg")},
+    )
+    assert missing_idem_post.status_code == 400
+
+    missing_idem_del = await api_client.delete("/v1/me/wallpaper", headers=h1)
+    assert missing_idem_del.status_code == 400
 
     # Reject non-image spoofed upload
     spoof_wp = await api_client.post(
         "/v1/me/wallpaper",
-        headers=h1,
+        headers={**h1, "Idempotency-Key": "wp-spoof"},
         files={"file": ("fake.jpg", b"not-a-real-jpeg", "image/jpeg")},
     )
     assert spoof_wp.status_code == 422
@@ -687,7 +751,7 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
     try:
         oversized_wp = await api_client.post(
             "/v1/me/wallpaper",
-            headers=h1,
+            headers={**h1, "Idempotency-Key": "wp-oversized"},
             files={"file": ("big.jpg", _make_exif_jpeg(), "image/jpeg")},
         )
         assert oversized_wp.status_code == 413
@@ -705,6 +769,27 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
     assert up1.status_code == 200
     assert up1.json()["hasCustomWallpaper"] is True
     assert up1.json()["version"] == 3
+    signed_wp_url = up1.json()["wallpaperUrl"]
+    assert isinstance(signed_wp_url, str)
+    assert signed_wp_url.startswith(f"/v1/me/wallpaper?uid={user1_id}&exp=")
+    assert "&sig=" in signed_wp_url
+
+    # Idempotent replay of POST /v1/me/wallpaper returns cached version=3; different bytes -> 409!
+    up1_replay = await api_client.post(
+        "/v1/me/wallpaper",
+        headers={**h1, "Idempotency-Key": "wp-up-1"},
+        files={"file": ("photo.jpg", jpeg_with_exif, "application/octet-stream")},
+    )
+    assert up1_replay.status_code == 200
+    assert up1_replay.json()["version"] == 3
+
+    up1_conflict = await api_client.post(
+        "/v1/me/wallpaper",
+        headers={**h1, "Idempotency-Key": "wp-up-1"},
+        files={"file": ("other.png", _make_png(), "image/png")},
+    )
+    assert up1_conflict.status_code == 409
+    assert up1_conflict.json()["code"] == "idempotency_conflict"
 
     # Inspect raw disk storage: must be encrypted under {user_id}/wallpaper/{uuid} with zero plaintext!
     scope1 = UserScope(user1_id)
@@ -721,7 +806,7 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
     assert not encrypted_on_disk.startswith(b"\xff\xd8\xff")
     assert b"iPhonePrivateMake" not in encrypted_on_disk
 
-    # Stream decrypted wallpaper via GET /v1/me/wallpaper -> valid JPEG, ZERO EXIF!
+    # Stream decrypted wallpaper via Bearer header -> valid JPEG, ZERO EXIF!
     stream1 = await api_client.get("/v1/me/wallpaper", headers=h1)
     assert stream1.status_code == 200
     assert stream1.headers["content-type"] == "image/jpeg"
@@ -730,14 +815,40 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
         assert decoded1.format == "JPEG"
         assert len(decoded1.getexif()) == 0
 
+    # [P2-1] Browser `<img src>` streaming via signed media URL WITHOUT Authorization header!
+    browser_img = await api_client.get(signed_wp_url)
+    assert browser_img.status_code == 200
+    assert browser_img.headers["content-type"] == "image/jpeg"
+    assert browser_img.content == stream1.content
+
+    # Unauthenticated without query ticket -> 401; tampered signature -> 401
+    unauth_wp = await api_client.get("/v1/me/wallpaper")
+    assert unauth_wp.status_code == 401
+
+    tampered_wp = await api_client.get(f"{signed_wp_url[:-4]}0000")
+    assert tampered_wp.status_code == 401
+
+    # Expired signed URL -> 401
+    manual_clock.advance(seconds=901)
+    expired_wp = await api_client.get(signed_wp_url)
+    assert expired_wp.status_code == 401
+    refreshed_u1 = (
+        await api_client.post("/v1/auth/refresh", json={"refreshToken": u1["refreshToken"]})
+    ).json()
+    h1 = {"Authorization": f"Bearer {refreshed_u1['accessToken']}"}
+
     # Cross-tenant isolation: User 2 has no custom wallpaper (404)
+    refreshed_u2 = (
+        await api_client.post("/v1/auth/refresh", json={"refreshToken": u2["refreshToken"]})
+    ).json()
+    h2 = {"Authorization": f"Bearer {refreshed_u2['accessToken']}"}
     u2_wp = await api_client.get("/v1/me/wallpaper", headers=h2)
     assert u2_wp.status_code == 404
 
     # Replace wallpaper with PNG -> old JPEG blob on disk MUST be deleted!
     up2 = await api_client.post(
         "/v1/me/wallpaper",
-        headers=h1,
+        headers={**h1, "Idempotency-Key": "wp-up-2"},
         files={"file": ("next.png", _make_png(), "image/png")},
     )
     assert up2.status_code == 200
@@ -753,13 +864,27 @@ async def test_preferences_patch_if_match_idempotency_and_encrypted_exif_free_wa
         second_disk_path = db_container.settings.blob_storage_dir / pref_row2.wallpaper_object_key
         assert second_disk_path.exists()
 
-    # DELETE /v1/me/wallpaper -> removes disk blob and clears wallpaper_object_key
-    del_resp = await api_client.delete("/v1/me/wallpaper", headers=h1)
+    # DELETE /v1/me/wallpaper with Idempotency-Key -> removes disk blob and clears wallpaper_object_key
+    del_resp = await api_client.delete(
+        "/v1/me/wallpaper",
+        headers={**h1, "Idempotency-Key": "wp-del-1"},
+    )
     assert del_resp.status_code == 204
     assert not second_disk_path.exists()
 
     after_del_prefs = await api_client.get("/v1/me/preferences", headers=h1)
     assert after_del_prefs.json()["hasCustomWallpaper"] is False
+    assert after_del_prefs.json()["wallpaperUrl"] is None
+    version_after_del = after_del_prefs.json()["version"]
+
+    # Idempotent replay of DELETE /v1/me/wallpaper returns 204 without mutating version again
+    del_replay = await api_client.delete(
+        "/v1/me/wallpaper",
+        headers={**h1, "Idempotency-Key": "wp-del-1"},
+    )
+    assert del_replay.status_code == 204
+    after_replay_prefs = await api_client.get("/v1/me/preferences", headers=h1)
+    assert after_replay_prefs.json()["version"] == version_after_del
 
     after_del_wp = await api_client.get("/v1/me/wallpaper", headers=h1)
     assert after_del_wp.status_code == 404

@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+import mindweave.modules.capture as _capture_pkg  # noqa: F401
 from mindweave.ai.ports import ModelGatewayPort
 from mindweave.ai.schemas.contracts import ExtractRecordInput, KnownPersonRef
 from mindweave.core.clock import to_user_local
@@ -29,7 +30,13 @@ from mindweave.core.orm import (
 )
 from mindweave.modules.companion.domain.output_guard import sanitize_text
 from mindweave.modules.companion.domain.tier_policy import decide_chat_writeback_gate
+from mindweave.modules.memory.infra.reminders_helper import upsert_reminder_for_fact
+from mindweave.modules.memory.infra.repository import (
+    apply_bitemporal_supersession_for_fact,
+    check_polarity_flip_for_person,
+)
 from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
     CaptureSource,
     CaptureStatus,
     CreatedBy,
@@ -42,6 +49,7 @@ from mindweave.shared.enums import (
     Polarity,
     RecordKind,
     RecordReviewState,
+    ReminderStatus,
     RouteMode,
     SafetyCategory,
     SourceSpeaker,
@@ -158,6 +166,7 @@ async def writeback_facts_from_chat_message(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.id == scope.person_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
         )
         if person_row is None:
@@ -219,13 +228,14 @@ async def writeback_facts_from_chat_message(
         else:
             capture_row = existing_capture
 
-        # Load user's active/provisional persons + aliases for entity resolution
+        # Load user's active/provisional persons (excluding unassigned holding bucket) + aliases
         all_persons = list(
             (
                 await session.scalars(
                     select(PersonRow).where(
                         PersonRow.user_id == scope.user_id,
                         PersonRow.deleted_at.is_(None),
+                        PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
                     )
                 )
             ).all()
@@ -250,6 +260,7 @@ async def writeback_facts_from_chat_message(
             aliases_by_person[arow.person_id].append(alias_str)
 
         persons_by_id: dict[UUID, PersonRow] = {p.id: p for p in all_persons}
+        person_names_by_id: dict[UUID, str] = {}
         name_to_person_ids: dict[str, list[UUID]] = defaultdict(list)
         known_refs: list[KnownPersonRef] = []
 
@@ -262,6 +273,7 @@ async def writeback_facts_from_chat_message(
                 column="display_name_enc",
                 row_id=prow.id,
             )
+            person_names_by_id[prow.id] = pname
             prole = (
                 container.cipher.decrypt_str(
                     dek,
@@ -316,7 +328,10 @@ async def writeback_facts_from_chat_message(
             # Invariant I2 graceful degradation: never lose user input on extraction failure
             rec_id = new_id()
             fallback_title = "聊天随手备忘"
-            snippet_str = " ".join(raw_user_text.split())[:80]
+            snippet_str = (
+                sanitize_text(" ".join(raw_user_text.split())[:80], allow_empty=True).cleaned_text
+                or fallback_title
+            )
             rec_row = RecordRow(
                 id=rec_id,
                 user_id=scope.user_id,
@@ -387,6 +402,7 @@ async def writeback_facts_from_chat_message(
             session.add(frow)
 
             iid = new_id()
+            scoped_pname = person_names_by_id.get(scope.person_id, "")
             irow = InboxItemRow(
                 id=iid,
                 user_id=scope.user_id,
@@ -399,7 +415,14 @@ async def writeback_facts_from_chat_message(
                 candidate_person_ids=[scope.person_id],
                 payload_enc=container.cipher.encrypt_json(
                     dek,
-                    {"reason": PendingReason.EXTRACTION_FAILED.value, "summary": snippet_str},
+                    {
+                        "summary": snippet_str,
+                        "title": fallback_title,
+                        "content": snippet_str,
+                        "factType": FactType.NOTE.value,
+                        "personName": scoped_pname,
+                        "pendingReason": PendingReason.EXTRACTION_FAILED.value,
+                    },
                     user_id=scope.user_id,
                     table="inbox_items",
                     column="payload_enc",
@@ -547,9 +570,30 @@ async def writeback_facts_from_chat_message(
                 records_by_person[target_pid] = rec_row_existing
                 record_ids.append(rec_id)
 
+            clean_fact_content = (
+                sanitize_text(item.content, allow_empty=True).cleaned_text or item.content.strip()
+            )
+            raw_fact_title = item.title.strip() or clean_fact_content[:24] or "手帐便签"
+            clean_fact_title = (
+                sanitize_text(raw_fact_title, allow_empty=True).cleaned_text or "手帐便签"
+            )
+
             candidate_count = (
                 2 if extract_out.needs_disambiguation and len(cands) == 1 else len(cands)
             )
+            is_polarity_flip = False
+            if len(cands) == 1:
+                is_polarity_flip = await check_polarity_flip_for_person(
+                    session,
+                    scope=scope.user_scope,
+                    person_id=target_pid,
+                    fact_type=item.fact_type,
+                    polarity=item.polarity,
+                    content=clean_fact_content,
+                    dek=dek,
+                    cipher=container.cipher,
+                )
+
             fact_status, pending_reason = decide_chat_writeback_gate(
                 fact_type=item.fact_type,
                 confidence=item.confidence,
@@ -560,13 +604,11 @@ async def writeback_facts_from_chat_message(
                 tier=target_tier,
                 person_state=target_state,
                 source_speaker=item.source_speaker,
+                polarity_flipped=is_polarity_flip,
                 extraction_ok=True,
                 confidence_threshold=container.settings.gate_confidence_threshold,
             )
 
-            clean_fact_content = (
-                sanitize_text(item.content, allow_empty=True).cleaned_text or item.content.strip()
-            )
             fid = new_id()
             frow = FactRow(
                 id=fid,
@@ -606,8 +648,45 @@ async def writeback_facts_from_chat_message(
 
             if fact_status is FactStatus.CONFIRMED:
                 confirmed_fact_ids.append(fid)
+                await apply_bitemporal_supersession_for_fact(
+                    session,
+                    scope=scope.user_scope,
+                    dek=dek,
+                    cipher=container.cipher,
+                    new_fact=frow,
+                    new_fact_content=clean_fact_content,
+                    now=now,
+                )
+                if item.fact_type in (FactType.DATE, FactType.PROMISE):
+                    await upsert_reminder_for_fact(
+                        session,
+                        scope=scope.user_scope,
+                        dek=dek,
+                        cipher=container.cipher,
+                        fact=frow,
+                        fact_content=clean_fact_content,
+                        desired_status=ReminderStatus.ACTIVE,
+                        now=now,
+                        tz_name=tz_name,
+                    )
             else:
                 pending_fact_ids.append(fid)
+                if (
+                    item.fact_type in (FactType.DATE, FactType.PROMISE)
+                    and frow.person_id is not None
+                ):
+                    await upsert_reminder_for_fact(
+                        session,
+                        scope=scope.user_scope,
+                        dek=dek,
+                        cipher=container.cipher,
+                        fact=frow,
+                        fact_content=clean_fact_content,
+                        desired_status=ReminderStatus.PROPOSED,
+                        now=now,
+                        tz_name=tz_name,
+                    )
+
                 if pending_reason is PendingReason.VENTING:
                     ikind = InboxItemKind.VENTING_HOLD
                     expires_at = now + timedelta(hours=container.settings.venting_hold_expiry_hours)
@@ -620,6 +699,12 @@ async def writeback_facts_from_chat_message(
                 else:
                     ikind = InboxItemKind.FACT_CONFIRM
                     expires_at = None
+
+                if clean_fact_title and clean_fact_title not in clean_fact_content:
+                    summary_text = f"{clean_fact_title}：{clean_fact_content}"
+                else:
+                    summary_text = clean_fact_content or clean_fact_title or "待确认手帐要点"
+                target_person_name = person_names_by_id.get(target_pid, "")
 
                 iid = new_id()
                 irow = InboxItemRow(
@@ -635,8 +720,12 @@ async def writeback_facts_from_chat_message(
                     payload_enc=container.cipher.encrypt_json(
                         dek,
                         {
-                            "factType": item.fact_type.value,
+                            "summary": summary_text,
+                            "title": clean_fact_title,
                             "content": clean_fact_content,
+                            "factType": item.fact_type.value,
+                            "personName": target_person_name,
+                            "mention": item.person_mention.strip() or target_person_name,
                             "pendingReason": (
                                 pending_reason.value if pending_reason is not None else "review"
                             ),
@@ -688,6 +777,7 @@ async def summarize_chat_thread(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.id == scope.person_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
         )
         if person_row is None:

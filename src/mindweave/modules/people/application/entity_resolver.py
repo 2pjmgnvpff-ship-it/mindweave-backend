@@ -39,7 +39,7 @@ from mindweave.modules.people.domain.tier_transition import (
     partition_person_ids,
 )
 from mindweave.modules.people.infra.repository import PeopleRepository
-from mindweave.shared.enums import PersonState, RouteMode, Tier
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, PersonState, RouteMode, Tier
 from mindweave.shared.scopes import UserScope
 
 _GENERIC_PRONOUNS: frozenset[str] = frozenset(
@@ -63,6 +63,8 @@ _GENERIC_PRONOUNS: frozenset[str] = frozenset(
         "有人",
         "大家",
         "未知",
+        "待归档",
+        UNASSIGNED_PERSON_SLUG,
         "unknown",
         "none",
         "null",
@@ -186,6 +188,7 @@ class EntityResolver:
             PersonRow.deleted_at.is_(None),
             PersonRow.archived_at.is_(None),
             PersonRow.state != PersonState.ARCHIVED.value,
+            PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
         )
         rows = list((await session.scalars(stmt)).all())
         if not rows:
@@ -296,6 +299,7 @@ class EntityResolver:
             PersonRow.user_id == scope.user_id,
             PersonRow.id.in_(person_ids),
             PersonRow.deleted_at.is_(None),
+            PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
         )
         rows = (await session.execute(stmt)).all()
         return {pid: PersonState(st) for pid, st in rows}

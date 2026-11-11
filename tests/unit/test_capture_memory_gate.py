@@ -31,6 +31,7 @@ from mindweave.modules.capture.domain.media_sniffer import (
 )
 from mindweave.modules.capture.domain.routing import (
     KnownPersonProfile,
+    is_non_person_stopword_mention,
     resolve_mention_for_fact,
 )
 from mindweave.modules.capture.domain.screenshot_rules import (
@@ -43,6 +44,7 @@ from mindweave.modules.memory.domain.bitemporal import (
     ExistingFactSnapshot,
     NewFactCandidate,
     detect_polarity_flip,
+    extract_topic_tokens,
     find_facts_to_supersede,
 )
 from mindweave.modules.memory.domain.inbox_policy import (
@@ -134,6 +136,7 @@ def test_gate_policy_condition_3_ambiguous_person(candidate_count: int) -> None:
     assert dec.is_pending
     assert dec.pending_reason is PendingReason.AMBIGUOUS_PERSON
     assert dec.inbox_kind is InboxItemKind.PERSON_DISAMBIGUATION
+    assert dec.record_review_state is RecordReviewState.HELD
 
 
 def test_gate_policy_condition_4_multi_person_entangled_vs_clean_clauses() -> None:
@@ -606,3 +609,115 @@ def test_inbox_resolution_policy_validation() -> None:
                 target_person_id=p1,
             )
         )
+
+
+@pytest.mark.parametrize(
+    "stopword_mention",
+    [
+        "今天",
+        "明天",
+        "昨天",
+        "周末",
+        "周末记",
+        "下周",
+        "上周",
+        "刚才",
+        "他说",
+        "她说",
+        "他严重",
+        "她不能",
+        "它很怕",
+        "有人",
+        "大家",
+        "自己",
+        "我",
+    ],
+)
+def test_routing_non_person_stopwords_never_spawn_provisional_person(
+    stopword_mention: str,
+) -> None:
+    assert is_non_person_stopword_mention(stopword_mention) is True
+    known = [
+        KnownPersonProfile(person_id=new_id(), display_name="林溪", tier=Tier.GOLD),
+        KnownPersonProfile(person_id=new_id(), display_name="妈妈", tier=Tier.SILVER),
+    ]
+    res = resolve_mention_for_fact(
+        mention=stopword_mention,
+        fact_person_id_hint=None,
+        fact_content="对花生过敏",
+        full_transcript=f"{stopword_mention}对花生过敏",
+        route_mode=RouteMode.GLOBAL,
+        scoped_person_id=None,
+        known_people=known,
+    )
+    assert res.is_new_person is False
+    assert res.matched_person_id is None
+
+
+def test_bitemporal_topic_tokens_exclude_sentiment_carriers() -> None:
+    user_id = new_id()
+    person_id = new_id()
+
+    # Case 1: "超级喜欢吃草莓" vs "现在不喜欢吃香菜" MUST NOT collide on "喜欢"/"欢吃"/"吃"!
+    tokens_strawberry = extract_topic_tokens("超级喜欢吃草莓")
+    tokens_cilantro_neg = extract_topic_tokens("现在不喜欢吃香菜")
+    assert "草莓" in tokens_strawberry
+    assert "香菜" in tokens_cilantro_neg
+    assert tokens_strawberry.isdisjoint(tokens_cilantro_neg)
+
+    existing_strawberry = ExistingFactSnapshot(
+        id=new_id(),
+        user_id=user_id,
+        person_id=person_id,
+        fact_type=FactType.PREFERENCE,
+        polarity=Polarity.POSITIVE,
+        content="超级喜欢吃草莓",
+    )
+    cand_cilantro_dislike = NewFactCandidate(
+        user_id=user_id,
+        person_id=person_id,
+        fact_type=FactType.PREFERENCE,
+        polarity=Polarity.NEGATIVE,
+        content="现在不喜欢吃香菜",
+        new_fact_id=new_id(),
+    )
+    assert detect_polarity_flip([existing_strawberry], cand_cilantro_dislike) is False
+    assert (
+        find_facts_to_supersede(
+            [existing_strawberry],
+            cand_cilantro_dislike,
+            now=datetime(2026, 11, 12, 16, 0, 0, tzinfo=UTC),
+        )
+        == []
+    )
+
+    # Case 2: "喜欢吃香菜" vs "对香菜严重过敏不能吃香菜" DO share "香菜" and trigger polarity flip!
+    tokens_cilantro_pos = extract_topic_tokens("喜欢吃香菜")
+    tokens_cilantro_allergy = extract_topic_tokens("对香菜严重过敏不能吃香菜")
+    assert "香菜" in tokens_cilantro_pos
+    assert "香菜" in tokens_cilantro_allergy
+    assert tokens_cilantro_pos & tokens_cilantro_allergy == {"香菜"}
+
+    existing_cilantro = ExistingFactSnapshot(
+        id=new_id(),
+        user_id=user_id,
+        person_id=person_id,
+        fact_type=FactType.PREFERENCE,
+        polarity=Polarity.POSITIVE,
+        content="喜欢吃香菜",
+    )
+    cand_cilantro_allergy = NewFactCandidate(
+        user_id=user_id,
+        person_id=person_id,
+        fact_type=FactType.TABOO,
+        polarity=Polarity.NEGATIVE,
+        content="对香菜严重过敏不能吃香菜",
+        new_fact_id=new_id(),
+    )
+    assert detect_polarity_flip([existing_cilantro], cand_cilantro_allergy) is True
+    patches = find_facts_to_supersede(
+        [existing_cilantro],
+        cand_cilantro_allergy,
+        now=datetime(2026, 11, 12, 16, 0, 0, tzinfo=UTC),
+    )
+    assert [p.superseded_fact_id for p in patches] == [existing_cilantro.id]

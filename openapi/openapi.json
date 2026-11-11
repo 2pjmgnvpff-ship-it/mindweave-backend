@@ -210,6 +210,17 @@
             ],
             "title": "Stampcode"
           },
+          "thumb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -232,6 +243,17 @@
         "additionalProperties": false,
         "description": "V10 `PEOPLE_DB[id]` entry hydrated with encrypted profile & top-10 materials.",
         "properties": {
+          "avatar": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar"
+          },
           "avatarUrl": {
             "anyOf": [
               {
@@ -258,6 +280,17 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "mainPhoto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mainphoto"
           },
           "mainPhotoUrl": {
             "anyOf": [
@@ -289,12 +322,31 @@
             "title": "Roletag",
             "type": "string"
           },
+          "sealBg": {
+            "title": "Sealbg",
+            "type": "string"
+          },
+          "sealColor": {
+            "title": "Sealcolor",
+            "type": "string"
+          },
           "shortMemo": {
             "title": "Shortmemo",
             "type": "string"
           },
           "state": {
             "$ref": "#/components/schemas/PersonState"
+          },
+          "subPhoto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subphoto"
           },
           "subPhotoUrl": {
             "anyOf": [
@@ -306,6 +358,14 @@
               }
             ],
             "title": "Subphotourl"
+          },
+          "tabColor": {
+            "title": "Tabcolor",
+            "type": "string"
+          },
+          "tapeColor": {
+            "title": "Tapecolor",
+            "type": "string"
           },
           "tier": {
             "$ref": "#/components/schemas/Tier"
@@ -338,6 +398,10 @@
           "state",
           "hasPhoto",
           "shortMemo",
+          "sealBg",
+          "sealColor",
+          "tapeColor",
+          "tabColor",
           "version"
         ],
         "title": "BootstrapPersonDTO",
@@ -3422,6 +3486,17 @@
             "title": "Wallpaperpreset",
             "type": "string"
           },
+          "wallpaperUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wallpaperurl"
+          },
           "wallpaperVignette": {
             "maximum": 85.0,
             "minimum": 0.0,
@@ -5193,6 +5268,22 @@
               "title": "Device Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -5233,6 +5324,22 @@
               "title": "Fact Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -5270,6 +5377,22 @@
             "schema": {
               "title": "Fact Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           },
           {
@@ -5508,6 +5631,22 @@
               "title": "Material Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -5594,6 +5733,22 @@
           },
           {
             "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
             "name": "If-Match",
             "required": false,
             "schema": {
@@ -5663,6 +5818,54 @@
             "schema": {
               "title": "Material Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "uid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exp"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sig"
             }
           }
         ],
@@ -6198,9 +6401,37 @@
     "/v1/me/wallpaper": {
       "delete": {
         "operationId": "delete_my_wallpaper_v1_me_wallpaper_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -6215,6 +6446,56 @@
       },
       "get": {
         "operationId": "get_my_wallpaper_v1_me_wallpaper_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "uid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exp"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sig"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6223,6 +6504,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -6307,9 +6598,31 @@
             "name": "includeArchived",
             "required": false,
             "schema": {
-              "default": false,
-              "title": "Includearchived",
-              "type": "boolean"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Includearchived"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Include Archived"
             }
           },
           {
@@ -6317,9 +6630,31 @@
             "name": "includeProvisional",
             "required": false,
             "schema": {
-              "default": true,
-              "title": "Includeprovisional",
-              "type": "boolean"
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Includeprovisional"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_provisional",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Include Provisional"
             }
           }
         ],
@@ -6807,6 +7142,22 @@
             "schema": {
               "title": "Person Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -7475,6 +7826,54 @@
             "schema": {
               "$ref": "#/components/schemas/PhotoSlot"
             }
+          },
+          {
+            "in": "query",
+            "name": "uid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exp"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sig"
+            }
           }
         ],
         "responses": {
@@ -7770,6 +8169,16 @@
           },
           {
             "in": "query",
+            "name": "includeArchived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Includearchived",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
@@ -7920,6 +8329,22 @@
               ],
               "title": "If-Match"
             }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
           }
         ],
         "responses": {
@@ -7968,22 +8393,6 @@
           },
           {
             "in": "header",
-            "name": "Idempotency-Key",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Idempotency-Key"
-            }
-          },
-          {
-            "in": "header",
             "name": "If-Match",
             "required": false,
             "schema": {
@@ -7996,6 +8405,22 @@
                 }
               ],
               "title": "If-Match"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],

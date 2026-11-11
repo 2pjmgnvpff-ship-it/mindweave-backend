@@ -41,6 +41,7 @@ class BootstrapMaterialPreviewDTO(CamelModel):
     stamp_code: str | None = None
     happened_on: date | None = None
     media_url: str | None = None
+    thumb: str | None = None
 
 
 class BootstrapPersonDTO(CamelModel):
@@ -58,6 +59,13 @@ class BootstrapPersonDTO(CamelModel):
     short_memo: str
     traits: list[str] = Field(default_factory=list)
     visual_tokens: dict[str, Any] = Field(default_factory=dict)
+    seal_bg: str
+    seal_color: str
+    tape_color: str
+    tab_color: str
+    avatar: str | None = None
+    main_photo: str | None = None
+    sub_photo: str | None = None
     avatar_url: str | None = None
     main_photo_url: str | None = None
     sub_photo_url: str | None = None

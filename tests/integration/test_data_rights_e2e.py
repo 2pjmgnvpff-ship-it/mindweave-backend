@@ -33,6 +33,7 @@ from mindweave.core.orm import (
     DeviceRow,
     ExportJobRow,
     FactRow,
+    IdempotencyKeyRow,
     InboxItemRow,
     PersonAliasRow,
     PersonRow,
@@ -53,6 +54,7 @@ from mindweave.modules.data_rights.application.service import (
 from mindweave.modules.data_rights.domain import JOURNAL_AIGC_DISCLOSURE_FOOTER
 from mindweave.modules.telemetry.api.router import router as telemetry_router
 from mindweave.shared.data_rights_registry import data_rights_registry
+from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG
 from mindweave.shared.scopes import UserScope
 
 
@@ -586,6 +588,126 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         voice_bytes=b"WEBM-OPUS-BOB-SECRET-VOICE",
     )
 
+    # Seed an internal UNASSIGNED_PERSON_SLUG placeholder + unassigned record/fact for User A (RT-01)
+    async with db_container.db.user_session(UserScope(user_a)) as sess:
+        dek_a = await db_container.load_user_dek(sess, UserScope(user_a))
+        now_a = db_container.clock.now()
+        unassigned_pid = new_id()
+        unassigned_al_id = new_id()
+        unassigned_rec_id = new_id()
+        unassigned_fact_id = new_id()
+        sess.add(
+            PersonRow(
+                id=unassigned_pid,
+                user_id=user_a,
+                slug=UNASSIGNED_PERSON_SLUG,
+                tier="crystal",
+                rank="zzzz",
+                state="provisional",
+                display_name_enc=db_container.cipher.encrypt_str(
+                    dek_a,
+                    "待归档",
+                    user_id=user_a,
+                    table="persons",
+                    column="display_name_enc",
+                    row_id=unassigned_pid,
+                ),
+                monogram="待",
+                has_photo=False,
+                visual_tokens={},
+                version=1,
+                created_at=now_a,
+                updated_at=now_a,
+            )
+        )
+        await sess.flush()
+        sess.add(
+            PersonAliasRow(
+                id=unassigned_al_id,
+                user_id=user_a,
+                person_id=unassigned_pid,
+                alias_hmac=db_container.cipher.compute_blind_index(
+                    dek_a,
+                    user_id=user_a,
+                    domain="alias",
+                    normalized_value=normalize_alias_for_index("待归档"),
+                ),
+                alias_enc=db_container.cipher.encrypt_str(
+                    dek_a,
+                    "待归档",
+                    user_id=user_a,
+                    table="person_aliases",
+                    column="alias_enc",
+                    row_id=unassigned_al_id,
+                ),
+                kind="name",
+                is_primary=True,
+                created_at=now_a,
+            )
+        )
+        sess.add(
+            RecordRow(
+                id=unassigned_rec_id,
+                user_id=user_a,
+                person_id=unassigned_pid,
+                capture_id=None,
+                kind="note",
+                title_enc=db_container.cipher.encrypt_str(
+                    dek_a,
+                    "深夜未归属随笔",
+                    user_id=user_a,
+                    table="records",
+                    column="title_enc",
+                    row_id=unassigned_rec_id,
+                ),
+                body_enc=db_container.cipher.encrypt_str(
+                    dek_a,
+                    "她随口说不喜欢香菜味",
+                    user_id=user_a,
+                    table="records",
+                    column="body_enc",
+                    row_id=unassigned_rec_id,
+                ),
+                review_state="held",
+                pinned=False,
+                version=1,
+                created_at=now_a,
+                updated_at=now_a,
+            )
+        )
+        await sess.flush()
+        sess.add(
+            FactRow(
+                id=unassigned_fact_id,
+                user_id=user_a,
+                person_id=unassigned_pid,
+                record_id=unassigned_rec_id,
+                capture_id=None,
+                type="taboo",
+                polarity="negative",
+                time_status="current",
+                source_speaker="narrator",
+                content_enc=db_container.cipher.encrypt_str(
+                    dek_a,
+                    "待归属忌口：不喜欢香菜",
+                    user_id=user_a,
+                    table="facts",
+                    column="content_enc",
+                    row_id=unassigned_fact_id,
+                ),
+                is_lunar=False,
+                lunar_is_leap_month=False,
+                status="pending",
+                pending_reason="ambiguous_person",
+                confidence=0.6,
+                created_by="ai",
+                valid_at=now_a,
+                version=1,
+                created_at=now_a,
+                updated_at=now_a,
+            )
+        )
+
     app = _build_test_app(db_container)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         # 1. Step-up re-authentication & Idempotency-Key strictly enforced
@@ -620,7 +742,7 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         )
         assert no_idem_resp.status_code == 400
 
-        # 2. Create export + idempotent replay
+        # 2. Create export + idempotent replay (with zero plaintext downloadToken in idempotency_keys!)
         create_resp = await client.post(
             "/v1/me/exports",
             headers={
@@ -632,9 +754,23 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         assert create_resp.status_code == 201
         export_body = create_resp.json()
         export_id = UUID(export_body["exportId"])
-        download_token = export_body["downloadToken"]
+        initial_download_token = export_body["downloadToken"]
         assert export_body["status"] == "completed"
-        assert isinstance(download_token, str) and len(download_token) >= 32
+        assert isinstance(initial_download_token, str) and len(initial_download_token) >= 32
+
+        # Verify idempotency_keys.response_body NEVER stores plaintext downloadToken or downloadPath (RT-04)
+        async with db_container.db.user_session(UserScope(user_a)) as sess:
+            idem_row = await sess.scalar(
+                select(IdempotencyKeyRow).where(
+                    IdempotencyKeyRow.user_id == user_a,
+                    IdempotencyKeyRow.idem_key == "exp-create-1",
+                )
+            )
+            assert idem_row is not None
+            assert idem_row.response_body is not None
+            assert idem_row.response_body["downloadToken"] is None
+            assert idem_row.response_body["downloadPath"] is None
+            assert initial_download_token not in json.dumps(idem_row.response_body)
 
         replay_resp = await client.post(
             "/v1/me/exports",
@@ -646,8 +782,11 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         )
         assert replay_resp.status_code == 201
         assert replay_resp.json()["exportId"] == str(export_id)
+        download_token = replay_resp.json()["downloadToken"]
+        assert isinstance(download_token, str) and len(download_token) >= 32
+        assert download_token != initial_download_token
 
-        # Verify DB stores ONLY SHA-256 hash of downloadToken, never plaintext, and encrypted ZIP on disk
+        # Verify DB stores ONLY SHA-256 hash of active downloadToken, never plaintext, and encrypted ZIP on disk
         async with db_container.db.user_session(UserScope(user_a)) as sess:
             job_row = await sess.get(ExportJobRow, export_id)
             assert job_row is not None
@@ -673,12 +812,29 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         )
         assert cross_tenant_get.status_code == 404
 
-        # Wrong token rejected with 403
-        bad_tok_resp = await client.get(
+        # Unauthenticated download WITHOUT Bearer JWT is immediately rejected with 401 (RT-04)
+        unauth_dl_resp = await client.get(
             f"/v1/me/exports/{export_id}/download",
-            params={"token": "forged-download-token"},
+            params={"token": download_token},
         )
-        assert bad_tok_resp.status_code == 403
+        assert unauth_dl_resp.status_code == 401
+
+        # Cross-tenant download with User B's JWT + User A's leaked token is isolated by RLS (404)
+        cross_tenant_dl_resp = await client.get(
+            f"/v1/me/exports/{export_id}/download",
+            params={"token": download_token},
+            headers={"Authorization": f"Bearer {access_b}"},
+        )
+        assert cross_tenant_dl_resp.status_code == 404
+
+        # Wrong token and superseded pre-replay token rejected with 403
+        for rejected_token in ("forged-download-token", initial_download_token):
+            bad_tok_resp = await client.get(
+                f"/v1/me/exports/{export_id}/download",
+                params={"token": rejected_token},
+                headers={"Authorization": f"Bearer {access_a}"},
+            )
+            assert bad_tok_resp.status_code == 403
 
         # 3. Valid first download succeeds and returns complete decrypted ZIP
         dl_resp = await client.get(
@@ -713,6 +869,22 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
             }
             assert expected_sections.issubset(set(data_doc.keys()))
 
+            # RT-01: Internal UNASSIGNED_PERSON_SLUG ("__unassigned__" / "待归档") excluded from persons & aliases,
+            # while unassigned user records & facts are 100% preserved with personId=None!
+            exported_slugs = {p["slug"] for p in data_doc["persons"]}
+            exported_names = {p["displayName"] for p in data_doc["persons"]}
+            assert UNASSIGNED_PERSON_SLUG not in exported_slugs
+            assert "待归档" not in exported_names
+            assert all(a["alias"] != "待归档" for a in data_doc["personAliases"])
+            unassigned_mats = [m for m in data_doc["materials"] if m["title"] == "深夜未归属随笔"]
+            assert len(unassigned_mats) == 1
+            assert unassigned_mats[0]["personId"] is None
+            unassigned_facts = [
+                f for f in data_doc["facts"] if f["content"] == "待归属忌口：不喜欢香菜"
+            ]
+            assert len(unassigned_facts) == 1
+            assert unassigned_facts[0]["personId"] is None
+
             # Device metadata exported WITHOUT raw push token
             assert len(data_doc["devices"]) == 1
             dev_entry = data_doc["devices"][0]
@@ -735,6 +907,10 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
             assert "沈清秋" in journal_md
             assert "张主管" in journal_md
             assert "陈教授" in journal_md
+            assert "### 待归档" not in journal_md
+            assert UNASSIGNED_PERSON_SLUG not in journal_md
+            assert "## 未归属随手记" in journal_md
+            assert "她随口说不喜欢香菜味" in journal_md
             assert "[rec_" not in journal_md
             assert JOURNAL_AIGC_DISCLOSURE_FOOTER in journal_md
 
@@ -742,6 +918,7 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
         second_dl_resp = await client.get(
             f"/v1/me/exports/{export_id}/download",
             params={"token": download_token},
+            headers={"Authorization": f"Bearer {access_a}"},
         )
         assert second_dl_resp.status_code == 403
 
@@ -769,9 +946,11 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
 
         # Advance clock past 24h TTL and verify expired download token is rejected
         manual_clock.advance(hours=24, seconds=1)
+        fresh_access_a, _ = db_container.tokens.create_access_token(user_a, now=manual_clock.now())
         expired_dl = await client.get(
             f"/v1/me/exports/{queued_export_id}/download",
             params={"token": built_async.download_token},
+            headers={"Authorization": f"Bearer {fresh_access_a}"},
         )
         assert expired_dl.status_code == 403
 
@@ -799,7 +978,18 @@ async def test_telemetry_api_strict_allowlist_batch_and_summary(
 
     app = _build_test_app(db_container)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Valid single event
+        # Missing Idempotency-Key on POST /v1/telemetry/events is rejected with 400 (P1-7)
+        no_idem_tel = await client.post(
+            "/v1/telemetry/events",
+            json={
+                "eventName": "record_created",
+                "metadata": {"source": "voice", "latency_ms": 290},
+            },
+            headers={"Authorization": f"Bearer {access_a}"},
+        )
+        assert no_idem_tel.status_code == 400
+
+        # Valid single event + idempotent replay
         r1 = await client.post(
             "/v1/telemetry/events",
             json={
@@ -810,6 +1000,17 @@ async def test_telemetry_api_strict_allowlist_batch_and_summary(
         )
         assert r1.status_code == 201
         assert r1.json()["acceptedCount"] == 1
+
+        r1_replay = await client.post(
+            "/v1/telemetry/events",
+            json={
+                "eventName": "record_created",
+                "metadata": {"source": "voice", "latency_ms": 290},
+            },
+            headers={"Authorization": f"Bearer {access_a}", "Idempotency-Key": "tel-1"},
+        )
+        assert r1_replay.status_code == 201
+        assert r1_replay.json()["eventIds"] == r1.json()["eventIds"]
 
         # Valid batch events
         r2 = await client.post(
@@ -833,23 +1034,31 @@ async def test_telemetry_api_strict_allowlist_batch_and_summary(
         assert r2.json()["acceptedCount"] == 3
 
         # Reject unknown event_name, forbidden PII keys, >32 char string, and >50 batch with 422 ValidationFailedError
-        for invalid_payload in [
-            {"eventName": "raw_keystroke_dump", "metadata": {}},
-            {"eventName": "record_created", "metadata": {"source": "voice", "person_name": "林屿"}},
-            {"eventName": "ask_replied", "metadata": {"message": "帮我写一封信"}},
-            {"eventName": "fact_confirmed", "metadata": {"confidence_bucket": "x" * 33}},
-            {"eventName": "record_undo", "metadata": {"reason_optional": "写错人名林屿了"}},
-            {
-                "events": [
-                    {"eventName": "data_export", "metadata": {"status": "completed"}}
-                    for _ in range(51)
-                ]
-            },
-        ]:
+        for idx, invalid_payload in enumerate(
+            [
+                {"eventName": "raw_keystroke_dump", "metadata": {}},
+                {
+                    "eventName": "record_created",
+                    "metadata": {"source": "voice", "person_name": "林屿"},
+                },
+                {"eventName": "ask_replied", "metadata": {"message": "帮我写一封信"}},
+                {"eventName": "fact_confirmed", "metadata": {"confidence_bucket": "x" * 33}},
+                {"eventName": "record_undo", "metadata": {"reason_optional": "写错人名林屿了"}},
+                {
+                    "events": [
+                        {"eventName": "data_export", "metadata": {"status": "completed"}}
+                        for _ in range(51)
+                    ]
+                },
+            ]
+        ):
             bad = await client.post(
                 "/v1/telemetry/events",
                 json=invalid_payload,
-                headers={"Authorization": f"Bearer {access_a}"},
+                headers={
+                    "Authorization": f"Bearer {access_a}",
+                    "Idempotency-Key": f"tel-bad-{idx}",
+                },
             )
             assert bad.status_code == 422
             assert bad.json()["code"] == "validation_failed"

@@ -667,10 +667,18 @@ async def test_sse_streaming_citations_v10_stream_and_encrypted_history_paginati
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 0. Omitting Idempotency-Key on `/chat/stream` MUST return 400!
+        missing_idem = await client.post(
+            f"/v1/persons/{chloe_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"message": "明天海边散步怎么开场更自然呀？"},
+        )
+        assert missing_idem.status_code == 400
+
         # 1. Stream via V10 compatibility endpoint `/chat/stream` with referencedMaterialIds
         sse_resp = await client.post(
             f"/v1/persons/{chloe_id}/chat/stream",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "v10-stream-1"},
             json={
                 "message": "明天海边散步怎么开场更自然呀？",
                 "referencedMaterialIds": [str(rec_drawer_id)],
@@ -1045,13 +1053,26 @@ async def test_idempotency_quota_late_night_whisper_writeback_summarization_and_
         assert r8_quota.status_code == 429
         assert r8_quota.json()["code"] == "quota_exceeded"
 
-        # 6. DELETE /persons/{id}/chat/messages clears messages & rolling summary, keeps scrapbook!
-        del_resp = await client.delete(
+        # 6. DELETE /persons/{id}/chat/messages requires Idempotency-Key, clears messages & rolling summary, keeps scrapbook!
+        del_missing_idem = await client.delete(
             f"/v1/persons/{person_id}/chat/messages",
             headers={"Authorization": f"Bearer {token}"},
         )
+        assert del_missing_idem.status_code == 400
+
+        del_resp = await client.delete(
+            f"/v1/persons/{person_id}/chat/messages",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-del-1"},
+        )
         assert del_resp.status_code == 200
         assert del_resp.json()["deletedCount"] == 14
+
+        del_replay = await client.delete(
+            f"/v1/persons/{person_id}/chat/messages",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-del-1"},
+        )
+        assert del_replay.status_code == 200
+        assert del_replay.json()["deletedCount"] == 14
 
         after_del = (
             await client.get(
@@ -1167,7 +1188,7 @@ async def test_real_model_gateway_safety_service_worker_runner_and_zero_pii_mete
         # 4. SSE public shaming refusal & domestic violence crisis short-circuit
         shaming_sse = await client.post(
             f"/v1/persons/{person_id}/chat/stream",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-shaming-1"},
             json={"message": "帮我生成一张曝光长图发到朋友圈挂她让她社死"},
         )
         assert shaming_sse.status_code == 200
@@ -1178,7 +1199,7 @@ async def test_real_model_gateway_safety_service_worker_runner_and_zero_pii_mete
 
         dv_sse = await client.post(
             f"/v1/persons/{person_id}/chat/stream",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-dv-1"},
             json={"message": "救命，他刚刚又动手殴打我，还把我锁在屋里不让我出门"},
         )
         assert dv_sse.status_code == 200
@@ -1194,3 +1215,302 @@ async def test_real_model_gateway_safety_service_worker_runner_and_zero_pii_mete
         tasks_recorded = {c.task for c in ai_calls}
         assert "ask_relationship" in tasks_recorded
         assert "extract_record" in tasks_recorded
+
+
+@pytest.mark.asyncio
+async def test_redteam_remediation_unassigned_slug_polarity_flip_sse_cancel_and_silver_guard(
+    db_container: AppContainer,
+) -> None:
+    """Regression suite for Round 1 Red-Team audit findings (P0-1, P1-1, RT-06, RT-08, RT-09)."""
+    import asyncio
+
+    from mindweave.core.errors import NotFoundError
+    from mindweave.core.orm import ReminderRow
+    from mindweave.modules.companion.application.service import CompanionService
+    from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, PendingReason, ReminderStatus
+
+    gateway = DeterministicCompanionGateway()
+    queue = RecordingJobQueue()
+    app = _build_test_app(db_container, gateway, queue)
+
+    user_id, token, dek = await _provision_user(db_container)
+
+    # 1. [P0-1 & P1-1] Block UNASSIGNED_PERSON_SLUG across all Companion REST/SSE & worker entrypoints
+    unassigned_id = new_id()
+    async with db_container.db.user_session(UserScope(user_id)) as sess:
+        sess.add(
+            PersonRow(
+                id=unassigned_id,
+                user_id=user_id,
+                slug=UNASSIGNED_PERSON_SLUG,
+                tier=Tier.CRYSTAL.value,
+                rank="z",
+                state="provisional",
+                display_name_enc=db_container.cipher.encrypt_str(
+                    dek,
+                    "待归属",
+                    user_id=user_id,
+                    table="persons",
+                    column="display_name_enc",
+                    row_id=unassigned_id,
+                ),
+                monogram="?",
+            )
+        )
+
+    gold_id = await _seed_person(
+        db_container, user_id=user_id, dek=dek, name="温知夏", tier=Tier.GOLD, role_tag="挚友"
+    )
+    silver_id = await _seed_person(
+        db_container,
+        user_id=user_id,
+        dek=dek,
+        name="甩锅组长",
+        tier=Tier.SILVER,
+        role_tag="难缠上司",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        r_get = await client.get(
+            f"/v1/persons/{unassigned_id}/chat/messages",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r_get.status_code == 404
+
+        r_post = await client.post(
+            f"/v1/persons/{unassigned_id}/chat/messages?stream=false",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-unassigned-1"},
+            json={"message": "你好"},
+        )
+        assert r_post.status_code == 404
+
+        r_stream = await client.post(
+            f"/v1/persons/{unassigned_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-unassigned-2"},
+            json={"message": "你好"},
+        )
+        assert r_stream.status_code == 404
+
+        r_del = await client.delete(
+            f"/v1/persons/{unassigned_id}/chat/messages",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-unassigned-3"},
+        )
+        assert r_del.status_code == 404
+
+        with pytest.raises(NotFoundError):
+            await writeback_facts_from_chat_message(
+                db_container,
+                scope=PersonScope(user_id, unassigned_id),
+                message_id=new_id(),
+                model_gateway=gateway,
+            )
+
+        with pytest.raises(NotFoundError):
+            await summarize_chat_thread(
+                db_container,
+                scope=PersonScope(user_id, unassigned_id),
+                model_gateway=gateway,
+            )
+
+        # 2. [P1-2 / RT-06] Polarity-flip gate, bi-temporal supersession, reminder upsert & non-blank Inbox summary
+        _, cilantro_fact_id = await _seed_record_and_fact(
+            db_container,
+            user_id=user_id,
+            person_id=gold_id,
+            dek=dek,
+            title="香菜偏好",
+            body="温知夏平时喜欢吃香菜",
+            fact_type=FactType.PREFERENCE,
+            fact_content="喜欢吃香菜",
+        )
+        _, coffee_old_fact_id = await _seed_record_and_fact(
+            db_container,
+            user_id=user_id,
+            person_id=gold_id,
+            dek=dek,
+            title="咖啡习惯",
+            body="温知夏平时喜欢喝美式咖啡",
+            fact_type=FactType.PREFERENCE,
+            fact_content="喜欢喝美式咖啡",
+        )
+
+        msg_resp = await client.post(
+            f"/v1/persons/{gold_id}/chat/messages?stream=false",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-rt06-msg"},
+            json={
+                "message": "记一下：温知夏其实对香菜严重过敏不能吃香菜；现在改喝热美式咖啡；下周三答应帮她带手冲豆；11月28日约好去美术馆。"
+            },
+        )
+        assert msg_resp.status_code == 200
+        # Grab user message id from DB
+        async with db_container.db.user_session(UserScope(user_id)) as sess:
+            user_msg_row = await sess.scalar(
+                select(ChatMessageRow)
+                .where(
+                    ChatMessageRow.user_id == user_id,
+                    ChatMessageRow.person_id == gold_id,
+                    ChatMessageRow.role == "user",
+                )
+                .order_by(ChatMessageRow.created_at.desc())
+            )
+            assert user_msg_row is not None
+            user_msg_id = user_msg_row.id
+
+        gateway.next_extract_output = ExtractRecordOutput(
+            facts=[
+                ExtractedFactItem(
+                    person_mention="温知夏",
+                    person_id=gold_id,
+                    fact_type=FactType.TABOO,
+                    polarity=Polarity.NEGATIVE,
+                    time_status=TimeStatus.CURRENT,
+                    source_speaker=SourceSpeaker.NARRATOR,
+                    title="香菜过敏忌口",
+                    content="对香菜严重过敏，不能吃香菜",
+                    confidence=0.96,
+                ),
+                ExtractedFactItem(
+                    person_mention="温知夏",
+                    person_id=gold_id,
+                    fact_type=FactType.PREFERENCE,
+                    polarity=Polarity.POSITIVE,
+                    time_status=TimeStatus.CURRENT,
+                    source_speaker=SourceSpeaker.NARRATOR,
+                    title="热美式偏好更新",
+                    content="现在改喝热美式咖啡",
+                    confidence=0.95,
+                ),
+                ExtractedFactItem(
+                    person_mention="温知夏",
+                    person_id=gold_id,
+                    fact_type=FactType.PROMISE,
+                    polarity=Polarity.POSITIVE,
+                    time_status=TimeStatus.CURRENT,
+                    source_speaker=SourceSpeaker.NARRATOR,
+                    title="帮忙带手冲豆",
+                    content="答应帮温知夏带一包手冲咖啡豆",
+                    trigger_date="2026-11-25",
+                    confidence=0.95,
+                ),
+                ExtractedFactItem(
+                    person_mention="温知夏",
+                    person_id=gold_id,
+                    fact_type=FactType.DATE,
+                    polarity=Polarity.POSITIVE,
+                    time_status=TimeStatus.CURRENT,
+                    source_speaker=SourceSpeaker.NARRATOR,
+                    title="美术馆看展",
+                    content="约好一起去美术馆看展",
+                    trigger_date="2026-11-28",
+                    confidence=0.95,
+                ),
+            ]
+        )
+
+        wb = await writeback_facts_from_chat_message(
+            db_container,
+            scope=PersonScope(user_id, gold_id),
+            message_id=user_msg_id,
+            model_gateway=gateway,
+        )
+        # 1 confirmed (updated coffee preference), 3 pending (cilantro polarity flip + promise + date per Invariant I3)
+        assert len(wb.confirmed_fact_ids) == 1
+        assert len(wb.pending_fact_ids) == 3
+        assert len(wb.inbox_item_ids) == 3
+
+        async with db_container.db.user_session(UserScope(user_id)) as sess:
+            # Old cilantro fact stays untouched until user resolves polarity flip!
+            old_cilantro = await sess.get(FactRow, cilantro_fact_id)
+            assert old_cilantro is not None and old_cilantro.invalid_at is None
+
+            # Old coffee preference was bi-temporally superseded by new confirmed preference!
+            old_coffee = await sess.get(FactRow, coffee_old_fact_id)
+            assert old_coffee is not None
+            assert old_coffee.invalid_at is not None
+            assert old_coffee.time_status == TimeStatus.PAST.value
+            assert old_coffee.superseded_by_id in wb.confirmed_fact_ids
+
+            # Pending facts include polarity_flip and date_or_promise reasons
+            pending_rows = [await sess.get(FactRow, fid) for fid in wb.pending_fact_ids]
+            pending_reasons = {r.pending_reason for r in pending_rows if r is not None}
+            assert PendingReason.POLARITY_FLIP.value in pending_reasons
+            assert PendingReason.DATE_OR_PROMISE.value in pending_reasons
+
+            # Every InboxItemRow payload_enc has non-blank summary, title, content, factType, personName!
+            for iid in wb.inbox_item_ids:
+                irow = await sess.get(InboxItemRow, iid)
+                assert irow is not None
+                payload_dec = db_container.cipher.decrypt_json(
+                    dek,
+                    irow.payload_enc,
+                    user_id=user_id,
+                    table="inbox_items",
+                    column="payload_enc",
+                    row_id=irow.id,
+                )
+                assert isinstance(payload_dec, dict)
+                assert payload_dec.get("summary", "").strip() != ""
+                assert payload_dec.get("personName") == "温知夏"
+                assert payload_dec.get("factType") in (
+                    FactType.TABOO.value,
+                    FactType.PROMISE.value,
+                    FactType.DATE.value,
+                )
+
+            # Proposed reminders created for both DATE and PROMISE!
+            reminders = list(
+                (
+                    await sess.scalars(
+                        select(ReminderRow).where(
+                            ReminderRow.user_id == user_id,
+                            ReminderRow.person_id == gold_id,
+                        )
+                    )
+                ).all()
+            )
+            assert len(reminders) == 2
+            assert all(r.status == ReminderStatus.PROPOSED.value for r in reminders)
+
+        # 3. [P1-4 / RT-08] CancelledError on SSE stream releases in_progress IdempotencyKeyRow
+        svc = CompanionService(db_container, model_gateway=gateway, job_queue=queue)
+        gateway.custom_stream_chunks = ["<reply>第一句测试。", "第二句不会到达。</reply>"]
+        sse_stream = await svc.prepare_sse_stream(
+            scope=PersonScope(user_id, gold_id),
+            message="周末去哪里逛逛好？",
+            referenced_material_ids=[],
+            idem_key="idem-rt08-cancel",
+            idem_path=f"/v1/persons/{gold_id}/chat/stream",
+        )
+        aiter = sse_stream.__aiter__()
+        first_frame = await aiter.__anext__()
+        assert "event: delta" in first_frame
+        with pytest.raises(asyncio.CancelledError):
+            await aiter.athrow(asyncio.CancelledError())
+
+        gateway.custom_stream_chunks = None
+        retry_after_cancel = await client.post(
+            f"/v1/persons/{gold_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-rt08-cancel"},
+            json={"message": "周末去哪里逛逛好？"},
+        )
+        assert retry_after_cancel.status_code == 200
+
+        # 4. [P1-5 / RT-09] Silver SSE sentence-buffered guardrail scrubs split excusing phrases before emitting delta!
+        gateway.custom_stream_chunks = [
+            "<reply>也许对方",
+            "也有苦衷，换个角度",
+            "想他也不是故意的。",
+            "建议把对接文档发群里留痕，守住你的边界。</reply>",
+        ]
+        silver_sse = await client.post(
+            f"/v1/persons/{silver_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-rt09-silver"},
+            json={"message": "他又在周会上把锅甩给我了，气死我了！"},
+        )
+        assert silver_sse.status_code == 200
+        silver_frames = _parse_sse_frames(silver_sse.text)
+        silver_deltas = "".join(p["text"] for n, p in silver_frames if n == "delta")
+        assert "苦衷" not in silver_deltas
+        assert "换个角度" not in silver_deltas
+        assert "也不是故意的" not in silver_deltas
+        assert "建议把对接文档发群里留痕" in silver_deltas

@@ -22,12 +22,15 @@ from mindweave.modules.companion.domain import (
     LATE_NIGHT_REST_WHISPER_SILVER,
     PUBLIC_SHAMING_BOUNDARY_GUIDANCE,
     BudgetCandidateFact,
+    SentenceBufferedStreamGuard,
     StreamingCitationProcessor,
     StreamingOutputGuard,
+    StreamingReplyExtractor,
     VerifiedCitation,
     apply_tier_policy,
     decide_chat_writeback_gate,
     derive_stream_supplements,
+    enforce_tier_output_constraints,
     evaluate_session_window,
     is_public_shaming_request,
     process_complete_citations,
@@ -90,27 +93,31 @@ def test_streaming_citation_processor_strips_raw_ids_and_verifies_split_chunks()
     assert proc.stripped_hallucinated_count == 3
 
 
-def test_streaming_citation_preserves_fenced_code_blocks_across_splits() -> None:
+def test_streaming_citation_preserves_fenced_and_inline_backtick_code_spans() -> None:
     rec_valid = UUID("01931b2c-4d5e-7000-8000-000000000010")
     proc = StreamingCitationProcessor({rec_valid})
 
-    # Split triple backticks across chunk boundaries (` `` ` + `` ` ``)
+    # Split triple backticks AND single/double inline backticks across chunk boundaries
     chunks = [
         "下面是示例代码：\n``",
         "`python\npayload = [rec_1, rec_2]\nraw = '[rec_01931b2c-4d5e-7000-8000-000000000010]'\n``",
-        "`\n真实手帐引用在这里 [rec_01931b2c-4d5e-7000-8000-",
+        "`\n行内单反引号 `[rec_",
+        "01931b2c-4d5e-7000-8000-000000000010]` 与双反引号 ``[rec_99",
+        "9]`` 同样原样保留，真实手帐引用在这里 [rec_01931b2c-4d5e-7000-8000-",
         "000000000010]！",
     ]
 
     assembled = "".join(proc.feed(c).delta_text for c in chunks) + proc.finalize().delta_text
     assert "payload = [rec_1, rec_2]" in assembled
     assert "raw = '[rec_01931b2c-4d5e-7000-8000-000000000010]'" in assembled
+    assert "`[rec_01931b2c-4d5e-7000-8000-000000000010]`" in assembled
+    assert "``[rec_999]``" in assembled
     assert assembled.endswith("真实手帐引用在这里！")
     assert proc.verified_citations == (VerifiedCitation(index=1, record_id=rec_valid),)
     assert proc.stripped_hallucinated_count == 0
 
 
-def test_nested_chinese_brackets_and_truncated_rec_tail() -> None:
+def test_nested_brackets_and_truncated_rec_tail() -> None:
     rec_valid = UUID("01931b2c-4d5e-7000-8000-000000000022")
     full = f"【重点提醒：林表姑海鲜过敏 [rec_{rec_valid}]】[捂脸] [2026-11-12] [rec_truncated_eof"
 
@@ -122,6 +129,13 @@ def test_nested_chinese_brackets_and_truncated_rec_tail() -> None:
     assert "[rec_" not in out
     assert proc.verified_citations == (VerifiedCitation(index=1, record_id=rec_valid),)
     assert proc.stripped_hallucinated_count == 1
+
+    # Nested ASCII square brackets (`[重点：忌口 [rec_...] 必看]`)
+    nested_ascii = f"她不能吃海鲜 [重点：忌口 [rec_{rec_valid}] 必看]。"
+    nested_res = process_complete_citations(nested_ascii, {rec_valid})
+    assert f"rec_{rec_valid}" not in nested_res.cleaned_text
+    assert nested_res.cleaned_text == "她不能吃海鲜 [重点：忌口必看]。"
+    assert nested_res.citations == (VerifiedCitation(index=1, record_id=rec_valid),)
 
 
 def test_superscript_marker_mode_and_non_streaming_id_validation() -> None:
@@ -145,7 +159,7 @@ def test_superscript_marker_mode_and_non_streaming_id_validation() -> None:
 
 
 @settings(max_examples=60)
-@given(split_points=st.lists(st.integers(min_value=0, max_value=240), max_size=25))
+@given(split_points=st.lists(st.integers(min_value=0, max_value=300), max_size=25))
 def test_property_chunk_split_invariance(split_points: list[int]) -> None:
     rec_1 = UUID("01931b2c-4d5e-7000-8000-000000000101")
     rec_2 = UUID("01931b2c-4d5e-7000-8000-000000000102")
@@ -154,7 +168,7 @@ def test_property_chunk_split_invariance(split_points: list[int]) -> None:
     sample = (
         f"【手帐摘要】清秋忌芒果 [rec_{rec_1}]，喜欢海边散步【rec_{rec_2}, rec_{rec_bad}】。\n"
         f'```json\n{{"debug": "[rec_1, rec_{rec_bad}]"}}\n```\n'
-        f"普通括号 [开心] 再提一次 [rec_{rec_1}]。"
+        f"行内示例 `[rec_{rec_bad}]` 与嵌套 [重点：忌口 [rec_{rec_1}] 必看] [开心]。"
     )
     baseline = process_complete_citations(sample, {rec_1, rec_2})
 
@@ -271,6 +285,34 @@ def test_output_guard_scrubs_parasitic_scoring_and_dev_jargon() -> None:
     combined = part1 + part2 + part3
     assert "只有我最懂你" not in combined
     assert "我们一起看看记录。" in combined
+
+    # Sentence-buffered Silver SSE guard (RT-09) + StreamingReplyExtractor across split tags
+    extractor = StreamingReplyExtractor()
+    cit_proc = StreamingCitationProcessor(set())
+    silver_guard = SentenceBufferedStreamGuard(tier=Tier.SILVER)
+    raw_sse_chunks = [
+        "<re",
+        "ply>也许对方也有苦",
+        "衷，换个角度想他也不是故意的。建议把对接文档 `[rec_demo]` 发群里留痕。</rep",
+        "ly><whisper>守住边界</whisper>",
+    ]
+    emitted: list[str] = []
+    for ch in raw_sse_chunks:
+        body = extractor.feed(ch)
+        step = cit_proc.feed(body)
+        emitted.append(silver_guard.feed(step.delta_text))
+    rem = extractor.finalize()
+    fin = cit_proc.finalize()
+    emitted.append(silver_guard.feed(cit_proc.feed(rem).delta_text + fin.delta_text))
+    emitted.append(silver_guard.finalize())
+    silver_joined = "".join(emitted)
+    assert "也有苦衷" not in silver_joined
+    assert "换个角度想" not in silver_joined
+    assert "建议把对接文档 `[rec_demo]` 发群里留痕。" == silver_joined
+    assert "<whisper>守住边界</whisper>" in extractor.tail_text
+    assert enforce_tier_output_constraints(
+        "换个角度想他也不是故意的。", tier=Tier.SILVER, allow_empty=False
+    )
 
     # Full CompanionChatOutput sanitization
     raw_out = CompanionChatOutput(
@@ -390,6 +432,19 @@ def test_token_budget_trimming_session_care_and_writeback_gate() -> None:
         person_state=PersonState.ACTIVE,
         source_speaker=SourceSpeaker.NARRATOR,
     ) == (FactStatus.CONFIRMED, None)
+
+    assert decide_chat_writeback_gate(
+        fact_type=FactType.TABOO,
+        confidence=0.96,
+        candidate_count=1,
+        multi_person=False,
+        scoped_locked=True,
+        is_venting_or_irony=False,
+        tier=Tier.GOLD,
+        person_state=PersonState.ACTIVE,
+        source_speaker=SourceSpeaker.NARRATOR,
+        polarity_flipped=True,
+    ) == (FactStatus.PENDING, PendingReason.POLARITY_FLIP)
 
     assert decide_chat_writeback_gate(
         fact_type=FactType.DATE,

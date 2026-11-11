@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,9 +35,16 @@ class IdempotencyHit:
 
 
 class IdempotencyService:
-    def __init__(self, clock: Clock, *, ttl_hours: int = 24) -> None:
+    def __init__(
+        self,
+        clock: Clock,
+        *,
+        ttl_hours: int = 24,
+        stale_in_progress_seconds: int = 120,
+    ) -> None:
         self._clock = clock
         self._ttl_hours = ttl_hours
+        self._stale_seconds = stale_in_progress_seconds
 
     async def claim_or_replay(
         self,
@@ -89,12 +96,28 @@ class IdempotencyService:
         if existing is None:
             raise ConflictError("Concurrent idempotency conflict")
 
+        if existing.expires_at <= now:
+            existing.request_hash = request_hash
+            existing.status = "in_progress"
+            existing.response_status = None
+            existing.response_body = None
+            existing.created_at = now
+            existing.expires_at = now + timedelta(hours=self._ttl_hours)
+            await session.flush()
+            return existing, None
+
         if existing.request_hash != request_hash:
             raise IdempotencyConflictError(
                 "Idempotency-Key was already used with a different request payload."
             )
 
         if existing.status != "completed" or existing.response_body is None:
+            if existing.created_at <= now - timedelta(seconds=self._stale_seconds):
+                existing.status = "in_progress"
+                existing.created_at = now
+                existing.expires_at = now + timedelta(hours=self._ttl_hours)
+                await session.flush()
+                return existing, None
             raise ConflictError(
                 "A request with this Idempotency-Key is currently in progress.",
                 error_code="idempotency_in_progress",
@@ -116,4 +139,24 @@ class IdempotencyService:
         row.status = "completed"
         row.response_status = status_code
         row.response_body = response_body
+        await session.flush()
+
+    @staticmethod
+    async def release(
+        session: AsyncSession,
+        *,
+        scope: UserScope,
+        idem_key: str,
+        method: str,
+        path: str,
+    ) -> None:
+        await session.execute(
+            delete(IdempotencyKeyRow).where(
+                IdempotencyKeyRow.user_id == scope.user_id,
+                IdempotencyKeyRow.idem_key == idem_key.strip(),
+                IdempotencyKeyRow.method == method.upper(),
+                IdempotencyKeyRow.path == path,
+                IdempotencyKeyRow.status != "completed",
+            )
+        )
         await session.flush()

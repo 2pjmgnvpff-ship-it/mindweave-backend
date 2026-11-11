@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from mindweave.core.orm import (
     PersonRow,
     RecordRow,
 )
+from mindweave.core.security import TokenService
 from mindweave.modules.capture.domain.highlighter import (
     build_natural_slip_tag,
     format_duration_mmss,
@@ -73,6 +75,7 @@ from mindweave.modules.memory.infra.repository import (
     sync_capture_status_after_inbox_resolution,
 )
 from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
     CreatedBy,
     FactStatus,
     FactType,
@@ -96,10 +99,21 @@ def record_row_to_dto(
     cipher: EnvelopeCipher,
     dek: bytes,
     row: RecordRow,
+    *,
+    tokens: TokenService | None = None,
+    now: datetime | None = None,
 ) -> MaterialDto:
     title, body, snippet = decrypt_record_fields(cipher, dek, row)
     has_media = bool(row.media_object_key)
     kind_enum = RecordKind(row.kind)
+    media_url: str | None = None
+    if has_media:
+        raw_path = f"/v1/materials/{row.id}/media"
+        media_url = (
+            tokens.sign_media_path(raw_path, user_id=row.user_id, now=now)
+            if tokens is not None
+            else raw_path
+        )
     return MaterialDto(
         id=row.id,
         person_id=row.person_id,
@@ -110,7 +124,7 @@ def record_row_to_dto(
         body=body,
         snippet=snippet,
         has_media=has_media,
-        media_url=f"/v1/materials/{row.id}/media" if has_media else None,
+        media_url=media_url,
         dur=format_duration_mmss(row.audio_duration_ms)
         if row.audio_duration_ms is not None
         else None,
@@ -172,7 +186,7 @@ async def _cleanup_unassigned_placeholder_if_empty(
         select(PersonRow).where(
             PersonRow.id == person_id,
             PersonRow.user_id == scope.user_id,
-            PersonRow.slug == "__unassigned__",
+            PersonRow.slug == UNASSIGNED_PERSON_SLUG,
             PersonRow.deleted_at.is_(None),
         )
     )
@@ -214,6 +228,7 @@ class MemoryService:
         async with self.container.db.user_session(scope) as session:
             await require_person_row(session, scope, person_id)
             dek = await self.container.load_user_dek(session, scope)
+            now = self.container.clock.now()
 
             stmt = select(RecordRow).where(
                 RecordRow.user_id == scope.user_id,
@@ -236,7 +251,16 @@ class MemoryService:
                 if has_more and page_rows
                 else None
             )
-            items = [record_row_to_dto(self.container.cipher, dek, r) for r in page_rows]
+            items = [
+                record_row_to_dto(
+                    self.container.cipher,
+                    dek,
+                    r,
+                    tokens=self.container.tokens,
+                    now=now,
+                )
+                for r in page_rows
+            ]
             return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
 
     async def create_material(
@@ -350,7 +374,13 @@ class MemoryService:
             session.add(row)
             await session.flush()
 
-            dto = record_row_to_dto(self.container.cipher, dek, row)
+            dto = record_row_to_dto(
+                self.container.cipher,
+                dek,
+                row,
+                tokens=self.container.tokens,
+                now=now,
+            )
             assert idem_row is not None
             await self.container.idempotency.complete(
                 session,
@@ -372,7 +402,14 @@ class MemoryService:
             if row is None:
                 raise NotFoundError("Material not found")
             dek = await self.container.load_user_dek(session, scope)
-            return record_row_to_dto(self.container.cipher, dek, row)
+            now = self.container.clock.now()
+            return record_row_to_dto(
+                self.container.cipher,
+                dek,
+                row,
+                tokens=self.container.tokens,
+                now=now,
+            )
 
     async def patch_material(
         self,
@@ -381,11 +418,32 @@ class MemoryService:
         material_id: UUID,
         req: MaterialPatchRequest,
         expected_version: int | None,
-    ) -> MaterialDto:
+        idem_key: str,
+        route_path: str,
+    ) -> tuple[MaterialDto | None, IdempotencyHit | None]:
         if expected_version is None:
             raise BadRequestError("If-Match header is required for optimistic locking")
 
+        req_hash = hash_request_payload(
+            {
+                "materialId": str(material_id),
+                "expectedVersion": expected_version,
+                "body": req.model_dump(mode="json", exclude_unset=True),
+            }
+        )
+
         async with self.container.db.user_session(scope) as session:
+            idem_row, hit = await self.container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="PATCH",
+                path=route_path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return None, hit
+
             row = await session.scalar(
                 select(RecordRow)
                 .where(
@@ -456,10 +514,46 @@ class MemoryService:
             row.version += 1
             row.updated_at = now
             await session.flush()
-            return record_row_to_dto(self.container.cipher, dek, row)
 
-    async def delete_material(self, *, scope: UserScope, material_id: UUID) -> None:
+            dto = record_row_to_dto(
+                self.container.cipher,
+                dek,
+                row,
+                tokens=self.container.tokens,
+                now=now,
+            )
+            assert idem_row is not None
+            await self.container.idempotency.complete(
+                session,
+                idem_row,
+                status_code=200,
+                response_body=dto.model_dump(mode="json", by_alias=True),
+            )
+            return dto, None
+
+    async def delete_material(
+        self,
+        *,
+        scope: UserScope,
+        material_id: UUID,
+        idem_key: str,
+        route_path: str,
+    ) -> IdempotencyHit | None:
+        req_hash = hash_request_payload(
+            {"action": "delete_material", "materialId": str(material_id)}
+        )
         async with self.container.db.user_session(scope) as session:
+            idem_row, hit = await self.container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="DELETE",
+                path=route_path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit
+
             row = await session.scalar(
                 select(RecordRow)
                 .where(
@@ -476,6 +570,15 @@ class MemoryService:
             row.updated_at = now
             row.version += 1
             await session.flush()
+
+            assert idem_row is not None
+            await self.container.idempotency.complete(
+                session,
+                idem_row,
+                status_code=204,
+                response_body={"deleted": True},
+            )
+            return None
 
     async def get_material_media(
         self,
@@ -716,11 +819,32 @@ class MemoryService:
         fact_id: UUID,
         req: FactPatchRequest,
         expected_version: int | None,
-    ) -> FactDto:
+        idem_key: str,
+        route_path: str,
+    ) -> tuple[FactDto | None, IdempotencyHit | None]:
         if expected_version is None:
             raise BadRequestError("If-Match header is required for optimistic locking")
 
+        req_hash = hash_request_payload(
+            {
+                "factId": str(fact_id),
+                "expectedVersion": expected_version,
+                "body": req.model_dump(mode="json", exclude_unset=True),
+            }
+        )
+
         async with self.container.db.user_session(scope) as session:
+            idem_row, hit = await self.container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="PATCH",
+                path=route_path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return None, hit
+
             row = await session.scalar(
                 select(FactRow)
                 .where(
@@ -809,10 +933,37 @@ class MemoryService:
                     now=now,
                 )
 
-            return fact_row_to_dto(self.container.cipher, dek, row)
+            dto = fact_row_to_dto(self.container.cipher, dek, row)
+            assert idem_row is not None
+            await self.container.idempotency.complete(
+                session,
+                idem_row,
+                status_code=200,
+                response_body=dto.model_dump(mode="json", by_alias=True),
+            )
+            return dto, None
 
-    async def delete_fact(self, *, scope: UserScope, fact_id: UUID) -> None:
+    async def delete_fact(
+        self,
+        *,
+        scope: UserScope,
+        fact_id: UUID,
+        idem_key: str,
+        route_path: str,
+    ) -> IdempotencyHit | None:
+        req_hash = hash_request_payload({"action": "delete_fact", "factId": str(fact_id)})
         async with self.container.db.user_session(scope) as session:
+            idem_row, hit = await self.container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="DELETE",
+                path=route_path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit
+
             row = await session.scalar(
                 select(FactRow)
                 .where(
@@ -835,6 +986,15 @@ class MemoryService:
                 now=now,
             )
             await session.flush()
+
+            assert idem_row is not None
+            await self.container.idempotency.complete(
+                session,
+                idem_row,
+                status_code=204,
+                response_body={"deleted": True},
+            )
+            return None
 
     # =========================================================================
     # Pending Inbox (InboxItemRow)
@@ -861,7 +1021,7 @@ class MemoryService:
                     PersonRow.user_id == scope.user_id,
                 )
             )
-            if person_row is not None and person_row.slug != "__unassigned__":
+            if person_row is not None and person_row.slug != UNASSIGNED_PERSON_SLUG:
                 person_name = decrypt_person_display_name(self.container.cipher, dek, person_row)
 
         fact_dtos: list[FactDto] = []
@@ -890,7 +1050,7 @@ class MemoryService:
                     )
                 )
             ).all()
-            cand_by_id = {p.id: p for p in cand_rows if p.slug != "__unassigned__"}
+            cand_by_id = {p.id: p for p in cand_rows if p.slug != UNASSIGNED_PERSON_SLUG}
             for cid in row.candidate_person_ids:
                 p = cand_by_id.get(cid)
                 if p is not None:
@@ -1014,7 +1174,10 @@ class MemoryService:
                         PersonRow.user_id == scope.user_id,
                     )
                 )
-                if current_person_row is not None and current_person_row.slug == "__unassigned__":
+                if (
+                    current_person_row is not None
+                    and current_person_row.slug == UNASSIGNED_PERSON_SLUG
+                ):
                     effective_current_person_id = None
 
             try:
@@ -1033,6 +1196,14 @@ class MemoryService:
                 if exc.code == "inbox_not_open":
                     raise ConflictError(str(exc), error_code=exc.code) from exc
                 raise BadRequestError(str(exc), error_code=exc.code) from exc
+
+            # Validate any supplied target_person_id belongs to scope.user_id,
+            # has deleted_at IS NULL, and slug != UNASSIGNED_PERSON_SLUG!
+            validated_target_person: PersonRow | None = None
+            if req.target_person_id is not None:
+                validated_target_person = await require_person_row(
+                    session, scope, req.target_person_id
+                )
 
             now = self.container.clock.now()
             tz_name = await get_user_timezone(session, scope)
@@ -1073,11 +1244,19 @@ class MemoryService:
             # Execute one of the 6 resolution actions
             # -----------------------------------------------------------------
             if req.action is InboxResolutionAction.KEEP_AS_NOTE:
+                old_rec_person_id = linked_record.person_id if linked_record is not None else None
+                if validated_target_person is not None:
+                    final_person_id = validated_target_person.id
+                    item.person_id = validated_target_person.id
                 if linked_record is not None and linked_record.deleted_at is None:
+                    if validated_target_person is not None:
+                        linked_record.person_id = validated_target_person.id
                     linked_record.review_state = RecordReviewState.NOTE_ONLY.value
                     linked_record.updated_at = now
                     linked_record.version += 1
                 for fact in facts:
+                    if validated_target_person is not None:
+                        fact.person_id = validated_target_person.id
                     fact.status = FactStatus.REJECTED.value
                     fact.invalid_at = now
                     fact.updated_at = now
@@ -1085,6 +1264,10 @@ class MemoryService:
                 await cancel_reminders_for_facts(
                     session, user_id=scope.user_id, fact_ids=resolved_fact_ids, now=now
                 )
+                if validated_target_person is not None:
+                    await _cleanup_unassigned_placeholder_if_empty(
+                        session, scope=scope, person_id=old_rec_person_id, now=now
+                    )
 
             elif req.action is InboxResolutionAction.DISCARD:
                 old_rec_person_id = linked_record.person_id if linked_record is not None else None
@@ -1123,15 +1306,18 @@ class MemoryService:
                 )
 
             elif req.action is InboxResolutionAction.CONFIRM:
-                target_pid = effective_current_person_id or req.target_person_id
+                target_pid = req.target_person_id or effective_current_person_id
                 assert target_pid is not None
-                target_person = await require_person_row(session, scope, target_pid)
+                target_person = validated_target_person or await require_person_row(
+                    session, scope, target_pid
+                )
                 if target_person.state == PersonState.PROVISIONAL.value:
                     target_person.state = PersonState.ACTIVE.value
                     target_person.updated_at = now
                     target_person.version += 1
                 final_person_id = target_person.id
 
+                prev_rec_person_id = linked_record.person_id if linked_record is not None else None
                 ensured_rec = await self._ensure_normal_record_for_target(
                     session,
                     scope=scope,
@@ -1156,10 +1342,13 @@ class MemoryService:
                     tz_name=tz_name,
                     now=now,
                 )
+                await _cleanup_unassigned_placeholder_if_empty(
+                    session, scope=scope, person_id=prev_rec_person_id, now=now
+                )
 
             elif req.action is InboxResolutionAction.ASSIGN_PERSON:
-                assert req.target_person_id is not None
-                target_person = await require_person_row(session, scope, req.target_person_id)
+                assert validated_target_person is not None
+                target_person = validated_target_person
                 if target_person.state == PersonState.PROVISIONAL.value:
                     target_person.state = PersonState.ACTIVE.value
                     target_person.updated_at = now
@@ -1200,7 +1389,7 @@ class MemoryService:
                 desired_tier = req.tier or Tier.CRYSTAL
                 if (
                     current_person_row is not None
-                    and current_person_row.slug != "__unassigned__"
+                    and current_person_row.slug != UNASSIGNED_PERSON_SLUG
                     and current_person_row.deleted_at is None
                 ):
                     # Promote existing provisional person to active
@@ -1303,10 +1492,10 @@ class MemoryService:
                 )
 
             elif req.action is InboxResolutionAction.MERGE_PERSON:
-                assert req.target_person_id is not None
+                assert validated_target_person is not None
                 if current_person_row is None or current_person_row.deleted_at is not None:
                     raise NotFoundError("Provisional source person not found for merge")
-                target_person = await require_person_row(session, scope, req.target_person_id)
+                target_person = validated_target_person
                 if target_person.state == PersonState.PROVISIONAL.value:
                     target_person.state = PersonState.ACTIVE.value
                     target_person.updated_at = now
@@ -1458,8 +1647,7 @@ class MemoryService:
         all_superseded: list[UUID] = []
         for fact in facts:
             fact.person_id = target_person_id
-            if fact.record_id is None:
-                fact.record_id = record_id
+            fact.record_id = record_id
             if override_trigger_date is not None and fact.type in (
                 FactType.DATE.value,
                 FactType.PROMISE.value,

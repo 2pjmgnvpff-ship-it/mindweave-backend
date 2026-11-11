@@ -7,13 +7,19 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.crypto import EnvelopeCipher, normalize_alias_for_index
 from mindweave.core.errors import ConflictError, NotFoundError
 from mindweave.core.ids import new_id
-from mindweave.core.orm import PersonAliasRow, PersonRow, RecordRow
+from mindweave.core.orm import (
+    InboxItemRow,
+    PersonAliasRow,
+    PersonRow,
+    RecordRow,
+    ReminderRow,
+)
 from mindweave.modules.people.domain.copy_policy import derive_cupid_title
 from mindweave.modules.people.domain.entities import (
     PersonAlias,
@@ -21,7 +27,14 @@ from mindweave.modules.people.domain.entities import (
     PhotoSlot,
 )
 from mindweave.modules.people.domain.tier_transition import PersonRankEntry
-from mindweave.shared.enums import AliasKind, PersonState, Tier
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    AliasKind,
+    InboxItemStatus,
+    PersonState,
+    ReminderStatus,
+    Tier,
+)
 from mindweave.shared.scopes import UserScope
 
 ALIAS_BLIND_INDEX_DOMAIN = "person_alias"
@@ -255,6 +268,7 @@ class PeopleRepository:
             .where(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.rank.asc(), PersonRow.id.asc())
         )
@@ -271,6 +285,7 @@ class PeopleRepository:
             .where(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.deleted_at.is_(None),
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.id.asc())
             .with_for_update()
@@ -289,6 +304,7 @@ class PeopleRepository:
             PersonRow.user_id == scope.user_id,
             PersonRow.id == person_id,
             PersonRow.deleted_at.is_(None),
+            PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
         )
         if for_update:
             stmt = stmt.with_for_update()
@@ -566,6 +582,7 @@ class PeopleRepository:
                 PersonRow.deleted_at.is_(None),
                 PersonRow.archived_at.is_(None),
                 PersonRow.state != PersonState.ARCHIVED.value,
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.rank.asc(), PersonRow.id.asc())
         )
@@ -672,36 +689,87 @@ class PeopleRepository:
         await session.flush()
         return row, old_key
 
-    async def delete_person_and_collect_media_keys(
+    async def pause_active_reminders_for_person(
         self,
         session: AsyncSession,
         scope: UserScope,
+        *,
         person_id: UUID,
-    ) -> list[str]:
-        """Cascade-delete `PersonRow` and return all associated encrypted blob keys to purge."""
-        row = await self.get_person_row(session, scope, person_id, for_update=True)
-        keys: list[str] = []
-        for candidate in (
-            row.avatar_object_key,
-            row.main_photo_object_key,
-            row.sub_photo_object_key,
-        ):
-            if candidate:
-                keys.append(candidate)
-
-        rec_keys = (
-            await session.scalars(
-                select(RecordRow.media_object_key).where(
-                    RecordRow.user_id == scope.user_id,
-                    RecordRow.person_id == person_id,
-                    RecordRow.media_object_key.is_not(None),
-                )
+        now: datetime,
+    ) -> None:
+        """Pause active reminders when a person is archived so ex-partners do not fire pushes."""
+        await session.execute(
+            update(ReminderRow)
+            .where(
+                ReminderRow.user_id == scope.user_id,
+                ReminderRow.person_id == person_id,
+                ReminderRow.status == ReminderStatus.ACTIVE.value,
             )
-        ).all()
-        for rk in rec_keys:
-            if rk and rk not in keys:
-                keys.append(rk)
-
-        await session.delete(row)
+            .values(
+                status=ReminderStatus.PAUSED.value,
+                updated_at=now,
+            )
+        )
         await session.flush()
-        return keys
+
+    async def soft_delete_person(
+        self,
+        session: AsyncSession,
+        scope: UserScope,
+        *,
+        person_id: UUID,
+        now: datetime,
+    ) -> None:
+        """30-day soft-delete `PersonRow` + records, cancel reminders, and resolve open inbox items.
+
+        Physical blob purge is deferred to the 30-day `purge_soft_deleted` worker job (§3.6).
+        """
+        row = await self.get_person_row(session, scope, person_id, for_update=True)
+        row.deleted_at = now
+        row.updated_at = now
+        row.version += 1
+
+        await session.execute(
+            update(RecordRow)
+            .where(
+                RecordRow.user_id == scope.user_id,
+                RecordRow.person_id == person_id,
+                RecordRow.deleted_at.is_(None),
+            )
+            .values(
+                deleted_at=now,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(ReminderRow)
+            .where(
+                ReminderRow.user_id == scope.user_id,
+                ReminderRow.person_id == person_id,
+                ReminderRow.status.in_(
+                    (
+                        ReminderStatus.PROPOSED.value,
+                        ReminderStatus.ACTIVE.value,
+                        ReminderStatus.PAUSED.value,
+                    )
+                ),
+            )
+            .values(
+                status=ReminderStatus.CANCELLED.value,
+                next_fire_at=None,
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(InboxItemRow)
+            .where(
+                InboxItemRow.user_id == scope.user_id,
+                InboxItemRow.person_id == person_id,
+                InboxItemRow.status == InboxItemStatus.OPEN.value,
+            )
+            .values(
+                status=InboxItemStatus.RESOLVED.value,
+                resolved_at=now,
+            )
+        )
+        await session.flush()

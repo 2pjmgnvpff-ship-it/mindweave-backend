@@ -461,12 +461,17 @@ def test_camelcase_dtos_and_pydantic_validation() -> None:
         timezone="Asia/Shanghai",
         now=datetime(2026, 11, 12, tzinfo=UTC),
     )
-    dumped = PreferencesResponse.from_domain(prefs).model_dump(by_alias=True)
+    dumped = PreferencesResponse.from_domain(
+        prefs,
+        wallpaper_url="/v1/me/wallpaper?uid=ignored&exp=1&sig=abc",
+    ).model_dump(by_alias=True)
+    assert dumped["wallpaperUrl"] is None
     assert set(dumped.keys()) == {
         "preferredEdition",
         "cupidLayout",
         "wallpaperPreset",
         "hasCustomWallpaper",
+        "wallpaperUrl",
         "wallpaperBlur",
         "wallpaperVignette",
         "appLockEnabled",
@@ -474,3 +479,18 @@ def test_camelcase_dtos_and_pydantic_validation() -> None:
         "timezone",
         "version",
     }
+
+    prefs_with_wp = default_user_preferences(
+        user_id=prefs.user_id,
+        timezone="Asia/Shanghai",
+        now=datetime(2026, 11, 12, tzinfo=UTC),
+    )
+    from dataclasses import replace
+
+    prefs_custom = replace(prefs_with_wp, wallpaper_object_key=f"{prefs.user_id}/wallpaper/obj1")
+    dumped_custom = PreferencesResponse.from_domain(
+        prefs_custom,
+        wallpaper_url="/v1/me/wallpaper?uid=test&exp=999&sig=deadbeef",
+    ).model_dump(by_alias=True)
+    assert dumped_custom["hasCustomWallpaper"] is True
+    assert dumped_custom["wallpaperUrl"] == "/v1/me/wallpaper?uid=test&exp=999&sig=deadbeef"

@@ -26,6 +26,7 @@ from mindweave.modules.memory.infra.repository import (
     decrypt_person_role_tag,
 )
 from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
     CaptureStatus,
     FactStatus,
     InboxItemKind,
@@ -52,12 +53,13 @@ async def load_known_person_profiles(
                 PersonRow.user_id == scope.user_id,
                 PersonRow.deleted_at.is_(None),
                 PersonRow.state != PersonState.ARCHIVED.value,
+                PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
             )
             .order_by(PersonRow.created_at.asc())
         )
     ).all()
 
-    real_rows = [p for p in person_rows if p.slug != "__unassigned__"]
+    real_rows = [p for p in person_rows if p.slug != UNASSIGNED_PERSON_SLUG]
     if not real_rows:
         return [], {}
 
@@ -114,7 +116,7 @@ async def get_or_create_unassigned_placeholder(
     existing = await session.scalar(
         select(PersonRow).where(
             PersonRow.user_id == scope.user_id,
-            PersonRow.slug == "__unassigned__",
+            PersonRow.slug == UNASSIGNED_PERSON_SLUG,
             PersonRow.deleted_at.is_(None),
         )
     )
@@ -129,7 +131,7 @@ async def get_or_create_unassigned_placeholder(
         tier=Tier.CRYSTAL,
         state=PersonState.PROVISIONAL,
         now=now,
-        slug="__unassigned__",
+        slug=UNASSIGNED_PERSON_SLUG,
     )
 
 

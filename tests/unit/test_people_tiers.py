@@ -11,6 +11,7 @@ from mindweave.core.dto import FORBIDDEN_UI_DEV_PHRASES as CORE_FORBIDDEN_PHRASE
 from mindweave.core.ids import new_id
 from mindweave.modules.bootstrap.domain import (
     format_duration_ms,
+    resolve_visual_token_colors,
     sanitize_material_preview_text,
 )
 from mindweave.modules.people.domain import (
@@ -327,3 +328,13 @@ def test_copy_policy_monogram_cupid_title_and_bootstrap_formatting() -> None:
     assert format_duration_ms(18_000) == "0:18"
     assert format_duration_ms(75_000) == "1:15"
     assert sanitize_material_preview_text("系统自动归档 · 海边看海鸥约定") == "海边看海鸥约定"
+
+    gold_fallback = resolve_visual_token_colors(Tier.GOLD, {})
+    assert gold_fallback.seal_bg == "#F3E5AB"
+    assert gold_fallback.tab_color == "#D4AF37"
+    silver_override = resolve_visual_token_colors(
+        Tier.SILVER, {"seal_bg": "#112233", "tabColor": "#445566"}
+    )
+    assert silver_override.seal_bg == "#112233"
+    assert silver_override.tab_color == "#445566"
+    assert silver_override.seal_color == "#4C566A"

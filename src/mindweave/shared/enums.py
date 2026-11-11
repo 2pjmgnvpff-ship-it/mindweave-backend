@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+UNASSIGNED_PERSON_SLUG = "__unassigned__"
+
 
 class Tier(StrEnum):
     """Three-state Arrow Tier (canonical replacement for legacy love/matter/hate)."""

@@ -14,8 +14,14 @@ from mindweave.core.crypto import EnvelopeCipher
 from mindweave.core.dto import decode_cursor, encode_cursor
 from mindweave.core.errors import ValidationFailedError
 from mindweave.core.ids import new_id
-from mindweave.core.orm import DeviceRow, ReminderDeliveryRow, ReminderRow
-from mindweave.shared.enums import PushPlatform, ReminderRule, ReminderStatus
+from mindweave.core.orm import DeviceRow, PersonRow, ReminderDeliveryRow, ReminderRow
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    PersonState,
+    PushPlatform,
+    ReminderRule,
+    ReminderStatus,
+)
 from mindweave.shared.scopes import UserScope
 
 
@@ -382,10 +388,34 @@ class ReminderRepository:
         dek: bytes,
         status: ReminderStatus | None = None,
         person_id: UUID | None = None,
+        include_archived: bool = False,
         cursor: str | None = None,
         limit: int = 50,
     ) -> tuple[list[DecryptedReminder], str | None, bool]:
-        stmt = select(ReminderRow).where(ReminderRow.user_id == scope.user_id)
+        person_predicates = [
+            PersonRow.id.is_not(None),
+            PersonRow.deleted_at.is_(None),
+            PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
+        ]
+        if not include_archived:
+            person_predicates.extend(
+                [
+                    PersonRow.archived_at.is_(None),
+                    PersonRow.state != PersonState.ARCHIVED.value,
+                ]
+            )
+
+        stmt = (
+            select(ReminderRow)
+            .outerjoin(PersonRow, PersonRow.id == ReminderRow.person_id)
+            .where(
+                ReminderRow.user_id == scope.user_id,
+                or_(
+                    ReminderRow.person_id.is_(None),
+                    and_(*person_predicates),
+                ),
+            )
+        )
         if status is not None:
             stmt = stmt.where(ReminderRow.status == status.value)
         if person_id is not None:

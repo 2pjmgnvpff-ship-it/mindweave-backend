@@ -12,6 +12,8 @@ from mindweave.modules.bootstrap.api.schemas import (
     BootstrapResponse,
 )
 from mindweave.modules.bootstrap.application.service import BootstrapService
+from mindweave.modules.bootstrap.domain.formatting import resolve_visual_token_colors
+from mindweave.shared.enums import RecordKind
 from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["bootstrap"])
@@ -21,6 +23,7 @@ router = APIRouter(tags=["bootstrap"])
     "/bootstrap",
     response_model=BootstrapResponse,
     response_model_by_alias=True,
+    response_model_exclude_none=False,
 )
 async def get_workspace_bootstrap(
     scope: UserScope = Depends(get_current_user_scope),
@@ -32,6 +35,7 @@ async def get_workspace_bootstrap(
     people_dtos: dict[str, BootstrapPersonDTO] = {}
     for key, agg in snap.people.items():
         p = agg.profile
+        colors = resolve_visual_token_colors(p.tier, p.visual_tokens)
         people_dtos[key] = BootstrapPersonDTO(
             id=str(p.id),
             name_cn=p.name_cn,
@@ -45,6 +49,13 @@ async def get_workspace_bootstrap(
             short_memo=p.short_memo,
             traits=p.traits,
             visual_tokens=p.visual_tokens,
+            seal_bg=colors.seal_bg,
+            seal_color=colors.seal_color,
+            tape_color=colors.tape_color,
+            tab_color=colors.tab_color,
+            avatar=agg.avatar_url,
+            main_photo=agg.main_photo_url,
+            sub_photo=agg.sub_photo_url,
             avatar_url=agg.avatar_url,
             main_photo_url=agg.main_photo_url,
             sub_photo_url=agg.sub_photo_url,
@@ -59,6 +70,7 @@ async def get_workspace_bootstrap(
                     stamp_code=mat.stamp_code,
                     happened_on=mat.happened_on,
                     media_url=media_url,
+                    thumb=media_url if mat.kind is RecordKind.PHOTO else None,
                 )
                 for mat, media_url in agg.materials
             ],

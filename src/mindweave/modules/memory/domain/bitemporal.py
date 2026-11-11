@@ -19,73 +19,156 @@ from uuid import UUID
 
 from mindweave.shared.enums import FactStatus, FactType, Polarity, TimeStatus
 
-_SENTIMENT_AND_FILLER_PHRASES: tuple[str, ...] = (
+_ADVERB_AND_TEMPORAL_MODIFIERS: tuple[str, ...] = (
     "千万别让她",
     "千万别让他",
     "千万别",
-    "特别喜欢",
-    "非常喜欢",
-    "超级喜欢",
-    "超爱吃",
-    "超喜欢",
-    "最喜欢",
-    "不喜欢",
-    "不爱吃",
-    "不爱喝",
-    "不能吃",
-    "不能喝",
-    "忌口是",
     "更正为",
     "更新为",
     "改成了",
     "换成了",
     "戒掉了",
-    "喜欢吃",
-    "喜欢喝",
-    "偏爱喝",
-    "偏爱吃",
-    "讨厌吃",
-    "讨厌喝",
-    "最讨厌",
-    "最恨吃",
-    "喜欢",
-    "偏爱",
-    "超爱",
-    "最爱",
-    "爱吃",
-    "爱喝",
-    "想吃",
-    "想喝",
-    "想要",
-    "讨厌",
-    "最恨",
-    "厌恶",
-    "反感",
-    "害怕",
-    "忌口",
-    "严禁",
-    "禁止",
-    "过敏",
-    "严重",
+    "超级",
+    "非常",
+    "特别",
+    "尤其",
+    "极其",
+    "实在",
+    "真的",
+    "完全",
+    "一点",
+    "比较",
     "现在",
     "目前",
     "最近",
+    "平时",
     "以前",
     "曾经",
     "原来",
     "其实",
     "已经",
     "不再",
-    "戒掉",
-    "戒了",
-    "改喝",
-    "改吃",
-    "改成",
-    "换成",
-    "更正",
+    "总是",
+    "一直",
+)
+
+_PREDICATE_PHRASES: tuple[str, ...] = tuple(
+    sorted(
+        (
+            "不喜欢吃",
+            "不喜欢喝",
+            "不爱吃",
+            "不爱喝",
+            "不能吃",
+            "不能喝",
+            "不能碰",
+            "不能闻",
+            "喜欢吃",
+            "喜欢喝",
+            "偏爱吃",
+            "偏爱喝",
+            "讨厌吃",
+            "讨厌喝",
+            "最喜欢",
+            "超喜欢",
+            "最讨厌",
+            "最恨吃",
+            "最爱吃",
+            "最爱喝",
+            "超爱吃",
+            "超爱喝",
+            "严重过敏",
+            "忌口是",
+            "不喜欢",
+            "喜欢",
+            "偏爱",
+            "超爱",
+            "最爱",
+            "爱吃",
+            "爱喝",
+            "想吃",
+            "想喝",
+            "想要",
+            "讨厌",
+            "最恨",
+            "厌恶",
+            "反感",
+            "害怕",
+            "忌口",
+            "严禁",
+            "禁止",
+            "过敏",
+            "严重",
+            "不能",
+            "能吃",
+            "能喝",
+            "不吃",
+            "不喝",
+            "戒掉",
+            "戒了",
+            "改喝",
+            "改吃",
+            "改成",
+            "换成",
+            "更正",
+            "更新",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+_STOPWORD_TOPIC_TOKENS: frozenset[str] = frozenset(
+    {
+        "喜欢",
+        "欢吃",
+        "欢喝",
+        "不喜欢",
+        "不喜",
+        "爱吃",
+        "爱喝",
+        "不能",
+        "能吃",
+        "能喝",
+        "过敏",
+        "严重",
+        "讨厌",
+        "厌吃",
+        "厌喝",
+        "忌口",
+        "超级",
+        "非常",
+        "特别",
+        "现在",
+        "目前",
+        "最近",
+        "平时",
+        "以前",
+        "曾经",
+        "原来",
+        "其实",
+        "已经",
+        "不再",
+        "总是",
+        "一直",
+        "完全",
+        "一点",
+        "真的",
+        "比较",
+        "偏爱",
+        "超爱",
+        "最爱",
+        "最恨",
+        "害怕",
+        "反感",
+        "厌恶",
+        "严禁",
+        "禁止",
+    }
 )
 
 _SINGLE_CHAR_PARTICLES = frozenset("的了呀呢吧嘛哦啊哈很太最都也还又在把被给对和与及或且不忌无非")
+_LEADING_ACTION_VERBS = "吃喝点碰闻沾"
 
 _EXPLICIT_UPDATE_MARKERS: tuple[str, ...] = (
     "不再",
@@ -159,7 +242,9 @@ def extract_topic_tokens(text: str) -> set[str]:
     if not cleaned:
         return set()
 
-    for phrase in _SENTIMENT_AND_FILLER_PHRASES:
+    for mod in _ADVERB_AND_TEMPORAL_MODIFIERS:
+        cleaned = cleaned.replace(mod, " ")
+    for phrase in _PREDICATE_PHRASES:
         cleaned = cleaned.replace(phrase, " ")
 
     tokens: set[str] = set()
@@ -168,15 +253,18 @@ def extract_topic_tokens(text: str) -> set[str]:
             if len(chunk) >= 2:
                 tokens.add(chunk)
             continue
-        # Strip leading/trailing filler particles from CJK run
+        # Strip filler particles and leading action verbs (e.g. stranded '吃' before noun)
         core = "".join(ch for ch in chunk if ch not in _SINGLE_CHAR_PARTICLES)
-        if not core:
+        while len(core) >= 2 and core[0] in _LEADING_ACTION_VERBS:
+            core = core[1:]
+        if not core or core in _LEADING_ACTION_VERBS:
             continue
         if len(core) == 1:
             tokens.add(core)
         else:
             for idx in range(len(core) - 1):
                 tokens.add(core[idx : idx + 2])
+    tokens -= _STOPWORD_TOPIC_TOKENS
     return tokens
 
 

@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Header, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from mindweave.core.dependencies import (
     AppContainer,
     get_container,
     get_current_user_scope,
+    get_media_user_scope,
     parse_if_match_version,
     require_idempotency_key,
 )
@@ -32,6 +33,36 @@ def _chunk_bytes(data: bytes) -> Iterator[bytes]:
         yield data[offset : offset + _STREAM_CHUNK_BYTES]
 
 
+def _signed_wallpaper_url(container: AppContainer, scope: UserScope) -> str:
+    return container.tokens.sign_media_path(
+        "/v1/me/wallpaper",
+        user_id=scope.user_id,
+        now=container.clock.now(),
+    )
+
+
+def _to_preferences_response(
+    prefs: UserPreferences,
+    *,
+    container: AppContainer,
+    scope: UserScope,
+) -> PreferencesResponse:
+    signed_url = _signed_wallpaper_url(container, scope) if prefs.has_custom_wallpaper else None
+    return PreferencesResponse.from_domain(prefs, wallpaper_url=signed_url)
+
+
+def _from_idempotency_hit(
+    hit_body: dict[str, Any],
+    *,
+    container: AppContainer,
+    scope: UserScope,
+) -> PreferencesResponse:
+    resp = PreferencesResponse.model_validate(hit_body)
+    if resp.has_custom_wallpaper:
+        return resp.model_copy(update={"wallpaper_url": _signed_wallpaper_url(container, scope)})
+    return resp
+
+
 @router.get("/me/preferences", response_model=PreferencesResponse)
 async def get_my_preferences(
     scope: UserScope = Depends(get_current_user_scope),
@@ -39,7 +70,7 @@ async def get_my_preferences(
 ) -> PreferencesResponse:
     service = PreferencesService(container)
     prefs = await service.get_preferences(scope)
-    return PreferencesResponse.from_domain(prefs)
+    return _to_preferences_response(prefs, container=container, scope=scope)
 
 
 @router.patch("/me/preferences", response_model=PreferencesResponse)
@@ -51,7 +82,10 @@ async def patch_my_preferences(
     container: AppContainer = Depends(get_container),
 ) -> PreferencesResponse:
     def _serialize(p: UserPreferences) -> dict[str, Any]:
-        return PreferencesResponse.from_domain(p).model_dump(by_alias=True, mode="json")
+        return _to_preferences_response(p, container=container, scope=scope).model_dump(
+            by_alias=True,
+            mode="json",
+        )
 
     service = PreferencesService(container)
     saved, hit = await service.update_preferences(
@@ -63,20 +97,23 @@ async def patch_my_preferences(
         serializer=_serialize,
     )
     if hit is not None:
-        return PreferencesResponse.model_validate(hit.response_body)
+        return _from_idempotency_hit(hit.response_body, container=container, scope=scope)
     assert saved is not None
-    return PreferencesResponse.from_domain(saved)
+    return _to_preferences_response(saved, container=container, scope=scope)
 
 
 @router.post("/me/wallpaper", response_model=PreferencesResponse)
 async def upload_my_wallpaper(
     file: UploadFile = File(...),
     scope: UserScope = Depends(get_current_user_scope),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> PreferencesResponse:
     def _serialize(p: UserPreferences) -> dict[str, Any]:
-        return PreferencesResponse.from_domain(p).model_dump(by_alias=True, mode="json")
+        return _to_preferences_response(p, container=container, scope=scope).model_dump(
+            by_alias=True,
+            mode="json",
+        )
 
     # Read at most max_image_bytes + 1 to prevent unbounded memory allocation on oversized uploads
     raw_bytes = await file.read(container.settings.max_image_bytes + 1)
@@ -86,18 +123,18 @@ async def upload_my_wallpaper(
     saved, hit = await service.upload_wallpaper(
         scope,
         raw_bytes=raw_bytes,
-        idem_key=idempotency_key,
+        idem_key=idem_key,
         serializer=_serialize,
     )
     if hit is not None:
-        return PreferencesResponse.model_validate(hit.response_body)
+        return _from_idempotency_hit(hit.response_body, container=container, scope=scope)
     assert saved is not None
-    return PreferencesResponse.from_domain(saved)
+    return _to_preferences_response(saved, container=container, scope=scope)
 
 
 @router.get("/me/wallpaper")
 async def get_my_wallpaper(
-    scope: UserScope = Depends(get_current_user_scope),
+    scope: UserScope = Depends(get_media_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
     service = PreferencesService(container)
@@ -119,8 +156,11 @@ async def get_my_wallpaper(
 )
 async def delete_my_wallpaper(
     scope: UserScope = Depends(get_current_user_scope),
+    idem_key: str = Depends(require_idempotency_key),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     service = PreferencesService(container)
-    await service.delete_wallpaper(scope)
+    hit = await service.delete_wallpaper(scope, idem_key=idem_key)
+    if hit is not None:
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

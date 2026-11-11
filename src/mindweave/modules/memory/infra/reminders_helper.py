@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from lunar_python import Lunar
+from lunar_python import Lunar, LunarMonth, LunarYear, Solar
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,17 +38,27 @@ def _resolve_next_lunar_solar_date(
 ) -> date | None:
     if not (1 <= lunar_month <= 12 and 1 <= lunar_day <= 30):
         return None
-    for year_offset in range(0, 4):
-        yr = today_local.year + year_offset
-        candidate_months = [-lunar_month, lunar_month] if is_leap_month else [lunar_month]
-        for m in candidate_months:
-            try:
-                solar = Lunar.fromYmd(yr, m, lunar_day).getSolar()
-                cand = date(solar.getYear(), solar.getMonth(), solar.getDay())
-                if cand >= today_local:
-                    return cand
-            except ValueError:
+    base_lunar_year = (
+        Solar.fromYmd(today_local.year, today_local.month, today_local.day).getLunar().getYear()
+    )
+    for year_offset in range(-1, 5):
+        ly = base_lunar_year + year_offset
+        try:
+            ly_obj = LunarYear.fromYear(ly)
+            leap_m = int(ly_obj.getLeapMonth())
+            month_arg = -lunar_month if (is_leap_month and leap_m == lunar_month) else lunar_month
+            lm = LunarMonth.fromYm(ly, month_arg)
+            if lm is None:
+                lm = LunarMonth.fromYm(ly, lunar_month)
+            if lm is None:
                 continue
+            clamped_day = min(lunar_day, int(lm.getDayCount()))
+            solar = Lunar.fromYmd(ly, int(lm.getMonth()), clamped_day).getSolar()
+            cand = date(solar.getYear(), solar.getMonth(), solar.getDay())
+            if cand >= today_local:
+                return cand
+        except ValueError:
+            continue
     return None
 
 
@@ -187,6 +197,7 @@ async def upsert_reminder_for_fact(
             ReminderRow.fact_id == fact.id,
         )
     )
+    local_today = now.astimezone(ZoneInfo(tz_name)).date()
     # When capture is unconfirmed (`proposed`), only create reminder when date/lunar is present;
     # when confirmed (`active`), create/update if date/lunar is present (or fallback +1 day for promise without explicit date).
     effective_trigger_date = fact.trigger_date
@@ -194,7 +205,6 @@ async def upsert_reminder_for_fact(
         if desired_status is ReminderStatus.PROPOSED:
             return existing
         # Confirmed promise/date without explicit date defaults to tomorrow 09:00 so user gets reminded
-        local_today = now.astimezone(ZoneInfo(tz_name)).date()
         effective_trigger_date = local_today + timedelta(days=1)
 
     rule = infer_reminder_rule(fact.type, fact_content, is_lunar=fact.is_lunar)
@@ -205,6 +215,15 @@ async def upsert_reminder_for_fact(
     if fact.is_lunar and fact.lunar_month is not None and fact.lunar_day is not None:
         target_month = fact.lunar_month
         target_day = fact.lunar_day
+        if rule is ReminderRule.ONCE:
+            once_date = effective_trigger_date or _resolve_next_lunar_solar_date(
+                lunar_month=fact.lunar_month,
+                lunar_day=fact.lunar_day,
+                is_leap_month=fact.lunar_is_leap_month,
+                today_local=local_today,
+            )
+            if once_date is None:
+                once_date = local_today + timedelta(days=1)
     elif effective_trigger_date is not None:
         if rule is ReminderRule.YEARLY:
             target_month = effective_trigger_date.month

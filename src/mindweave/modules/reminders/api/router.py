@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from mindweave.core.dependencies import (
@@ -112,14 +112,35 @@ async def list_devices(
 
 @router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_device(
+    request: Request,
     device_id: str,
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
+    idem_key: str = Depends(require_idempotency_key),
 ) -> Response:
     did = parse_uuid_param(device_id, field_name="deviceId")
+    req_hash = hash_request_payload({"action": "delete_device", "deviceId": str(did)})
     service = ReminderService(container)
     async with container.db.user_session(scope) as session:
+        idem_row, hit = await container.idempotency.claim_or_replay(
+            session,
+            scope=scope,
+            idem_key=idem_key,
+            method="DELETE",
+            path=str(request.url.path),
+            request_hash=req_hash,
+        )
+        if hit is not None:
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
         await service.delete_device(session, scope, did)
+        assert idem_row is not None
+        await container.idempotency.complete(
+            session,
+            idem_row,
+            status_code=status.HTTP_204_NO_CONTENT,
+            response_body={"deleted": True},
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -127,6 +148,7 @@ async def delete_device(
 async def list_reminders(
     reminder_status: ReminderStatus | None = Query(default=None, alias="status"),
     person_id: UUID | None = Query(default=None, alias="personId"),
+    include_archived: bool = Query(default=False, alias="includeArchived"),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=100),
     scope: UserScope = Depends(get_current_user_scope),
@@ -139,6 +161,7 @@ async def list_reminders(
             scope,
             status=reminder_status,
             person_id=person_id,
+            include_archived=include_archived,
             cursor=cursor,
             limit=limit,
         )
@@ -226,11 +249,10 @@ async def patch_reminder(
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
     expected_version: int | None = Depends(parse_if_match_version),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
 ) -> JSONResponse:
     rid = parse_uuid_param(reminder_id, field_name="reminderId")
     service = ReminderService(container)
-    cleaned_idem = idempotency_key.strip() if idempotency_key and idempotency_key.strip() else None
     req_hash = hash_request_payload(
         {
             "body": body.model_dump(mode="json", by_alias=True, exclude_unset=True),
@@ -239,23 +261,21 @@ async def patch_reminder(
     )
 
     async with container.db.user_session(scope) as session:
-        idem_row = None
-        if cleaned_idem is not None:
-            idem_row, hit = await container.idempotency.claim_or_replay(
-                session,
-                scope=scope,
-                idem_key=cleaned_idem,
-                method="PATCH",
-                path=str(request.url.path),
-                request_hash=req_hash,
+        idem_row, hit = await container.idempotency.claim_or_replay(
+            session,
+            scope=scope,
+            idem_key=idem_key,
+            method="PATCH",
+            path=str(request.url.path),
+            request_hash=req_hash,
+        )
+        if hit is not None:
+            replay_ver = int(hit.response_body.get("version", 1))
+            return JSONResponse(
+                status_code=hit.status_code,
+                content=hit.response_body,
+                headers=_etag_headers(replay_ver),
             )
-            if hit is not None:
-                replay_ver = int(hit.response_body.get("version", 1))
-                return JSONResponse(
-                    status_code=hit.status_code,
-                    content=hit.response_body,
-                    headers=_etag_headers(replay_ver),
-                )
 
         updated = await service.update_reminder(
             session,
@@ -279,13 +299,13 @@ async def patch_reminder(
         )
         dto = ReminderResponse.from_domain(updated)
         payload = dto.model_dump(mode="json", by_alias=True)
-        if idem_row is not None:
-            await container.idempotency.complete(
-                session,
-                idem_row,
-                status_code=status.HTTP_200_OK,
-                response_body=payload,
-            )
+        assert idem_row is not None
+        await container.idempotency.complete(
+            session,
+            idem_row,
+            status_code=status.HTTP_200_OK,
+            response_body=payload,
+        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content=payload,
@@ -295,24 +315,57 @@ async def patch_reminder(
 
 @router.delete("/reminders/{reminder_id}", response_model=ReminderResponse)
 async def delete_reminder(
+    request: Request,
     reminder_id: str,
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
     expected_version: int | None = Depends(parse_if_match_version),
+    idem_key: str = Depends(require_idempotency_key),
 ) -> JSONResponse:
     rid = parse_uuid_param(reminder_id, field_name="reminderId")
+    req_hash = hash_request_payload(
+        {
+            "action": "delete_reminder",
+            "reminderId": str(rid),
+            "ifMatch": expected_version,
+        }
+    )
     service = ReminderService(container)
     async with container.db.user_session(scope) as session:
+        idem_row, hit = await container.idempotency.claim_or_replay(
+            session,
+            scope=scope,
+            idem_key=idem_key,
+            method="DELETE",
+            path=str(request.url.path),
+            request_hash=req_hash,
+        )
+        if hit is not None:
+            replay_ver = int(hit.response_body.get("version", 1))
+            return JSONResponse(
+                status_code=hit.status_code,
+                content=hit.response_body,
+                headers=_etag_headers(replay_ver),
+            )
+
         cancelled = await service.cancel_reminder(
             session,
             scope,
             rid,
             expected_version=expected_version,
         )
-    dto = ReminderResponse.from_domain(cancelled)
+        dto = ReminderResponse.from_domain(cancelled)
+        payload = dto.model_dump(mode="json", by_alias=True)
+        assert idem_row is not None
+        await container.idempotency.complete(
+            session,
+            idem_row,
+            status_code=status.HTTP_200_OK,
+            response_body=payload,
+        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
-        content=dto.model_dump(mode="json", by_alias=True),
+        content=payload,
         headers=_etag_headers(dto.version),
     )
 

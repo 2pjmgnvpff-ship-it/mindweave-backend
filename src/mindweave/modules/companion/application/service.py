@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import json
 import re
@@ -37,7 +39,9 @@ from mindweave.modules.companion.domain.citation_processor import (
 )
 from mindweave.modules.companion.domain.output_guard import (
     FALLBACK_SAFE_REPLY,
-    StreamingOutputGuard,
+    SILVER_LOYAL_FALLBACK_REPLY,
+    SentenceBufferedStreamGuard,
+    StreamingReplyExtractor,
     sanitize_companion_output,
     sanitize_text,
 )
@@ -76,7 +80,6 @@ def format_sse_event(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
-_TAGGED_REPLY_RE = re.compile(r"<reply>(.*?)</reply>", re.DOTALL | re.IGNORECASE)
 _TAGGED_WHISPER_RE = re.compile(r"<whisper>(.*?)</whisper>", re.DOTALL | re.IGNORECASE)
 _TAGGED_PERSPECTIVES_RE = re.compile(
     r"<perspectives>(.*?)</perspectives>", re.DOTALL | re.IGNORECASE
@@ -219,11 +222,42 @@ class CompanionService:
             has_more=has_more,
         )
 
-    async def clear_history(self, *, scope: PersonScope) -> ClearChatHistoryResponse:
+    async def clear_history(
+        self,
+        *,
+        scope: PersonScope,
+        idem_key: str | None = None,
+        idem_path: str = "",
+    ) -> ClearChatHistoryResponse:
         now = self._container.clock.now()
         async with self._container.db.user_session(scope.user_scope) as session:
+            idem_row: IdempotencyKeyRow | None = None
+            if idem_key is not None:
+                effective_path = idem_path or f"/v1/persons/{scope.person_id}/chat/messages"
+                req_hash = hash_request_payload(
+                    {"personId": str(scope.person_id), "action": "clear_chat_history"}
+                )
+                idem_row, hit = await self._container.idempotency.claim_or_replay(
+                    session,
+                    scope=scope.user_scope,
+                    idem_key=idem_key,
+                    method="DELETE",
+                    path=effective_path,
+                    request_hash=req_hash,
+                )
+                if hit is not None:
+                    return ClearChatHistoryResponse.model_validate(hit.response_body)
+
             deleted = await self._repo.clear_history(session, scope=scope, now=now)
-        return ClearChatHistoryResponse(person_id=scope.person_id, deleted_count=deleted)
+            resp = ClearChatHistoryResponse(person_id=scope.person_id, deleted_count=deleted)
+            if idem_row is not None:
+                await self._container.idempotency.complete(
+                    session,
+                    idem_row,
+                    status_code=200,
+                    response_body=resp.model_dump(mode="json", by_alias=True),
+                )
+            return resp
 
     def _hydrate_citations(
         self,
@@ -489,7 +523,7 @@ class CompanionService:
             user_message=raw_message,
             safety_category=prepared.safety_decision.category,
         )
-        sanitized, _report = sanitize_companion_output(policed)
+        sanitized, _report = sanitize_companion_output(policed, tier=ctx.tier)
 
         # Append SOP late-night rest care whisper if continuous session threshold met
         final_whisper = append_late_night_whisper(
@@ -619,18 +653,42 @@ class CompanionService:
             return turn_resp
 
     async def _release_failed_idempotency(
-        self, scope: PersonScope, idem_row_id: UUID | None
+        self,
+        scope: PersonScope,
+        idem_row_id: UUID | None,
+        *,
+        idem_key: str | None = None,
+        idem_path: str = "",
     ) -> None:
-        if idem_row_id is None:
+        if idem_key is None and idem_row_id is None:
             return
-        async with self._container.db.user_session(scope.user_scope) as session:
-            await session.execute(
-                delete(IdempotencyKeyRow).where(
-                    IdempotencyKeyRow.user_id == scope.user_id,
-                    IdempotencyKeyRow.id == idem_row_id,
-                    IdempotencyKeyRow.status == "in_progress",
-                )
-            )
+
+        async def _do_release() -> None:
+            async with self._container.db.user_session(scope.user_scope) as sess:
+                if idem_key is not None and idem_path:
+                    await self._container.idempotency.release(
+                        sess,
+                        scope=scope.user_scope,
+                        idem_key=idem_key,
+                        method="POST",
+                        path=idem_path,
+                    )
+                elif idem_row_id is not None:
+                    await sess.execute(
+                        delete(IdempotencyKeyRow).where(
+                            IdempotencyKeyRow.user_id == scope.user_id,
+                            IdempotencyKeyRow.id == idem_row_id,
+                            IdempotencyKeyRow.status == "in_progress",
+                        )
+                    )
+
+        cleanup_task = asyncio.create_task(_do_release())
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                await cleanup_task
+            raise
 
     async def send_message_json(
         self,
@@ -695,7 +753,12 @@ class CompanionService:
             except Exception as exc:
                 call_exc = exc
         if call_exc is not None:
-            await self._release_failed_idempotency(scope, prepared.idem_row_id)
+            await self._release_failed_idempotency(
+                scope,
+                prepared.idem_row_id,
+                idem_key=idem_key,
+                idem_path=idem_path,
+            )
             raise call_exc
         assert raw_out is not None
 
@@ -823,14 +886,30 @@ class CompanionService:
             assert prepared.safety_decision is not None
             ctx = prepared.context
 
+            reply_extractor = StreamingReplyExtractor()
             citation_proc = StreamingCitationProcessor(ctx.allowed_record_ids)
-            guard_stream = StreamingOutputGuard()
+            sentence_guard = SentenceBufferedStreamGuard(tier=ctx.tier)
             emitted_chunks: list[str] = []
-            raw_accum: list[str] = []
-            mode_decided = False
-            tagged_xml_mode = False
+            reply_stream_finalized = False
+            stream_completed = False
+            stream_released = False
             prompt_ver: str | None = "ask_relationship_stream"
             sidecar_output: CompanionChatOutput | None = None
+
+            def _citation_sse(cit: VerifiedCitation) -> str | None:
+                meta = ctx.record_catalog.get(cit.record_id)
+                if meta is None:
+                    return None
+                return format_sse_event(
+                    "citation",
+                    {
+                        "index": cit.index,
+                        "materialId": str(cit.record_id),
+                        "title": meta.title,
+                        "snippet": meta.snippet,
+                        "happenedOn": meta.happened_on,
+                    },
+                )
 
             try:
                 # On SafetyCategory.ILLEGAL_INTENT, immediately emit SOP §1.2 protective pull-back
@@ -853,46 +932,34 @@ class CompanionService:
                         async for raw_chunk in stream_iter:
                             if not raw_chunk:
                                 continue
-                            raw_accum.append(raw_chunk)
 
-                            if not mode_decided:
-                                joined_start = "".join(raw_accum).lstrip()
-                                if not joined_start:
-                                    continue
-                                if len(joined_start) < 7 and "<reply>".startswith(
-                                    joined_start.lower()
-                                ):
-                                    continue
-                                mode_decided = True
-                                if joined_start.lower().startswith("<reply>"):
-                                    tagged_xml_mode = True
-                                    continue
-                                # Flush buffered initial plain-text chunks
-                                to_feed = "".join(raw_accum)
-                            else:
-                                if tagged_xml_mode:
-                                    continue
-                                to_feed = raw_chunk
+                            decoded_body = reply_extractor.feed(raw_chunk)
+                            if decoded_body:
+                                step = citation_proc.feed(decoded_body)
+                                safe_delta = sentence_guard.feed(step.delta_text)
+                                if safe_delta:
+                                    emitted_chunks.append(safe_delta)
+                                    yield format_sse_event("delta", {"text": safe_delta})
 
-                            step = citation_proc.feed(to_feed)
-                            safe_delta = guard_stream.feed(step.delta_text)
-                            if safe_delta:
-                                emitted_chunks.append(safe_delta)
-                                yield format_sse_event("delta", {"text": safe_delta})
+                                for cit in step.new_citations:
+                                    cit_frame = _citation_sse(cit)
+                                    if cit_frame is not None:
+                                        yield cit_frame
 
-                            for cit in step.new_citations:
-                                meta = ctx.record_catalog.get(cit.record_id)
-                                if meta is not None:
-                                    yield format_sse_event(
-                                        "citation",
-                                        {
-                                            "index": cit.index,
-                                            "materialId": str(cit.record_id),
-                                            "title": meta.title,
-                                            "snippet": meta.snippet,
-                                            "happenedOn": meta.happened_on,
-                                        },
-                                    )
+                            if reply_extractor.reply_closed and not reply_stream_finalized:
+                                reply_stream_finalized = True
+                                fin_cit = citation_proc.finalize()
+                                tail_safe = (
+                                    sentence_guard.feed(fin_cit.delta_text)
+                                    + sentence_guard.finalize()
+                                )
+                                if tail_safe:
+                                    emitted_chunks.append(tail_safe)
+                                    yield format_sse_event("delta", {"text": tail_safe})
+                                for cit in fin_cit.new_citations:
+                                    cit_frame = _citation_sse(cit)
+                                    if cit_frame is not None:
+                                        yield cit_frame
 
                         sidecar_output = getattr(stream_iter, "companion_output", None) or getattr(
                             gateway, "last_companion_output", None
@@ -905,137 +972,78 @@ class CompanionService:
                         )
                         sidecar_output = gen_out
                         step = citation_proc.feed(gen_out.reply_text)
-                        safe_delta = guard_stream.feed(step.delta_text)
+                        safe_delta = sentence_guard.feed(step.delta_text)
                         if safe_delta:
                             emitted_chunks.append(safe_delta)
                             yield format_sse_event("delta", {"text": safe_delta})
                         for cit in step.new_citations:
-                            meta = ctx.record_catalog.get(cit.record_id)
-                            if meta is not None:
-                                yield format_sse_event(
-                                    "citation",
-                                    {
-                                        "index": cit.index,
-                                        "materialId": str(cit.record_id),
-                                        "title": meta.title,
-                                        "snippet": meta.snippet,
-                                        "happenedOn": meta.happened_on,
-                                    },
-                                )
+                            cit_frame = _citation_sse(cit)
+                            if cit_frame is not None:
+                                yield cit_frame
                     except Exception as exc:
                         stream_exc = exc
 
                 if stream_exc is not None:
                     raise stream_exc
 
-                if tagged_xml_mode:
-                    full_tagged = "".join(raw_accum)
-                    reply_match = _TAGGED_REPLY_RE.search(full_tagged)
-                    reply_body = reply_match.group(1) if reply_match else full_tagged
-                    step1 = citation_proc.feed(reply_body)
-                    step2 = citation_proc.finalize()
-                    combined_delta = (
-                        guard_stream.feed(step1.delta_text + step2.delta_text)
-                        + guard_stream.finalize()
-                    )
-                    if combined_delta:
-                        emitted_chunks.append(combined_delta)
-                        yield format_sse_event("delta", {"text": combined_delta})
-                    for cit in (*step1.new_citations, *step2.new_citations):
-                        meta = ctx.record_catalog.get(cit.record_id)
-                        if meta is not None:
-                            yield format_sse_event(
-                                "citation",
-                                {
-                                    "index": cit.index,
-                                    "materialId": str(cit.record_id),
-                                    "title": meta.title,
-                                    "snippet": meta.snippet,
-                                    "happenedOn": meta.happened_on,
-                                },
-                            )
-
-                    w_match = _TAGGED_WHISPER_RE.search(full_tagged)
-                    p_match = _TAGGED_PERSPECTIVES_RE.search(full_tagged)
-                    s_match = _TAGGED_SUGGESTIONS_RE.search(full_tagged)
-                    sidecar_output = CompanionChatOutput(
-                        safety_flag=prepared.safety_decision.category,
-                        reply_text="".join(emitted_chunks),
-                        whisper_note=w_match.group(1).strip() if w_match else None,
-                        cited_record_ids=citation_proc.verified_record_ids,
-                        has_unrecorded_gap=not bool(
-                            ctx.chat_input.confirmed_facts or ctx.chat_input.referenced_materials
-                        ),
-                        alternative_perspectives=(
-                            _split_tag_items(p_match.group(1)) if p_match else []
-                        ),
-                        actionable_suggestions=(
-                            _split_tag_items(s_match.group(1)) if s_match else []
-                        ),
-                    )
-                else:
-                    if not mode_decided and raw_accum:
-                        step_rem = citation_proc.feed("".join(raw_accum))
-                        safe_rem = guard_stream.feed(step_rem.delta_text)
-                        if safe_rem:
-                            emitted_chunks.append(safe_rem)
-                            yield format_sse_event("delta", {"text": safe_rem})
-                        for cit in step_rem.new_citations:
-                            meta = ctx.record_catalog.get(cit.record_id)
-                            if meta is not None:
-                                yield format_sse_event(
-                                    "citation",
-                                    {
-                                        "index": cit.index,
-                                        "materialId": str(cit.record_id),
-                                        "title": meta.title,
-                                        "snippet": meta.snippet,
-                                        "happenedOn": meta.happened_on,
-                                    },
-                                )
-
+                if not reply_stream_finalized:
+                    reply_stream_finalized = True
+                    rem_body = reply_extractor.finalize()
+                    step_rem = citation_proc.feed(rem_body)
                     fin_step = citation_proc.finalize()
-                    tail_delta = guard_stream.feed(fin_step.delta_text) + guard_stream.finalize()
+                    tail_delta = (
+                        sentence_guard.feed(step_rem.delta_text + fin_step.delta_text)
+                        + sentence_guard.finalize()
+                    )
                     if tail_delta:
                         emitted_chunks.append(tail_delta)
                         yield format_sse_event("delta", {"text": tail_delta})
 
-                    for cit in fin_step.new_citations:
-                        meta = ctx.record_catalog.get(cit.record_id)
-                        if meta is not None:
-                            yield format_sse_event(
-                                "citation",
-                                {
-                                    "index": cit.index,
-                                    "materialId": str(cit.record_id),
-                                    "title": meta.title,
-                                    "snippet": meta.snippet,
-                                    "happenedOn": meta.happened_on,
-                                },
-                            )
+                    for cit in (*step_rem.new_citations, *fin_step.new_citations):
+                        cit_frame = _citation_sse(cit)
+                        if cit_frame is not None:
+                            yield cit_frame
 
                 assembled_reply = "".join(emitted_chunks).strip()
                 if not assembled_reply:
-                    assembled_reply = FALLBACK_SAFE_REPLY
+                    assembled_reply = (
+                        SILVER_LOYAL_FALLBACK_REPLY
+                        if ctx.tier is Tier.SILVER
+                        else FALLBACK_SAFE_REPLY
+                    )
                     yield format_sse_event("delta", {"text": assembled_reply})
+
+                if reply_extractor.used_xml_tags and sidecar_output is None:
+                    tail_tags = reply_extractor.tail_text
+                    w_match = _TAGGED_WHISPER_RE.search(tail_tags)
+                    p_match = _TAGGED_PERSPECTIVES_RE.search(tail_tags)
+                    s_match = _TAGGED_SUGGESTIONS_RE.search(tail_tags)
+                    if w_match or p_match or s_match:
+                        sidecar_output = CompanionChatOutput(
+                            safety_flag=prepared.safety_decision.category,
+                            reply_text=assembled_reply,
+                            whisper_note=w_match.group(1).strip() if w_match else None,
+                            cited_record_ids=citation_proc.verified_record_ids,
+                            has_unrecorded_gap=not bool(
+                                ctx.chat_input.confirmed_facts
+                                or ctx.chat_input.referenced_materials
+                            ),
+                            alternative_perspectives=(
+                                _split_tag_items(p_match.group(1)) if p_match else []
+                            ),
+                            actionable_suggestions=(
+                                _split_tag_items(s_match.group(1)) if s_match else []
+                            ),
+                        )
 
                 if isinstance(sidecar_output, CompanionChatOutput):
                     extra_cits = citation_proc.merge_declared_citations(
                         sidecar_output.cited_record_ids
                     )
                     for cit in extra_cits:
-                        meta = ctx.record_catalog.get(cit.record_id)
-                        if meta is not None:
-                            yield format_sse_event(
-                                "citation",
-                                {
-                                    "index": cit.index,
-                                    "materialId": str(cit.record_id),
-                                    "title": meta.title,
-                                    "snippet": meta.snippet,
-                                    "happenedOn": meta.happened_on,
-                                },
-                            )
+                        cit_frame = _citation_sse(cit)
+                        if cit_frame is not None:
+                            yield cit_frame
                     candidate_output = sidecar_output.model_copy(
                         update={
                             "reply_text": assembled_reply,
@@ -1057,6 +1065,7 @@ class CompanionService:
                     citations=citation_proc.verified_citations,
                     prompt_version=prompt_ver,
                 )
+                stream_completed = True
 
                 asst = persisted_turn.assistant_message
                 if asst.whisper_note:
@@ -1079,13 +1088,25 @@ class CompanionService:
                     },
                 )
             except AppError as exc:
-                await self._release_failed_idempotency(scope, prepared.idem_row_id)
+                await self._release_failed_idempotency(
+                    scope,
+                    prepared.idem_row_id,
+                    idem_key=idem_key,
+                    idem_path=idem_path,
+                )
+                stream_released = True
                 yield format_sse_event(
                     "error",
                     {"code": exc.error_code, "detail": exc.detail},
                 )
             except Exception:
-                await self._release_failed_idempotency(scope, prepared.idem_row_id)
+                await self._release_failed_idempotency(
+                    scope,
+                    prepared.idem_row_id,
+                    idem_key=idem_key,
+                    idem_path=idem_path,
+                )
+                stream_released = True
                 yield format_sse_event(
                     "error",
                     {
@@ -1093,5 +1114,14 @@ class CompanionService:
                         "detail": "Companion stream interrupted; please retry.",
                     },
                 )
+            finally:
+                if not stream_completed and not stream_released:
+                    await self._release_failed_idempotency(
+                        scope,
+                        prepared.idem_row_id,
+                        idem_key=idem_key,
+                        idem_path=idem_path,
+                    )
+                    stream_released = True
 
         return _stream_gen()

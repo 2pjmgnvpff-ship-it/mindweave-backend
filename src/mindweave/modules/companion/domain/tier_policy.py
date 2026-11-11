@@ -525,6 +525,7 @@ def decide_chat_writeback_gate(
     tier: Tier,
     person_state: PersonState,
     source_speaker: SourceSpeaker,
+    polarity_flipped: bool = False,
     extraction_ok: bool = True,
     confidence_threshold: float = 0.80,
 ) -> tuple[FactStatus, PendingReason | None]:
@@ -543,6 +544,8 @@ def decide_chat_writeback_gate(
         return FactStatus.PENDING, PendingReason.VENTING
     if source_speaker is SourceSpeaker.UNKNOWN:
         return FactStatus.PENDING, PendingReason.SPEAKER_UNKNOWN
+    if polarity_flipped:
+        return FactStatus.PENDING, PendingReason.POLARITY_FLIP
     if confidence < confidence_threshold:
         return FactStatus.PENDING, PendingReason.LOW_CONFIDENCE
     return FactStatus.CONFIRMED, None

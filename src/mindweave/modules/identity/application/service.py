@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from mindweave.core.dependencies import AppContainer
 from mindweave.core.errors import (
     ForbiddenError,
+    RateLimitedError,
     UnauthorizedError,
     ValidationFailedError,
 )
@@ -90,7 +91,7 @@ class IdentityService:
     """Orchestrates authentication, user provisioning, token family rotation, and PIPL consents."""
 
     OTP_RATE_LIMIT_CAPACITY: int = 5
-    OTP_RATE_LIMIT_REFILL_PER_SEC: float = 1.0 / 60.0
+    OTP_RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     def __init__(
         self,
@@ -167,13 +168,7 @@ class IdentityService:
         email_hmac = hash_contact_lookup(
             normalized_email, secret=self._container.settings.jwt_secret
         )
-        self._container.rate_limiter.check(
-            f"email_otp_req:{email_hmac.hex()}",
-            capacity=self.OTP_RATE_LIMIT_CAPACITY,
-            refill_per_second=self.OTP_RATE_LIMIT_REFILL_PER_SEC,
-        )
 
-        now = self._container.clock.now()
         ttl_seconds = self._container.settings.otp_ttl_seconds
         challenge_id = new_id()
         otp_code = generate_six_digit_otp()
@@ -184,6 +179,29 @@ class IdentityService:
         )
 
         async with self._container.db.system_session() as sys_sess:
+            await self._sys_repo.acquire_email_otp_advisory_lock(
+                sys_sess,
+                email_hmac=email_hmac,
+            )
+            now = self._container.clock.now()
+            window_start = now - timedelta(seconds=self.OTP_RATE_LIMIT_WINDOW_SECONDS)
+            recent_count = await self._sys_repo.count_recent_otp_challenges(
+                sys_sess,
+                email_hmac=email_hmac,
+                window_start=window_start,
+            )
+            if recent_count >= self.OTP_RATE_LIMIT_CAPACITY:
+                raise RateLimitedError(
+                    "Rate limit exceeded. Please slow down and try again shortly.",
+                    extensions={"retryAfterSeconds": self.OTP_RATE_LIMIT_WINDOW_SECONDS},
+                )
+
+            await self._sys_repo.invalidate_unconsumed_otp_challenges(
+                sys_sess,
+                email_hmac=email_hmac,
+                purpose=purpose,
+                now=now,
+            )
             await self._sys_repo.create_otp_challenge(
                 sys_sess,
                 challenge_id=challenge_id,

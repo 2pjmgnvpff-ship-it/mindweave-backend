@@ -14,6 +14,7 @@ from mindweave.modules.reminders.domain.schedule import (
     compute_next_fire_slot,
     normalize_lead_days,
     resolve_lunar_yearly_date,
+    resolve_next_lunar_occurrence_date,
     resolve_solar_yearly_date,
     validate_timezone_name,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "compute_next_fire_slot",
     "normalize_lead_days",
     "resolve_lunar_yearly_date",
+    "resolve_next_lunar_occurrence_date",
     "resolve_solar_yearly_date",
     "validate_push_copy_safety",
     "validate_timezone_name",

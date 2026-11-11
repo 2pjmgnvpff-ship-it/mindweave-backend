@@ -348,3 +348,66 @@ def test_one_time_download_token_constant_time_and_expiry_rules() -> None:
         )
         == "export_not_ready"
     )
+
+
+def test_unassigned_person_placeholder_excluded_from_export_persons_and_journal() -> None:
+    sections = {
+        "persons": [
+            {
+                "id": "p-unassigned",
+                "slug": "__unassigned__",
+                "tier": "crystal",
+                "rank": "zzzz",
+                "displayName": "待归档",
+            },
+            {
+                "id": "p-gold",
+                "slug": "shen-qingqiu",
+                "tier": "gold",
+                "rank": "a",
+                "displayName": "沈清秋",
+            },
+        ],
+        "personAliases": [
+            {"id": "al-0", "personId": "p-unassigned", "alias": "待归档"},
+            {"id": "al-1", "personId": "p-gold", "alias": "清秋"},
+        ],
+        "materials": [
+            {
+                "id": "rec-unassigned",
+                "personId": "p-unassigned",
+                "kind": "note",
+                "title": "随口一提",
+                "body": "她不能吃香菜",
+                "happenedOn": "2026-11-11",
+            }
+        ],
+        "facts": [
+            {
+                "id": "fact-unassigned",
+                "personId": "p-unassigned",
+                "type": "taboo",
+                "status": "pending",
+                "content": "不能吃香菜",
+                "triggerDate": None,
+            }
+        ],
+        "reminders": [],
+        "chatMessages": [],
+    }
+    bundle = package_export_zip(
+        export_id="exp-rt01",
+        user_id="user-rt01",
+        exported_at_iso="2026-11-12T04:00:00+00:00",
+        sections=sections,
+        media_items=[],
+    )
+    assert [p["slug"] for p in bundle.data_json["persons"]] == ["shen-qingqiu"]
+    assert [a["alias"] for a in bundle.data_json["personAliases"]] == ["清秋"]
+    assert bundle.data_json["materials"][0]["personId"] is None
+    assert bundle.data_json["facts"][0]["personId"] is None
+    assert "### 待归档" not in bundle.journal_markdown
+    assert "__unassigned__" not in bundle.journal_markdown
+    assert "- 收录人物：1 位" in bundle.journal_markdown
+    assert "## 未归属随手记" in bundle.journal_markdown
+    assert "她不能吃香菜" in bundle.journal_markdown

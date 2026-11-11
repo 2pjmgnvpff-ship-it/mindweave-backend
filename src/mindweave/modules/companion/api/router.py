@@ -14,7 +14,6 @@ from mindweave.core.dependencies import (
     parse_uuid_param,
     require_idempotency_key,
 )
-from mindweave.core.errors import BadRequestError, ValidationFailedError
 from mindweave.modules.companion.api.dto import (
     ChatMessagePage,
     ChatTurnResponse,
@@ -43,17 +42,6 @@ def _should_stream(stream_param: bool | None, accept_header: str | None) -> bool
     if "application/json" in accept:
         return False
     return True
-
-
-def _optional_idempotency_key(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    cleaned = raw.strip()
-    if not cleaned:
-        raise BadRequestError("Idempotency-Key header must not be empty when provided")
-    if len(cleaned) > 128:
-        raise ValidationFailedError("Idempotency-Key exceeds 128 characters")
-    return cleaned
 
 
 @router.get(
@@ -131,12 +119,11 @@ async def stream_person_chat_v10(
     person_id: str,
     body: StreamChatRequest,
     request: Request,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idem_key: str = Depends(require_idempotency_key),
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
     pid = parse_uuid_param(person_id, field_name="personId")
-    idem_key = _optional_idempotency_key(idempotency_key)
     svc = CompanionService(container)
     sse_iter = await svc.prepare_sse_stream(
         scope=scope.person(pid),
@@ -160,9 +147,15 @@ async def stream_person_chat_v10(
 )
 async def clear_person_chat_messages(
     person_id: str,
+    request: Request,
+    idem_key: str = Depends(require_idempotency_key),
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> ClearChatHistoryResponse:
     pid = parse_uuid_param(person_id, field_name="personId")
     svc = CompanionService(container)
-    return await svc.clear_history(scope=scope.person(pid))
+    return await svc.clear_history(
+        scope=scope.person(pid),
+        idem_key=idem_key,
+        idem_path=str(request.url.path),
+    )

@@ -748,5 +748,206 @@ def test_fake_adapter_screenshot_spatial_attribution_and_metering_helpers() -> N
     assert user_self_facts[0].fact_type is FactType.PROMISE
 
 
+# ============================================================================
+# 7. Round 1 Red-Team Audit Regression Tests (RT-05, P0-5, RT-10, P2-3)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("我 想 自 杀，真的撑不下去了", SafetyCategory.CRISIS),
+        ("门窗都封好了，今晚准备烧炭走了", SafetyCategory.CRISIS),
+        ("我\u200b想\u200c自\ufeff杀，活\u2060不\u200d下去了", SafetyCategory.CRISIS),
+        ("买好了炭·盆，准备封死门窗吸一氧化碳", SafetyCategory.CRISIS),
+        ("整瓶安眠药都已经吞下去了", SafetyCategory.CRISIS),
+        ("老 公 动 手 打 我，救命", SafetyCategory.VIOLENCE_VICTIM),
+        # Colloquial hyperbole & benign cooking/weather must stay 0% false positive!
+        ("加班改PPT烦死了哈哈", SafetyCategory.NORMAL),
+        ("气死我了", SafetyCategory.NORMAL),
+        ("笑死", SafetyCategory.NORMAL),
+        ("台风天记得把家里门窗封好防漏雨", SafetyCategory.NORMAL),
+    ],
+)
+def test_rt05_l1_safety_whitespace_zerowidth_and_charcoal_crisis(
+    text: str, expected: SafetyCategory
+) -> None:
+    engine = L1SafetyEngine()
+    res = engine.evaluate(text)
+    assert res.category is expected, f"Got {res.category} ({res.matched_rule}) for {text!r}"
+
+
+def test_rt10_nested_bracket_citation_stripping_and_inline_backtick_code_spans() -> None:
+    valid_id = new_id()
+    bogus_id = new_id()
+
+    # 1. Nested bracket citation stripping with tuple `declared_record_ids=()`
+    nested_input = f"她不能吃海鲜 [重点：忌口 [rec_{valid_id}] 必看]。"
+    res = validate_citations(
+        nested_input,
+        declared_record_ids=(),
+        allowed_record_ids={valid_id},
+        strip_valid_tags=True,
+    )
+    assert f"rec_{valid_id}" not in res.cleaned_text
+    assert res.cleaned_text == "她不能吃海鲜 [重点：忌口 必看]。"
+    assert res.valid_record_ids == [valid_id]
+
+    # Streaming 1-char-at-a-time must produce identical nested-bracket output
+    proc_nested = StreamingCitationProcessor(
+        allowed_record_ids={valid_id},
+        strip_valid_tags=True,
+    )
+    streamed_nested = "".join(proc_nested.feed(ch) for ch in nested_input) + proc_nested.flush()
+    assert f"rec_{valid_id}" not in streamed_nested
+    assert streamed_nested == "她不能吃海鲜 [重点：忌口 必看]。"
+    assert proc_nested.verified_record_ids == [valid_id]
+
+    # 2. Inline single-backtick and fenced triple-backtick code spans are skipped untouched
+    code_mixed = (
+        f"请勿输出 `[rec_{bogus_id}]` 字样，真实记录 [rec_{valid_id}]，"
+        f"代码块：\n```text\n[rec_{bogus_id}]\n```\n完毕。"
+    )
+    res_code = validate_citations(
+        code_mixed,
+        declared_record_ids=(),
+        allowed_record_ids={valid_id},
+        strip_valid_tags=True,
+    )
+    assert f"`[rec_{bogus_id}]`" in res_code.cleaned_text
+    assert f"```text\n[rec_{bogus_id}]\n```" in res_code.cleaned_text
+    assert f"真实记录 [rec_{valid_id}]" not in res_code.cleaned_text
+    assert res_code.valid_record_ids == [valid_id]
+    assert res_code.stripped_tags == []
+
+    proc_code = StreamingCitationProcessor(
+        allowed_record_ids={valid_id},
+        strip_valid_tags=True,
+    )
+    streamed_code = "".join(proc_code.feed(ch) for ch in code_mixed) + proc_code.flush()
+    assert f"`[rec_{bogus_id}]`" in streamed_code
+    assert f"```text\n[rec_{bogus_id}]\n```" in streamed_code
+    assert f"[rec_{valid_id}]" not in streamed_code
+    assert proc_code.verified_record_ids == [valid_id]
+    assert proc_code.stripped_tags == []
+
+
+def _write_routing_with_gemini_fallback(tmp_path: Path) -> Path:
+    custom_routing = tmp_path / "routing_bad_fb.yaml"
+    orig_routing = (
+        Path(__file__).resolve().parents[2] / "src" / "mindweave" / "ai" / "routing.yaml"
+    ).read_text(encoding="utf-8")
+    custom_routing.write_text(
+        orig_routing + "\nfallback_providers:\n  - gemini\n",
+        encoding="utf-8",
+    )
+    return custom_routing
+
+
+async def test_p0_5_gateway_runtime_prod_cn_blocks_gemini_and_fake_including_fallback(
+    tmp_path: Path,
+) -> None:
+    scope = UserScope(new_id())
+    spy_gemini = FakeAdapter()
+    spy_fake = FakeAdapter()
+
+    # Bypass Pydantic startup validator via `model_copy` to test runtime ModelGateway guard
+    base_settings = Settings(environment="test")
+    prod_primary_gemini = base_settings.model_copy(
+        update={
+            "environment": "prod_cn",
+            "ai_primary_provider": "gemini",
+            "ai_fallback_provider": "none",
+        }
+    )
+    gw_gemini = ModelGateway(
+        prod_primary_gemini,
+        adapters={"gemini": spy_gemini, "fake": spy_fake},
+    )
+    with pytest.raises(UpstreamAIError, match="prod_cn"):
+        await gw_gemini.classify_safety(scope=scope, text="测试跨境拦截")
+    with pytest.raises(UpstreamAIError, match="prod_cn"):
+        _ = [
+            c
+            async for c in gw_gemini.stream_companion_reply(
+                scope=scope,
+                payload=CompanionChatInput(
+                    person_id=new_id(),
+                    person_name="林屿",
+                    tier=Tier.GOLD,
+                    user_message="你好",
+                ),
+            )
+        ]
+    assert spy_gemini.recorded_requests == []
+
+    # Fallback to `gemini` or `fake` via Settings OR routing.yaml in `prod_cn` must also fail immediately
+    custom_routing = _write_routing_with_gemini_fallback(tmp_path)
+    prod_with_routing_fb = base_settings.model_copy(
+        update={
+            "environment": "prod_cn",
+            "ai_primary_provider": "dashscope",
+            "ai_fallback_provider": "none",
+        }
+    )
+    gw_fb = ModelGateway(
+        prod_with_routing_fb,
+        adapters={"dashscope": FakeAdapter(), "gemini": spy_gemini},
+        routing_path=custom_routing,
+    )
+    # Both routing fallback (`gemini`) and adapter with `provider_name == "fake"` are blocked in prod_cn
+    with pytest.raises(UpstreamAIError, match="prod_cn"):
+        gw_fb._provider_chain()
+    with pytest.raises(UpstreamAIError, match="prod_cn"):
+        await gw_fb._call_adapter_with_retries(
+            spy_fake,
+            gw_fb.get_circuit_breaker("dashscope"),
+            AdapterCallRequest(task="safety_classify", model="qwen-plus", prompt="hi"),
+        )
+    assert spy_gemini.recorded_requests == []
+    assert spy_fake.recorded_requests == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "他说自己平时喜欢喝手冲咖啡",
+        "她说自己对芒果过敏",
+        "他严重对花生过敏",
+        "她不能对海鲜过敏",
+        "今天平时喜欢散步",
+        "明天对芒果过敏",
+        "昨天说自己很累",
+        "周末记一下对海鲜过敏",
+        "下周说自己出差",
+        "上周对牛奶过敏",
+        "刚才说自己失眠",
+        "有人说自己不吃辣",
+        "大家平时喜欢聚餐",
+        "自己平时喜欢安静",
+        "同事他说不吃香菜",
+        "朋友她不能吃辣",
+    ],
+)
+def test_p2_3_fake_adapter_never_extracts_pronouns_or_temporal_nouns_as_person_names(
+    text: str,
+) -> None:
+    fake = FakeAdapter()
+    out = fake._handle_extract_record(
+        {
+            "payload": ExtractRecordInput(
+                text=text,
+                current_date="2026-11-11",
+                route_mode="global",
+                known_persons=[],
+            ).model_dump(mode="json")
+        }
+    )
+    assert out.suggest_new_person is None, (
+        f"Unexpected suggest_new_person={out.suggest_new_person!r} for {text!r}"
+    )
+    assert all(not p.is_new_person for p in out.persons)
+
+
 async def _unused_dummy_for_typecheck() -> AdapterCallResponse:  # pragma: no cover
     return AdapterCallResponse(text="", model="fake", input_tokens=0, output_tokens=0)

@@ -14,6 +14,7 @@ from mindweave.core.dependencies import (
     AppContainer,
     get_container,
     get_current_user_scope,
+    get_media_user_scope,
     parse_if_match_version,
     parse_uuid_param,
     require_idempotency_key,
@@ -157,7 +158,10 @@ async def create_person_material(
         route_path=request.url.path,
     )
     if hit is not None:
-        return JSONResponse(status_code=hit.status_code, content=hit.response_body)
+        headers = (
+            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
+        )
+        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
     assert created is not None
     return JSONResponse(
         status_code=201,
@@ -184,39 +188,60 @@ async def get_material(
 async def patch_material(
     material_id: str,
     req: MaterialPatchRequest,
-    response: Response,
+    request: Request,
+    idem_key: str = Depends(require_idempotency_key),
     expected_version: int | None = Depends(parse_if_match_version),
-    scope: UserScope = Depends(get_current_user_scope),
-    container: AppContainer = Depends(get_container),
-) -> MaterialDto:
-    mid = parse_uuid_param(material_id, field_name="material_id")
-    svc = MemoryService(container)
-    dto = await svc.patch_material(
-        scope=scope,
-        material_id=mid,
-        req=req,
-        expected_version=expected_version,
-    )
-    response.headers["ETag"] = f'"{dto.version}"'
-    return dto
-
-
-@router.delete("/materials/{material_id}", status_code=204)
-async def delete_material(
-    material_id: str,
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     mid = parse_uuid_param(material_id, field_name="material_id")
     svc = MemoryService(container)
-    await svc.delete_material(scope=scope, material_id=mid)
+    dto, hit = await svc.patch_material(
+        scope=scope,
+        material_id=mid,
+        req=req,
+        expected_version=expected_version,
+        idem_key=idem_key,
+        route_path=request.url.path,
+    )
+    if hit is not None:
+        headers = (
+            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
+        )
+        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
+    assert dto is not None
+    return JSONResponse(
+        status_code=200,
+        content=dto.model_dump(mode="json", by_alias=True),
+        headers={"ETag": f'"{dto.version}"'},
+    )
+
+
+@router.delete("/materials/{material_id}", status_code=204)
+async def delete_material(
+    material_id: str,
+    request: Request,
+    idem_key: str = Depends(require_idempotency_key),
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> Response:
+    mid = parse_uuid_param(material_id, field_name="material_id")
+    svc = MemoryService(container)
+    hit = await svc.delete_material(
+        scope=scope,
+        material_id=mid,
+        idem_key=idem_key,
+        route_path=request.url.path,
+    )
+    if hit is not None:
+        return Response(status_code=204)
     return Response(status_code=204)
 
 
 @router.get("/materials/{material_id}/media")
 async def stream_material_media(
     material_id: str,
-    scope: UserScope = Depends(get_current_user_scope),
+    scope: UserScope = Depends(get_media_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> StreamingResponse:
     mid = parse_uuid_param(material_id, field_name="material_id")
@@ -280,7 +305,10 @@ async def create_person_fact(
         route_path=request.url.path,
     )
     if hit is not None:
-        return JSONResponse(status_code=hit.status_code, content=hit.response_body)
+        headers = (
+            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
+        )
+        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
     assert created is not None
     return JSONResponse(
         status_code=201,
@@ -293,32 +321,53 @@ async def create_person_fact(
 async def patch_fact(
     fact_id: str,
     req: FactPatchRequest,
-    response: Response,
+    request: Request,
+    idem_key: str = Depends(require_idempotency_key),
     expected_version: int | None = Depends(parse_if_match_version),
-    scope: UserScope = Depends(get_current_user_scope),
-    container: AppContainer = Depends(get_container),
-) -> FactDto:
-    fid = parse_uuid_param(fact_id, field_name="fact_id")
-    svc = MemoryService(container)
-    dto = await svc.patch_fact(
-        scope=scope,
-        fact_id=fid,
-        req=req,
-        expected_version=expected_version,
-    )
-    response.headers["ETag"] = f'"{dto.version}"'
-    return dto
-
-
-@router.delete("/facts/{fact_id}", status_code=204)
-async def delete_fact(
-    fact_id: str,
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> Response:
     fid = parse_uuid_param(fact_id, field_name="fact_id")
     svc = MemoryService(container)
-    await svc.delete_fact(scope=scope, fact_id=fid)
+    dto, hit = await svc.patch_fact(
+        scope=scope,
+        fact_id=fid,
+        req=req,
+        expected_version=expected_version,
+        idem_key=idem_key,
+        route_path=request.url.path,
+    )
+    if hit is not None:
+        headers = (
+            {"ETag": f'"{hit.response_body["version"]}"'} if "version" in hit.response_body else {}
+        )
+        return JSONResponse(status_code=hit.status_code, content=hit.response_body, headers=headers)
+    assert dto is not None
+    return JSONResponse(
+        status_code=200,
+        content=dto.model_dump(mode="json", by_alias=True),
+        headers={"ETag": f'"{dto.version}"'},
+    )
+
+
+@router.delete("/facts/{fact_id}", status_code=204)
+async def delete_fact(
+    fact_id: str,
+    request: Request,
+    idem_key: str = Depends(require_idempotency_key),
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> Response:
+    fid = parse_uuid_param(fact_id, field_name="fact_id")
+    svc = MemoryService(container)
+    hit = await svc.delete_fact(
+        scope=scope,
+        fact_id=fid,
+        idem_key=idem_key,
+        route_path=request.url.path,
+    )
+    if hit is not None:
+        return Response(status_code=204)
     return Response(status_code=204)
 
 

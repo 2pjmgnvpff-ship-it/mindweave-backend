@@ -63,6 +63,7 @@ from mindweave.modules.capture.domain.media_sniffer import (
 from mindweave.modules.capture.domain.routing import (
     CandidateHint,
     KnownPersonProfile,
+    is_non_person_stopword_mention,
     normalize_mention,
     resolve_mention_for_fact,
 )
@@ -157,13 +158,24 @@ class CapturePipelineService:
         )
 
     def _get_gateway(self) -> ModelGatewayPort | None:
-        return cast(ModelGatewayPort | None, self.container.extras.get("gateway"))
+        return cast(
+            ModelGatewayPort | None,
+            self.container.extras.get("gateway")
+            or self.container.extras.get("model_gateway")
+            or self.container.extras.get("ai_gateway"),
+        )
 
     def _get_safety(self) -> SafetyServicePort | None:
-        return cast(SafetyServicePort | None, self.container.extras.get("safety"))
+        return cast(
+            SafetyServicePort | None,
+            self.container.extras.get("safety") or self.container.extras.get("safety_service"),
+        )
 
     def _get_job_queue(self) -> JobQueuePort | None:
-        return cast(JobQueuePort | None, self.container.extras.get("job_queue"))
+        return cast(
+            JobQueuePort | None,
+            self.container.extras.get("job_queue") or self.container.extras.get("queue"),
+        )
 
     # =========================================================================
     # Main Entry Point: POST /captures & POST /voice/ingest
@@ -785,7 +797,7 @@ class CapturePipelineService:
                     pass  # handled below as pure note slip on scoped_person_id
                 elif extract_out.suggest_new_person and route_mode is RouteMode.GLOBAL:
                     s_name = str(extract_out.suggest_new_person).strip()
-                    if s_name:
+                    if s_name and not is_non_person_stopword_mention(s_name):
                         p_row = await create_person_with_primary_alias(
                             session,
                             scope=scope,
@@ -846,6 +858,9 @@ class CapturePipelineService:
                 ]
                 if len(hit_known) == 1:
                     person_groups[hit_known[0].person_id] = []
+                elif effective_text.strip() or capture.audio_object_key or capture.image_object_key:
+                    cand_tuple = tuple(p.person_id for p in (hit_known or known_profiles))
+                    ambiguous_groups[("", cand_tuple)] = []
 
             record_kind = self._determine_record_kind(source, capture)
             media_key = capture.audio_object_key or capture.image_object_key
@@ -1148,24 +1163,98 @@ class CapturePipelineService:
                     inbox_item_ids.append(inbox_id)
 
             # -----------------------------------------------------------------
-            # Persist Ambiguous Person Disambiguation Groups (zero person pollution!)
+            # Persist Ambiguous Person Disambiguation Groups (held until resolved!)
             # -----------------------------------------------------------------
             for (amb_mention, cand_ids), amb_facts in ambiguous_groups.items():
                 if amb_mention and amb_mention in effective_text:
                     matched_highlight_names.add(amb_mention)
+
+                amb_previews = [
+                    strip_forbidden_dev_jargon(f_item.content)
+                    for f_item in amb_facts
+                    if strip_forbidden_dev_jargon(f_item.content)
+                ]
+                amb_body = (
+                    "；".join(amb_previews)
+                    if amb_previews
+                    else strip_forbidden_dev_jargon(effective_text) or "待确认手札"
+                )
+                first_amb_title = next(
+                    (
+                        strip_forbidden_dev_jargon(f_item.title)
+                        for f_item in amb_facts
+                        if f_item.title.strip()
+                    ),
+                    "",
+                )
+                amb_tag = build_natural_slip_tag(first_amb_title, amb_body)
+
+                if cand_ids:
+                    holder_person_id = cand_ids[0]
+                else:
+                    placeholder = await get_or_create_unassigned_placeholder(
+                        session,
+                        scope=scope,
+                        dek=dek,
+                        cipher=self.container.cipher,
+                        now=now,
+                    )
+                    holder_person_id = placeholder.id
+
+                amb_rec_id = new_id()
+                amb_rec_row = RecordRow(
+                    id=amb_rec_id,
+                    user_id=scope.user_id,
+                    person_id=holder_person_id,
+                    capture_id=capture.id,
+                    kind=record_kind.value,
+                    title_enc=self.container.cipher.encrypt_str(
+                        dek,
+                        amb_tag,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="title_enc",
+                        row_id=amb_rec_id,
+                    ),
+                    body_enc=self.container.cipher.encrypt_str(
+                        dek,
+                        amb_body,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="body_enc",
+                        row_id=amb_rec_id,
+                    ),
+                    snippet_enc=self.container.cipher.encrypt_str(
+                        dek,
+                        amb_body[:60],
+                        user_id=scope.user_id,
+                        table="records",
+                        column="snippet_enc",
+                        row_id=amb_rec_id,
+                    ),
+                    media_object_key=media_key,
+                    audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
+                    happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
+                    pinned=True,
+                    review_state=RecordReviewState.HELD.value,
+                    version=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(amb_rec_row)
+                await session.flush()
+
                 created_amb_fact_ids: list[UUID] = []
-                amb_previews: list[str] = []
                 for f_item in amb_facts:
                     clean_c = strip_forbidden_dev_jargon(f_item.content)
                     if not clean_c:
                         continue
-                    amb_previews.append(clean_c)
                     fid = new_id()
                     f_row = FactRow(
                         id=fid,
                         user_id=scope.user_id,
                         person_id=None,
-                        record_id=None,
+                        record_id=amb_rec_id,
                         capture_id=capture.id,
                         type=f_item.fact_type.value,
                         polarity=f_item.polarity.value,
@@ -1198,35 +1287,39 @@ class CapturePipelineService:
                     created_amb_fact_ids.append(fid)
                     pending_fact_count += 1
 
-                if created_amb_fact_ids:
-                    inbox_id = new_id()
-                    amb_payload_obj: dict[str, Any] = {
-                        "summary": "；".join(amb_previews)[:160],
-                        "mention": amb_mention or None,
-                    }
-                    session.add(
-                        InboxItemRow(
-                            id=inbox_id,
+                inbox_id = new_id()
+                amb_payload_obj: dict[str, Any] = {
+                    "summary": amb_body[:160],
+                    "mention": amb_mention or None,
+                }
+                amb_inbox_kind = (
+                    InboxItemKind.PERSON_DISAMBIGUATION
+                    if (cand_ids or known_profiles)
+                    else InboxItemKind.FACT_CONFIRM
+                )
+                session.add(
+                    InboxItemRow(
+                        id=inbox_id,
+                        user_id=scope.user_id,
+                        person_id=None,
+                        capture_id=capture.id,
+                        record_id=amb_rec_id,
+                        kind=amb_inbox_kind.value,
+                        status=InboxItemStatus.OPEN.value,
+                        fact_ids=created_amb_fact_ids,
+                        candidate_person_ids=list(cand_ids),
+                        payload_enc=self.container.cipher.encrypt_json(
+                            dek,
+                            amb_payload_obj,
                             user_id=scope.user_id,
-                            person_id=None,
-                            capture_id=capture.id,
-                            record_id=None,
-                            kind=InboxItemKind.PERSON_DISAMBIGUATION.value,
-                            status=InboxItemStatus.OPEN.value,
-                            fact_ids=created_amb_fact_ids,
-                            candidate_person_ids=list(cand_ids),
-                            payload_enc=self.container.cipher.encrypt_json(
-                                dek,
-                                amb_payload_obj,
-                                user_id=scope.user_id,
-                                table="inbox_items",
-                                column="payload_enc",
-                                row_id=inbox_id,
-                            ),
-                            created_at=now,
-                        )
+                            table="inbox_items",
+                            column="payload_enc",
+                            row_id=inbox_id,
+                        ),
+                        created_at=now,
                     )
-                    inbox_item_ids.append(inbox_id)
+                )
+                inbox_item_ids.append(inbox_id)
 
             await session.flush()
 

@@ -22,8 +22,12 @@ source_modules =
     mindweave.shared
     mindweave.modules
     mindweave.workers
+    mindweave.ai
 forbidden_modules =
     google
+    openai
+    dashscope
+    volcenginesdkarkruntime
 ignore_imports =
     mindweave.ai.adapters.* -> google
 

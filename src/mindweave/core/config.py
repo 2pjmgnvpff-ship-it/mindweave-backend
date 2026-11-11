@@ -119,18 +119,22 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ADR-001 forbids reasoning models (DeepSeek-R1/reasoner) due to first-token latency"
             )
+        if self.environment in ("staging", "prod_cn") and (
+            self.allow_dev_mock_apple_auth or self.expose_dev_otp_in_response
+        ):
+            raise ValueError("Dev auth shortcuts must be disabled in staging and prod_cn")
         if self.environment == "prod_cn":
             if self.ai_primary_provider == "gemini" or self.ai_fallback_provider == "gemini":
                 raise ValueError(
                     "Compliance Gate M6: Gemini provider is strictly forbidden in prod_cn; "
                     "switch to a domestic filed model (dashscope / ark / deepseek)."
                 )
+            if self.ai_primary_provider == "fake" or self.ai_fallback_provider == "fake":
+                raise ValueError("prod_cn must not use fake AI provider")
             if self.kek_hex == DEFAULT_DEV_KEK_HEX:
                 raise ValueError("prod_cn must not use DEFAULT_DEV_KEK_HEX")
             if self.jwt_secret == DEFAULT_DEV_JWT_SECRET:
                 raise ValueError("prod_cn must not use DEFAULT_DEV_JWT_SECRET")
-            if self.allow_dev_mock_apple_auth or self.expose_dev_otp_in_response:
-                raise ValueError("Dev auth shortcuts must be disabled in prod_cn")
         return self
 
 
