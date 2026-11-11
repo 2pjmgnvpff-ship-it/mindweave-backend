@@ -2,24 +2,27 @@
 
 from __future__ import annotations
 
+import fcntl
+import os
 import subprocess
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from mindweave.core.clock import ManualClock
 from mindweave.core.config import Settings
 from mindweave.core.dependencies import AppContainer
 
-TEST_APP_DB_URL = "postgresql+asyncpg://mindweave_app:mindweave_app@127.0.0.1:55432/mindweave_test"
-TEST_SYSTEM_DB_URL = (
-    "postgresql+asyncpg://mindweave_system:mindweave_system@127.0.0.1:55432/mindweave_test"
-)
-TEST_MIGRATION_DB_URL = (
-    "postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/mindweave_test"
-)
+
+def _db_urls() -> tuple[str, str, str, str]:
+    db_name = os.environ.get("MINDWEAVE_TEST_DB_NAME", "mindweave_test")
+    app_url = f"postgresql+asyncpg://mindweave_app:mindweave_app@127.0.0.1:55432/{db_name}"
+    sys_url = f"postgresql+asyncpg://mindweave_system:mindweave_system@127.0.0.1:55432/{db_name}"
+    mig_url = f"postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/{db_name}"
+    return db_name, app_url, sys_url, mig_url
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -56,11 +59,12 @@ def manual_clock() -> ManualClock:
 
 @pytest.fixture
 def test_settings(tmp_path: Path) -> Settings:
+    _, app_url, sys_url, mig_url = _db_urls()
     return Settings(
         environment="test",
-        app_database_url=TEST_APP_DB_URL,
-        system_database_url=TEST_SYSTEM_DB_URL,
-        migration_database_url=TEST_MIGRATION_DB_URL,
+        app_database_url=app_url,
+        system_database_url=sys_url,
+        migration_database_url=mig_url,
         blob_storage_dir=tmp_path / "blobs",
         ai_primary_provider="fake",
         expose_dev_otp_in_response=True,
@@ -69,14 +73,24 @@ def test_settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-async def db_container(
-    test_settings: Settings, manual_clock: ManualClock
-) -> AsyncIterator[AppContainer]:
-    container = AppContainer.build(test_settings, clock=manual_clock)
-    # Clean all test tables cleanly via system_session before test
-    from sqlalchemy.ext.asyncio import create_async_engine
+def _per_db_lock() -> Iterator[None]:
+    db_name, _, _, _ = _db_urls()
+    lock_file = Path(f"/tmp/mindweave_pg_{db_name}.lock")  # noqa: S108
+    with lock_file.open("w") as fp:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
 
-    owner_engine = create_async_engine(TEST_MIGRATION_DB_URL)
+
+@pytest.fixture
+async def db_container(
+    _per_db_lock: None, test_settings: Settings, manual_clock: ManualClock
+) -> AsyncIterator[AppContainer]:
+    _, _, _, mig_url = _db_urls()
+    container = AppContainer.build(test_settings, clock=manual_clock)
+    owner_engine = create_async_engine(mig_url)
     async with owner_engine.begin() as conn:
         await conn.execute(
             text(
