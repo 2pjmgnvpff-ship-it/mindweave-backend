@@ -1,0 +1,52 @@
+[importlinter]
+root_packages =
+    mindweave
+include_external_packages = True
+
+[importlinter:contract:core-and-shared-do-not-import-modules]
+name = Core and shared layers never import feature modules or AI adapters
+type = forbidden
+source_modules =
+    mindweave.core
+    mindweave.shared
+forbidden_modules =
+    mindweave.modules
+    mindweave.ai
+    mindweave.workers
+
+[importlinter:contract:vendor-sdk-isolated-to-ai-adapters]
+name = Vendor AI SDKs (google.genai) may only be imported inside mindweave.ai.adapters
+type = forbidden
+source_modules =
+    mindweave.core
+    mindweave.shared
+    mindweave.modules
+    mindweave.workers
+forbidden_modules =
+    google
+
+[importlinter:contract:domain-layers-pure]
+name = Domain layers must remain pure (no FastAPI, SQLAlchemy, ORM, DB, HTTP, or vendor SDKs)
+type = forbidden
+source_modules =
+    mindweave.modules.identity.domain
+    mindweave.modules.preferences.domain
+    mindweave.modules.people.domain
+    mindweave.modules.bootstrap.domain
+    mindweave.modules.capture.domain
+    mindweave.modules.memory.domain
+    mindweave.modules.companion.domain
+    mindweave.modules.reminders.domain
+    mindweave.modules.safety.domain
+    mindweave.modules.data_rights.domain
+    mindweave.modules.telemetry.domain
+    mindweave.modules.audit.domain
+forbidden_modules =
+    fastapi
+    sqlalchemy
+    httpx
+    asyncpg
+    google
+    mindweave.core.orm
+    mindweave.core.db
+    mindweave.core.dependencies
