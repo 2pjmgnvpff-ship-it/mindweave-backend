@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres_dev_only}
+      POSTGRES_DB: mindweave
+    ports:
+      - "55432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries="
+      - "-c"
+      - "max_connections=200"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mindweave"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  db-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:-postgres_dev_only}
+    entrypoint:
+      - "/bin/sh"
+      - "-ec"
+      - |
+        psql -h postgres -U postgres -d mindweave <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mindweave_owner') THEN
+            CREATE ROLE mindweave_owner LOGIN PASSWORD 'mindweave_owner' CREATEDB;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mindweave_app') THEN
+            CREATE ROLE mindweave_app LOGIN PASSWORD 'mindweave_app' NOSUPERUSER NOBYPASSRLS;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'mindweave_system') THEN
+            CREATE ROLE mindweave_system LOGIN PASSWORD 'mindweave_system' NOSUPERUSER BYPASSRLS;
+          END IF;
+        END
+        $$;
+        GRANT ALL PRIVILEGES ON DATABASE mindweave TO mindweave_owner;
+        GRANT USAGE, CREATE ON SCHEMA public TO mindweave_owner;
+        GRANT USAGE ON SCHEMA public TO mindweave_app, mindweave_system;
+        SQL
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@postgres:5432/mindweave
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MINDWEAVE_ENVIRONMENT: ${MINDWEAVE_ENVIRONMENT:-dev}
+      MINDWEAVE_APP_DATABASE_URL: postgresql+asyncpg://mindweave_app:mindweave_app@postgres:5432/mindweave
+      MINDWEAVE_SYSTEM_DATABASE_URL: postgresql+asyncpg://mindweave_system:mindweave_system@postgres:5432/mindweave
+      MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@postgres:5432/mindweave
+      MINDWEAVE_BLOB_STORAGE_DIR: /var/lib/mindweave/blobs
+    ports:
+      - "8000:8000"
+    volumes:
+      - blob_data:/var/lib/mindweave/blobs
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MINDWEAVE_ENVIRONMENT: ${MINDWEAVE_ENVIRONMENT:-dev}
+      MINDWEAVE_APP_DATABASE_URL: postgresql+asyncpg://mindweave_app:mindweave_app@postgres:5432/mindweave
+      MINDWEAVE_SYSTEM_DATABASE_URL: postgresql+asyncpg://mindweave_system:mindweave_system@postgres:5432/mindweave
+      MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@postgres:5432/mindweave
+      MINDWEAVE_BLOB_STORAGE_DIR: /var/lib/mindweave/blobs
+    command: ["python", "-m", "mindweave.workers"]
+    volumes:
+      - blob_data:/var/lib/mindweave/blobs
+    healthcheck:
+      disable: true
+
+volumes:
+  pg_data:
+  blob_data:

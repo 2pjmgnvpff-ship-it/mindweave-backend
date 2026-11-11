@@ -24,6 +24,8 @@ source_modules =
     mindweave.workers
 forbidden_modules =
     google
+ignore_imports =
+    mindweave.ai.adapters.* -> google
 
 [importlinter:contract:domain-layers-pure]
 name = Domain layers must remain pure (no FastAPI, SQLAlchemy, ORM, DB, HTTP, or vendor SDKs)

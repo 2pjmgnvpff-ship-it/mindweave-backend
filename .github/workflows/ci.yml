@@ -1,0 +1,85 @@
+name: MindWeave Backend CI
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-tests:
+    name: Lint, Typecheck, Architecture & Live PG16 Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: mindweave_test
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d mindweave_test"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+
+    env:
+      MINDWEAVE_ENVIRONMENT: test
+      MINDWEAVE_TEST_DB_NAME: mindweave_test
+      MINDWEAVE_APP_DATABASE_URL: postgresql+asyncpg://mindweave_app:mindweave_app@127.0.0.1:55432/mindweave_test
+      MINDWEAVE_SYSTEM_DATABASE_URL: postgresql+asyncpg://mindweave_system:mindweave_system@127.0.0.1:55432/mindweave_test
+      MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/mindweave_test
+      MINDWEAVE_AI_PRIMARY_PROVIDER: fake
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv & Python 3.12
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.14"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff lint & format check
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Strict MyPy typecheck
+        run: uv run mypy src
+
+      - name: Hexagonal & vendor-neutrality import contracts
+        run: uv run lint-imports
+
+      - name: Unit tests
+        run: uv run pytest tests/unit -q
+
+      - name: Bootstrap PostgreSQL least-privilege RLS roles & run Alembic migrations
+        env:
+          PGPASSWORD: postgres_ci_password
+        run: |
+          psql -h 127.0.0.1 -p 55432 -U postgres -d mindweave_test <<'SQL'
+          CREATE ROLE mindweave_owner LOGIN PASSWORD 'mindweave_owner' CREATEDB;
+          CREATE ROLE mindweave_app LOGIN PASSWORD 'mindweave_app' NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE mindweave_system LOGIN PASSWORD 'mindweave_system' NOSUPERUSER BYPASSRLS;
+          ALTER DATABASE mindweave_test OWNER TO mindweave_owner;
+          ALTER SCHEMA public OWNER TO mindweave_owner;
+          GRANT USAGE ON SCHEMA public TO mindweave_app, mindweave_system;
+          SQL
+          uv run alembic upgrade head
+
+      - name: Architecture invariant & live PostgreSQL integration tests
+        run: uv run pytest tests/architecture tests/integration tests/contract -q
+
+      - name: Offline evaluation harness smoke gate
+        run: uv run python -m evals --mode offline

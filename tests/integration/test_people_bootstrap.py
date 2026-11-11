@@ -1,0 +1,904 @@
+"""Live PostgreSQL integration tests for People REST API, EntityResolver, and V10 Bootstrap."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, date, datetime, timedelta
+from io import BytesIO
+from uuid import UUID
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from PIL import Image
+from sqlalchemy import func, select
+
+from mindweave.core.clock import ManualClock
+from mindweave.core.crypto import CryptoError, normalize_alias_for_index
+from mindweave.core.dependencies import AppContainer
+from mindweave.core.errors import register_exception_handlers
+from mindweave.core.ids import new_id
+from mindweave.core.orm import (
+    ChatMessageRow,
+    ChatThreadRow,
+    FactRow,
+    InboxItemRow,
+    PersonAliasRow,
+    PersonRow,
+    RecordRow,
+    ReminderRow,
+    UserKeyRow,
+    UserPreferenceRow,
+    UserRow,
+)
+from mindweave.modules.bootstrap.api.router import router as bootstrap_router
+from mindweave.modules.people.api.router import router as people_router
+from mindweave.modules.people.application.entity_resolver import EntityResolver
+from mindweave.shared.enums import PersonState, RouteMode, Tier
+from mindweave.shared.scopes import UserScope
+
+
+def _build_test_app(container: AppContainer) -> FastAPI:
+    app = FastAPI()
+    app.state.container = container
+    register_exception_handlers(app)
+    app.include_router(people_router, prefix="/v1")
+    app.include_router(bootstrap_router, prefix="/v1")
+    return app
+
+
+async def _provision_user(container: AppContainer) -> tuple[UUID, UserScope, str, bytes]:
+    wall_now = datetime.now(UTC)
+    if isinstance(container.clock, ManualClock) and container.clock.now() > wall_now:
+        container.clock.set(wall_now - timedelta(minutes=5))
+
+    user_id = new_id()
+    scope = UserScope(user_id=user_id)
+    wrapped_dek, kek_id = container.cipher.generate_wrapped_dek(user_id)
+    dek = container.cipher.load_dek(user_id=user_id, wrapped_dek=wrapped_dek, kek_id=kek_id)
+
+    async with container.db.system_session() as sys_sess:
+        sys_sess.add(UserRow(id=user_id, status="active"))
+    async with container.db.user_session(scope) as sess:
+        sess.add(UserKeyRow(user_id=user_id, wrapped_dek=wrapped_dek, kek_id=kek_id))
+
+    token, _ = container.tokens.create_access_token(user_id, now=container.clock.now())
+    return user_id, scope, token, dek
+
+
+def _auth_headers(
+    token: str, *, idem_key: str | None = None, if_match: int | None = None
+) -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {token}"}
+    if idem_key is not None:
+        headers["Idempotency-Key"] = idem_key
+    if if_match is not None:
+        headers["If-Match"] = str(if_match)
+    return headers
+
+
+def _make_jpeg_with_exif() -> bytes:
+    img = Image.new("RGB", (64, 48), color=(212, 154, 69))
+    exif = Image.Exif()
+    exif[0x010F] = "Canon"  # Make
+    exif[0x013B] = "SecretAuthorName"  # Artist
+    exif[0x0131] = "CameraGPSFirmware"  # Software
+    buf = BytesIO()
+    img.save(buf, format="JPEG", exif=exif.tobytes())
+    raw = buf.getvalue()
+    # Sanity check that source image truly carries EXIF metadata before upload
+    with Image.open(BytesIO(raw)) as check_img:
+        assert len(check_img.getexif()) >= 3
+    return raw
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_brand_new_user_auto_provisions_preferences_and_empty_state(
+    db_container: AppContainer,
+) -> None:
+    user_id, scope, token, _ = await _provision_user(db_container)
+    app = _build_test_app(db_container)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        resp = await client.get("/v1/bootstrap", headers=_auth_headers(token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["coreIds"] == []
+        assert data["casualIds"] == []
+        assert data["people"] == {}
+        assert data["inboxCount"] == 0
+        assert data["preferences"]["edition"] == "cotton"
+        assert data["preferences"]["preferredEdition"] == "cotton"
+        assert data["preferences"]["cupidLayout"] == "a"
+        assert data["preferences"]["hasCustomWallpaper"] is False
+        assert data["preferences"]["version"] == 1
+
+    async with db_container.db.user_session(scope) as sess:
+        pref_row = await sess.get(UserPreferenceRow, user_id)
+        assert pref_row is not None
+        assert pref_row.preferred_edition == "cotton"
+
+
+@pytest.mark.asyncio
+async def test_person_crud_aad_encryption_idempotency_and_optimistic_locking(
+    db_container: AppContainer,
+) -> None:
+    user_id, scope, token, dek = await _provision_user(db_container)
+    app = _build_test_app(db_container)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        # Missing Idempotency-Key -> 400
+        no_idem = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token),
+            json={"nameCn": "沈清秋", "tier": "love"},
+        )
+        assert no_idem.status_code == 400
+
+        # Forbidden UI dev phrase (Invariant I6) -> 422
+        bad_copy = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="idem-bad-copy"),
+            json={"nameCn": "沈清秋", "shortMemo": "系统自动归档 · 海风", "tier": "gold"},
+        )
+        assert bad_copy.status_code == 422
+
+        # Create person accepting legacy 'love' -> canonical 'gold', Zero-Photo Burden defaults
+        create_payload = {
+            "nameCn": "沈清秋",
+            "roleTag": "心动伴侣",
+            "contextSub": "四月海风 · 镰仓木栈道",
+            "shortMemo": "偏爱温热桂花燕麦拿铁，生理期前三天忌冰美式。",
+            "traits": ["每年四月都想看一次海", "偏爱拍立得相纸质感"],
+            "tier": "love",
+            "aliases": ["清秋", {"alias": "小沈", "kind": "nickname"}],
+        }
+        created = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="idem-create-chloe"),
+            json=create_payload,
+        )
+        assert created.status_code == 201
+        chloe = created.json()
+        chloe_id = UUID(chloe["id"])
+        assert chloe["tier"] == "gold"
+        assert chloe["monogram"] == "沈"
+        assert chloe["cupidTitle"] == "沈清秋的丘比特"
+        assert chloe["hasPhoto"] is False
+        assert chloe["avatarUrl"] is None
+        assert chloe["mainPhotoUrl"] is None
+        assert chloe["subPhotoUrl"] is None
+        assert chloe["version"] == 1
+
+        # Exact replay with same Idempotency-Key returns cached 201 without creating a second row
+        replayed = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="idem-create-chloe"),
+            json=create_payload,
+        )
+        assert replayed.status_code == 201
+        assert replayed.json()["id"] == chloe["id"]
+
+        # Reusing same Idempotency-Key with different payload -> 409 IdempotencyConflictError
+        conflict = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="idem-create-chloe"),
+            json={**create_payload, "nameCn": "周叙白"},
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["code"] == "idempotency_conflict"
+
+        # Verify raw DB ciphertext & strict per-column AAD binding (Invariant I12)
+        async with db_container.db.user_session(scope) as sess:
+            row = await sess.get(PersonRow, chloe_id)
+            assert row is not None
+            assert b"\xe6\xb2\x88" not in row.display_name_enc
+            assert (
+                db_container.cipher.decrypt_str(
+                    dek,
+                    row.display_name_enc,
+                    user_id=user_id,
+                    table="persons",
+                    column="display_name_enc",
+                    row_id=chloe_id,
+                )
+                == "沈清秋"
+            )
+            assert db_container.cipher.decrypt_json(
+                dek,
+                row.traits_enc or b"",
+                user_id=user_id,
+                table="persons",
+                column="traits_enc",
+                row_id=chloe_id,
+            ) == ["每年四月都想看一次海", "偏爱拍立得相纸质感"]
+            with pytest.raises(CryptoError):
+                db_container.cipher.decrypt_str(
+                    dek,
+                    row.display_name_enc,
+                    user_id=user_id,
+                    table="persons",
+                    column="role_tag_enc",
+                    row_id=chloe_id,
+                )
+
+        # PATCH with If-Match: 1 updates nameCn + syncs primary alias -> version 2
+        patched = await client.patch(
+            f"/v1/persons/{chloe_id}",
+            headers=_auth_headers(token, idem_key="idem-patch-1", if_match=1),
+            json={"nameCn": "沈清秋Chloé", "shortMemo": "更新后的手札摘要"},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["version"] == 2
+        assert patched.json()["cupidTitle"] == "沈清秋Chloé的丘比特"
+
+        # Stale If-Match: 1 -> 412 VersionMismatchError
+        stale = await client.patch(
+            f"/v1/persons/{chloe_id}",
+            headers=_auth_headers(token, idem_key="idem-patch-stale", if_match=1),
+            json={"shortMemo": "并发过期写入"},
+        )
+        assert stale.status_code == 412
+        assert stale.json()["code"] == "version_mismatch"
+
+        # Verify primary alias was updated to new nameCn
+        aliases_resp = await client.get(
+            f"/v1/persons/{chloe_id}/aliases", headers=_auth_headers(token)
+        )
+        assert aliases_resp.status_code == 200
+        alias_items = aliases_resp.json()["items"]
+        primary = next(a for a in alias_items if a["isPrimary"])
+        assert primary["alias"] == "沈清秋Chloé"
+        assert primary["kind"] == "name"
+
+        # Archive & unarchive lifecycle
+        archived = await client.patch(
+            f"/v1/persons/{chloe_id}",
+            headers=_auth_headers(token, idem_key="idem-archive", if_match=2),
+            json={"archived": True},
+        )
+        assert archived.status_code == 200
+        assert archived.json()["state"] == "archived"
+
+        default_list = await client.get("/v1/persons", headers=_auth_headers(token))
+        assert default_list.json()["coreIds"] == []
+        assert default_list.json()["items"] == []
+
+        with_arch = await client.get(
+            "/v1/persons?includeArchived=true", headers=_auth_headers(token)
+        )
+        assert len(with_arch.json()["items"]) == 1
+        assert with_arch.json()["coreIds"] == []
+
+        unarchived = await client.patch(
+            f"/v1/persons/{chloe_id}",
+            headers=_auth_headers(token, idem_key="idem-unarchive", if_match=3),
+            json={"archived": False},
+        )
+        assert unarchived.status_code == 200
+        assert unarchived.json()["state"] == "active"
+        assert (await client.get("/v1/persons", headers=_auth_headers(token))).json()[
+            "coreIds"
+        ] == [str(chloe_id)]
+
+
+@pytest.mark.asyncio
+async def test_tier_transitions_move_concurrency_and_zero_history_loss(
+    db_container: AppContainer,
+) -> None:
+    user_id, scope, token, dek = await _provision_user(db_container)
+    app = _build_test_app(db_container)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        ids: dict[str, str] = {}
+        for key, name_cn, tier in [
+            ("chloe", "沈清秋", "gold"),
+            ("xubai", "周叙白", "gold"),
+            ("zhixia", "林知夏", "silver"),
+            ("prof", "陈教授", "crystal"),
+            ("kevin", "Kevin", "crystal"),
+        ]:
+            r = await client.post(
+                "/v1/persons",
+                headers=_auth_headers(token, idem_key=f"seed-{key}"),
+                json={"nameCn": name_cn, "tier": tier},
+            )
+            assert r.status_code == 201
+            ids[key] = r.json()["id"]
+
+        assert (
+            await client.get(f"/v1/persons/{ids['kevin']}", headers=_auth_headers(token))
+        ).json()["monogram"] == "K"
+
+        # Seed RecordRow, FactRow, ReminderRow, and ChatThreadRow + ChatMessageRow on Chloe
+        chloe_uuid = UUID(ids["chloe"])
+        rec_id, fact_id, rem_id, thread_id, msg_id = (
+            new_id(),
+            new_id(),
+            new_id(),
+            new_id(),
+            new_id(),
+        )
+        async with db_container.db.user_session(scope) as sess:
+            sess.add(
+                RecordRow(
+                    id=rec_id,
+                    user_id=user_id,
+                    person_id=chloe_uuid,
+                    kind="note",
+                    title_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "温热桂花燕麦拿铁手札",
+                        user_id=user_id,
+                        table="records",
+                        column="title_enc",
+                        row_id=rec_id,
+                    ),
+                    body_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "生理期前三天忌冰美式",
+                        user_id=user_id,
+                        table="records",
+                        column="body_enc",
+                        row_id=rec_id,
+                    ),
+                    snippet_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "半糖温热燕麦奶",
+                        user_id=user_id,
+                        table="records",
+                        column="snippet_enc",
+                        row_id=rec_id,
+                    ),
+                )
+            )
+            await sess.flush()
+            sess.add(
+                FactRow(
+                    id=fact_id,
+                    user_id=user_id,
+                    person_id=chloe_uuid,
+                    record_id=rec_id,
+                    type="taboo",
+                    status="confirmed",
+                    content_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "生理期前三天忌冰美式",
+                        user_id=user_id,
+                        table="facts",
+                        column="content_enc",
+                        row_id=fact_id,
+                    ),
+                )
+            )
+            await sess.flush()
+            sess.add(
+                ReminderRow(
+                    id=rem_id,
+                    user_id=user_id,
+                    person_id=chloe_uuid,
+                    fact_id=fact_id,
+                    title_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "重要纪念日",
+                        user_id=user_id,
+                        table="reminders",
+                        column="title_enc",
+                        row_id=rem_id,
+                    ),
+                )
+            )
+            sess.add(ChatThreadRow(id=thread_id, user_id=user_id, person_id=chloe_uuid))
+            await sess.flush()
+            sess.add(
+                ChatMessageRow(
+                    id=msg_id,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    person_id=chloe_uuid,
+                    role="user",
+                    content_enc=db_container.cipher.encrypt_str(
+                        dek,
+                        "明天海边散步怎么开场呀？",
+                        user_id=user_id,
+                        table="chat_messages",
+                        column="content_enc",
+                        row_id=msg_id,
+                    ),
+                    tier_snapshot="gold",
+                )
+            )
+
+        # 1. Demote Chloe gold -> crystal: exact V10 response contract & prepended to casualIds[0]
+        demote = await client.patch(
+            f"/v1/persons/{ids['chloe']}/tier",
+            headers=_auth_headers(token, idem_key="tier-demote-chloe"),
+            json={"tier": "crystal"},
+        )
+        assert demote.status_code == 200
+        d_body = demote.json()
+        assert set(d_body.keys()) == {
+            "personId",
+            "previousTier",
+            "tier",
+            "coreIds",
+            "casualIds",
+            "version",
+        }
+        assert d_body["personId"] == ids["chloe"]
+        assert d_body["previousTier"] == "gold"
+        assert d_body["tier"] == "crystal"
+        assert d_body["coreIds"] == [ids["xubai"], ids["zhixia"]]
+        assert d_body["casualIds"] == [ids["chloe"], ids["prof"], ids["kevin"]]
+        assert d_body["version"] == 2
+
+        # 2. Switch Xubai gold -> silver: keeps exact position inside coreIds
+        core_swap = await client.patch(
+            f"/v1/persons/{ids['xubai']}/tier",
+            headers=_auth_headers(token, idem_key="tier-swap-xubai"),
+            json={"tier": "silver"},
+        )
+        assert core_swap.status_code == 200
+        assert core_swap.json()["coreIds"] == [ids["xubai"], ids["zhixia"]]
+
+        # 3. Promote Chloe crystal -> gold: appended to END of coreIds
+        promote = await client.patch(
+            f"/v1/persons/{ids['chloe']}/tier",
+            headers=_auth_headers(token, idem_key="tier-promote-chloe"),
+            json={"tier": "gold"},
+        )
+        assert promote.status_code == 200
+        assert promote.json()["coreIds"] == [ids["xubai"], ids["zhixia"], ids["chloe"]]
+        assert promote.json()["casualIds"] == [ids["prof"], ids["kevin"]]
+
+        # Verify ZERO deletion/mutation of historical records, facts, reminders, chat messages!
+        async with db_container.db.user_session(scope) as sess:
+            assert await sess.scalar(select(func.count()).select_from(RecordRow)) == 1
+            assert await sess.scalar(select(func.count()).select_from(FactRow)) == 1
+            assert await sess.scalar(select(func.count()).select_from(ReminderRow)) == 1
+            assert await sess.scalar(select(func.count()).select_from(ChatMessageRow)) == 1
+
+        # 4. Reorder Chloe back to front of coreIds via POST /persons/{id}:move
+        moved = await client.post(
+            f"/v1/persons/{ids['chloe']}:move",
+            headers=_auth_headers(token, idem_key="move-chloe-front"),
+            json={"beforePersonId": ids["xubai"]},
+        )
+        assert moved.status_code == 200
+        assert moved.json()["coreIds"] == [ids["chloe"], ids["xubai"], ids["zhixia"]]
+
+        # 5. Concurrent tier transitions lock via FOR UPDATE with zero lost members or duplicate ranks
+        await asyncio.gather(
+            client.patch(
+                f"/v1/persons/{ids['prof']}/tier",
+                headers=_auth_headers(token, idem_key="conc-prof-gold"),
+                json={"tier": "gold"},
+            ),
+            client.patch(
+                f"/v1/persons/{ids['kevin']}/tier",
+                headers=_auth_headers(token, idem_key="conc-kevin-silver"),
+                json={"tier": "silver"},
+            ),
+            client.patch(
+                f"/v1/persons/{ids['zhixia']}/tier",
+                headers=_auth_headers(token, idem_key="conc-zhixia-crystal"),
+                json={"tier": "crystal"},
+            ),
+        )
+        listed = (await client.get("/v1/persons", headers=_auth_headers(token))).json()
+        assert set(listed["coreIds"]) == {
+            ids["chloe"],
+            ids["xubai"],
+            ids["prof"],
+            ids["kevin"],
+        }
+        assert listed["casualIds"] == [ids["zhixia"]]
+
+
+@pytest.mark.asyncio
+async def test_aliases_homonyms_and_entity_resolver_four_priorities(
+    db_container: AppContainer,
+) -> None:
+    user_id, scope, token, dek = await _provision_user(db_container)
+    app = _build_test_app(db_container)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        r_chloe = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="er-chloe"),
+            json={"nameCn": "沈清秋", "tier": "gold"},
+        )
+        r_prof = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="er-prof"),
+            json={"nameCn": "陈教授", "tier": "crystal", "aliases": ["老陈"]},
+        )
+        r_mgr = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="er-mgr"),
+            json={"nameCn": "陈经理", "tier": "silver"},
+        )
+        r_sumin = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token, idem_key="er-sumin"),
+            json={"nameCn": "苏敏姐", "tier": "crystal"},
+        )
+
+        chloe_id = UUID(r_chloe.json()["id"])
+        prof_id = UUID(r_prof.json()["id"])
+        mgr_id = UUID(r_mgr.json()["id"])
+        sumin_id = UUID(r_sumin.json()["id"])
+
+        # Add homonym nickname "老陈" to 陈经理 (allowed across different person_ids!)
+        homonym_add = await client.post(
+            f"/v1/persons/{mgr_id}/aliases",
+            headers=_auth_headers(token, idem_key="alias-laochen-mgr"),
+            json={"alias": "老陈", "kind": "nickname"},
+        )
+        assert homonym_add.status_code == 201
+        mgr_laochen_alias_id = UUID(homonym_add.json()["id"])
+
+        # Duplicate alias on SAME person -> 409 Conflict
+        dup_same = await client.post(
+            f"/v1/persons/{mgr_id}/aliases",
+            headers=_auth_headers(token, idem_key="alias-laochen-mgr-dup"),
+            json={"alias": " 老 陈 ", "kind": "nickname"},
+        )
+        assert dup_same.status_code == 409
+
+        # Add unique alias "敏姐" to 苏敏姐
+        sumin_alias = await client.post(
+            f"/v1/persons/{sumin_id}/aliases",
+            headers=_auth_headers(token),
+            json={"alias": "敏姐", "kind": "nickname"},
+        )
+        assert sumin_alias.status_code == 201
+
+        # Verify PersonAliasRow exact AAD & blind-index domain="person_alias"
+        sumin_alias_uuid = UUID(sumin_alias.json()["id"])
+        async with db_container.db.user_session(scope) as sess:
+            arow = await sess.get(PersonAliasRow, sumin_alias_uuid)
+            assert arow is not None
+            assert arow.alias_hmac == db_container.cipher.compute_blind_index(
+                dek,
+                user_id=user_id,
+                domain="person_alias",
+                normalized_value=normalize_alias_for_index("敏姐"),
+            )
+            assert (
+                db_container.cipher.decrypt_str(
+                    dek,
+                    arow.alias_enc,
+                    user_id=user_id,
+                    table="person_aliases",
+                    column="alias_enc",
+                    row_id=sumin_alias_uuid,
+                )
+                == "敏姐"
+            )
+
+        # Primary alias deletion is blocked; secondary alias deletion works
+        mgr_aliases = (
+            await client.get(f"/v1/persons/{mgr_id}/aliases", headers=_auth_headers(token))
+        ).json()["items"]
+        primary_mgr_alias_id = next(a["id"] for a in mgr_aliases if a["isPrimary"])
+        del_primary = await client.delete(
+            f"/v1/persons/{mgr_id}/aliases/{primary_mgr_alias_id}",
+            headers=_auth_headers(token),
+        )
+        assert del_primary.status_code == 409
+
+        # Exercise EntityResolver across all 4 priorities inside user_session
+        resolver = EntityResolver(db_container)
+        async with db_container.db.user_session(scope) as sess:
+            known = await resolver.list_known_persons(sess, scope, dek)
+            assert {kp.person_id for kp in known} == {chloe_id, prof_id, mgr_id, sumin_id}
+
+            # Priority 1a: CURRENT mode hard-locks scoped_person_id on pronouns / unmarked clauses
+            res_p1_lock = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="她",
+                clause_text="她生理期前三天忌冰美式",
+                route_mode=RouteMode.CURRENT,
+                scoped_person_id=chloe_id,
+            )
+            assert res_p1_lock.person_id == chloe_id
+            assert res_p1_lock.scoped_locked is True
+            assert res_p1_lock.ambiguous is False
+
+            # Priority 1b: CURRENT mode splits out when clause explicitly names a DIFFERENT known person
+            res_p1_other = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="敏姐",
+                clause_text="另外敏姐说周四下午审片",
+                route_mode=RouteMode.CURRENT,
+                scoped_person_id=chloe_id,
+            )
+            assert res_p1_other.person_id == sumin_id
+            assert res_p1_other.scoped_locked is False
+
+            # Priority 2a: Exact blind-index unique match
+            res_p2_unique = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="敏姐",
+                route_mode=RouteMode.GLOBAL,
+            )
+            assert res_p2_unique.person_id == sumin_id
+            assert res_p2_unique.matched_via == "blind_index"
+
+            # Priority 2b: Homonym disambiguation on "老陈"
+            res_p2_homonym = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="老陈",
+                route_mode=RouteMode.GLOBAL,
+            )
+            assert res_p2_homonym.person_id is None
+            assert res_p2_homonym.ambiguous is True
+            assert set(res_p2_homonym.candidate_person_ids) == {prof_id, mgr_id}
+
+            # Priority 3: Substring match ("清秋" -> "沈清秋")
+            res_p3_sub = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="清秋",
+                route_mode=RouteMode.GLOBAL,
+            )
+            assert res_p3_sub.person_id == chloe_id
+            assert res_p3_sub.matched_via == "known_substring"
+
+            # Priority 4: Unknown person in GLOBAL mode provisions a provisional crystal person
+            res_p4_new = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="王律师",
+                route_mode=RouteMode.GLOBAL,
+            )
+            assert res_p4_new.person_id is not None
+            assert res_p4_new.is_new_person is True
+            assert res_p4_new.person_state is PersonState.PROVISIONAL
+            assert res_p4_new.tier is Tier.CRYSTAL
+            lawyer_id = res_p4_new.person_id
+
+            # Second mention of "王律师" hits blind index on the same provisional person!
+            res_p4_repeat = await resolver.resolve(
+                sess,
+                scope,
+                dek,
+                mention="王律师",
+                route_mode=RouteMode.GLOBAL,
+            )
+            assert res_p4_repeat.person_id == lawyer_id
+            assert res_p4_repeat.is_new_person is False
+            assert res_p4_repeat.matched_via == "blind_index"
+
+        # Delete secondary alias on 陈经理 -> "老陈" now uniquely resolves to 陈教授!
+        del_sec = await client.delete(
+            f"/v1/persons/{mgr_id}/aliases/{mgr_laochen_alias_id}",
+            headers=_auth_headers(token),
+        )
+        assert del_sec.status_code == 204
+
+        async with db_container.db.user_session(scope) as sess:
+            res_after_del = await resolver.resolve(
+                sess, scope, dek, mention="老陈", route_mode=RouteMode.GLOBAL
+            )
+            assert res_after_del.person_id == prof_id
+            assert res_after_del.ambiguous is False
+
+        # Verify ?includeProvisional=false filters out provisional persons
+        excl_prov = (
+            await client.get("/v1/persons?includeProvisional=false", headers=_auth_headers(token))
+        ).json()
+        assert str(lawyer_id) not in excl_prov["casualIds"]
+        assert all(it["id"] != str(lawyer_id) for it in excl_prov["items"])
+
+
+@pytest.mark.asyncio
+async def test_photos_exif_strip_bootstrap_top10_materials_isolation_and_cascade_delete(
+    db_container: AppContainer,
+) -> None:
+    user_a, scope_a, token_a, dek_a = await _provision_user(db_container)
+    _, _, token_b, _ = await _provision_user(db_container)
+    app = _build_test_app(db_container)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        r_person = await client.post(
+            "/v1/persons",
+            headers=_auth_headers(token_a, idem_key="photo-person"),
+            json={
+                "nameCn": "沈清秋",
+                "roleTag": "心动伴侣",
+                "tier": "gold",
+                "traits": ["偏爱拍立得"],
+            },
+        )
+        person_id = UUID(r_person.json()["id"])
+
+        # Reject invalid non-image payload
+        bad_img = await client.post(
+            f"/v1/persons/{person_id}/photos/avatar",
+            headers=_auth_headers(token_a),
+            files={"file": ("broken.jpg", b"not-a-real-image", "image/jpeg")},
+        )
+        assert bad_img.status_code == 422
+
+        # Upload JPEG containing EXIF metadata
+        jpeg_with_exif = _make_jpeg_with_exif()
+        uploaded = await client.post(
+            f"/v1/persons/{person_id}/photos/avatar",
+            headers=_auth_headers(token_a, idem_key="upload-avatar-1"),
+            files={"file": ("avatar.jpg", jpeg_with_exif, "image/jpeg")},
+        )
+        assert uploaded.status_code == 200
+        up_json = uploaded.json()
+        assert up_json["hasPhoto"] is True
+        assert up_json["avatarUrl"] == f"/v1/persons/{person_id}/photos/avatar"
+
+        # Verify blob on disk is encrypted (no plaintext JPEG header or EXIF string on disk!)
+        blob_files = [
+            p
+            for p in db_container.settings.blob_storage_dir.rglob("*")
+            if p.is_file() and not p.name.endswith(".ct")
+        ]
+        assert len(blob_files) == 1
+        disk_bytes = blob_files[0].read_bytes()
+        assert not disk_bytes.startswith(b"\xff\xd8\xff")
+        assert b"SecretAuthorName" not in disk_bytes
+
+        # Stream decrypted photo back -> valid JPEG with ZERO EXIF metadata!
+        dl = await client.get(
+            f"/v1/persons/{person_id}/photos/avatar", headers=_auth_headers(token_a)
+        )
+        assert dl.status_code == 200
+        assert dl.headers["content-type"] == "image/jpeg"
+        with Image.open(BytesIO(dl.content)) as stripped_img:
+            assert stripped_img.size == (64, 48)
+            assert len(stripped_img.getexif()) == 0
+
+        # Tenant B cannot access Tenant A's person or photo (RLS + scope isolation)
+        assert (
+            await client.get(f"/v1/persons/{person_id}", headers=_auth_headers(token_b))
+        ).status_code == 404
+        assert (
+            await client.get(
+                f"/v1/persons/{person_id}/photos/avatar", headers=_auth_headers(token_b)
+            )
+        ).status_code == 404
+
+        # Seed 12 records (11 active + 1 soft-deleted) + 1 voice media blob + inbox items
+        base_ts = datetime(2026, 11, 11, 12, 0, tzinfo=UTC)
+        voice_media_key = f"{user_a}/records/voice_{new_id()}.webm"
+        await db_container.storage.put_encrypted(
+            user_id=user_a,
+            dek=dek_a,
+            object_key=voice_media_key,
+            plaintext=b"fake-webm-audio",
+            content_type="audio/webm",
+        )
+
+        async with db_container.db.user_session(scope_a) as sess:
+            for idx in range(12):
+                rid = new_id()
+                is_deleted = idx == 11
+                is_voice = idx == 10
+                sess.add(
+                    RecordRow(
+                        id=rid,
+                        user_id=user_a,
+                        person_id=person_id,
+                        kind="voice" if is_voice else "note",
+                        title_enc=db_container.cipher.encrypt_str(
+                            dek_a,
+                            f"手札标题-{idx:02d}",
+                            user_id=user_a,
+                            table="records",
+                            column="title_enc",
+                            row_id=rid,
+                        ),
+                        body_enc=db_container.cipher.encrypt_str(
+                            dek_a,
+                            f"正文内容-{idx:02d}",
+                            user_id=user_a,
+                            table="records",
+                            column="body_enc",
+                            row_id=rid,
+                        ),
+                        snippet_enc=db_container.cipher.encrypt_str(
+                            dek_a,
+                            f"摘要-{idx:02d}",
+                            user_id=user_a,
+                            table="records",
+                            column="snippet_enc",
+                            row_id=rid,
+                        ),
+                        media_object_key=voice_media_key if is_voice else None,
+                        audio_duration_ms=18_000 if is_voice else None,
+                        stamp_code="KAMAKURA · 04.17" if is_voice else None,
+                        happened_on=date(2026, 4, 17),
+                        deleted_at=base_ts if is_deleted else None,
+                        created_at=base_ts + timedelta(minutes=idx),
+                        updated_at=base_ts + timedelta(minutes=idx),
+                    )
+                )
+
+            # 2 open inbox items + 1 resolved inbox item -> inboxCount == 2
+            for idx, st in enumerate(("open", "open", "resolved")):
+                iid = new_id()
+                sess.add(
+                    InboxItemRow(
+                        id=iid,
+                        user_id=user_a,
+                        person_id=person_id,
+                        kind="fact_confirm",
+                        status=st,
+                        payload_enc=db_container.cipher.encrypt_json(
+                            dek_a,
+                            {"n": idx},
+                            user_id=user_a,
+                            table="inbox_items",
+                            column="payload_enc",
+                            row_id=iid,
+                        ),
+                    )
+                )
+
+        # Verify GET /v1/bootstrap returns exact V10 PEOPLE_DB structure & top-10 non-deleted materials
+        boot = await client.get("/v1/bootstrap", headers=_auth_headers(token_a))
+        assert boot.status_code == 200
+        bdata = boot.json()
+        assert bdata["coreIds"] == [str(person_id)]
+        assert bdata["casualIds"] == []
+        assert bdata["inboxCount"] == 2
+        p_entry = bdata["people"][str(person_id)]
+        assert p_entry["id"] == str(person_id)
+        assert p_entry["nameCn"] == "沈清秋"
+        assert p_entry["cupidTitle"] == "沈清秋的丘比特"
+        assert p_entry["hasPhoto"] is True
+        assert p_entry["avatarUrl"] == f"/v1/persons/{person_id}/photos/avatar"
+        mats = p_entry["materials"]
+        assert len(mats) == 10
+        # Newest non-deleted is idx=10 (idx=11 was soft-deleted!)
+        assert mats[0]["title"] == "手札标题-10"
+        assert mats[0]["type"] == "voice"
+        assert mats[0]["dur"] == "0:18"
+        assert mats[0]["stampCode"] == "KAMAKURA · 04.17"
+        assert mats[0]["happenedOn"] == "2026-04-17"
+        assert mats[0]["mediaUrl"] is not None
+        assert mats[-1]["title"] == "手札标题-01"
+
+        # DELETE /v1/persons/{id} cascades DB rows AND purges all encrypted media blobs!
+        deleted = await client.delete(
+            f"/v1/persons/{person_id}",
+            headers=_auth_headers(token_a, idem_key="del-person-a"),
+        )
+        assert deleted.status_code == 204
+        assert (
+            await client.get(f"/v1/persons/{person_id}", headers=_auth_headers(token_a))
+        ).status_code == 404
+
+        remaining_blobs = [
+            p
+            for p in db_container.settings.blob_storage_dir.rglob("*")
+            if p.is_file() and not p.name.endswith(".ct")
+        ]
+        assert remaining_blobs == []

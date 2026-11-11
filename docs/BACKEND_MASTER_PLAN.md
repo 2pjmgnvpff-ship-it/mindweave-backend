@@ -659,19 +659,35 @@ flowchart LR
 ```python
 @dataclass(frozen=True)
 class GateInput:
-    fact_type: FactType; confidence: float; candidate_count: int
-    multi_person: bool; scoped_locked: bool; venting: bool; tier: Tier
-    person_state: PersonState; speaker_known: bool; extraction_ok: bool
+    fact_type: FactType
+    confidence: float
+    candidate_count: int
+    multi_person: bool
+    scoped_locked: bool
+    venting: bool
+    tier: Tier
+    person_state: PersonState
+    speaker_known: bool
+    extraction_ok: bool
+
 
 def decide(i: GateInput, cfg: GateConfig) -> GateDecision:
-    if not i.extraction_ok:                    return pending(PendingReason.EXTRACTION_FAILED)
-    if i.person_state is PersonState.PROVISIONAL: return pending(PendingReason.NEW_PERSON)
-    if i.candidate_count != 1:                 return pending(PendingReason.AMBIGUOUS_PERSON)
-    if i.multi_person and not i.scoped_locked: return pending(PendingReason.MULTI_PERSON)
-    if i.fact_type in (FactType.DATE, FactType.PROMISE): return pending(PendingReason.DATE_OR_PROMISE)
-    if i.venting and i.tier is Tier.GOLD:      return pending(PendingReason.VENTING)
-    if not i.speaker_known:                    return pending(PendingReason.SPEAKER_UNKNOWN)
-    if i.confidence < cfg.threshold:           return pending(PendingReason.LOW_CONFIDENCE)
+    if not i.extraction_ok:
+        return pending(PendingReason.EXTRACTION_FAILED)
+    if i.person_state is PersonState.PROVISIONAL:
+        return pending(PendingReason.NEW_PERSON)
+    if i.candidate_count != 1:
+        return pending(PendingReason.AMBIGUOUS_PERSON)
+    if i.multi_person and not i.scoped_locked:
+        return pending(PendingReason.MULTI_PERSON)
+    if i.fact_type in (FactType.DATE, FactType.PROMISE):
+        return pending(PendingReason.DATE_OR_PROMISE)
+    if i.venting and i.tier is Tier.GOLD:
+        return pending(PendingReason.VENTING)
+    if not i.speaker_known:
+        return pending(PendingReason.SPEAKER_UNKNOWN)
+    if i.confidence < cfg.threshold:
+        return pending(PendingReason.LOW_CONFIDENCE)
     return confirmed(undo_window=cfg.undo_window)
 ```
 

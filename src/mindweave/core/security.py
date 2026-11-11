@@ -109,6 +109,7 @@ class TokenService:
                 options={
                     "require": ["sub", "jti", "iss", "typ", "iat", "exp"],
                     "verify_exp": verify_exp,
+                    "verify_iat": verify_exp,
                 },
             )
             iat = datetime.fromtimestamp(int(data["iat"]), tz=UTC)
