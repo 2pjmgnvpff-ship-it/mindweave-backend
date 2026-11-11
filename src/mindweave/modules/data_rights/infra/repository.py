@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import json
 from datetime import datetime
 from typing import Any
@@ -227,11 +228,22 @@ class DataRightsRepository:
             )
         ).all()
         deleted_person_ids: set[UUID] = set()
+        deleted_person_names: set[str] = set()
         for dp in deleted_person_rows:
             deleted_person_ids.add(dp.id)
             _exclude_media(dp.avatar_object_key)
             _exclude_media(dp.main_photo_object_key)
             _exclude_media(dp.sub_photo_object_key)
+            dp_name = cipher.decrypt_str(
+                dek,
+                dp.display_name_enc,
+                user_id=uid,
+                table="persons",
+                column="display_name_enc",
+                row_id=dp.id,
+            ).strip()
+            if dp_name:
+                deleted_person_names.add(dp_name)
 
         unassigned_person_ids: set[UUID] = (
             set(
@@ -336,25 +348,39 @@ class DataRightsRepository:
                 .order_by(PersonAliasRow.created_at.asc())
             )
         ).all()
-        person_aliases = [
-            {
-                "id": str(a.id),
-                "personId": str(a.person_id),
-                "alias": cipher.decrypt_str(
+        person_aliases: list[dict[str, Any]] = []
+        for a in alias_rows:
+            if a.person_id in deleted_person_ids:
+                del_alias = cipher.decrypt_str(
                     dek,
                     a.alias_enc,
                     user_id=uid,
                     table="person_aliases",
                     column="alias_enc",
                     row_id=a.id,
-                ),
-                "kind": a.kind,
-                "isPrimary": a.is_primary,
-                "createdAt": a.created_at.isoformat(),
-            }
-            for a in alias_rows
-            if a.person_id not in hidden_person_ids
-        ]
+                ).strip()
+                if del_alias:
+                    deleted_person_names.add(del_alias)
+                continue
+            if a.person_id in hidden_person_ids:
+                continue
+            person_aliases.append(
+                {
+                    "id": str(a.id),
+                    "personId": str(a.person_id),
+                    "alias": cipher.decrypt_str(
+                        dek,
+                        a.alias_enc,
+                        user_id=uid,
+                        table="person_aliases",
+                        column="alias_enc",
+                        row_id=a.id,
+                    ),
+                    "kind": a.kind,
+                    "isPrimary": a.is_primary,
+                    "createdAt": a.created_at.isoformat(),
+                }
+            )
 
         def _public_person_id(pid: UUID | None) -> str | None:
             if pid is None or pid in unassigned_person_ids:
@@ -372,6 +398,7 @@ class DataRightsRepository:
         deleted_or_held_record_ids: set[UUID] = set()
         deleted_person_capture_ids: set[UUID] = set()
         surviving_capture_ids: set[UUID] = set()
+        surviving_record_texts_by_capture: dict[UUID, list[str]] = {}
         materials: list[dict[str, Any]] = []
         for rec in all_record_rows:
             if (
@@ -388,8 +415,20 @@ class DataRightsRepository:
                 ):
                     deleted_person_capture_ids.add(rec.capture_id)
                 continue
+            dec_body = cipher.decrypt_str(
+                dek,
+                rec.body_enc,
+                user_id=uid,
+                table="records",
+                column="body_enc",
+                row_id=rec.id,
+            )
             if rec.capture_id is not None:
                 surviving_capture_ids.add(rec.capture_id)
+                if dec_body.strip():
+                    surviving_record_texts_by_capture.setdefault(rec.capture_id, []).append(
+                        dec_body.strip()
+                    )
             _track_media(rec.media_object_key)
             materials.append(
                 {
@@ -405,14 +444,7 @@ class DataRightsRepository:
                         column="title_enc",
                         row_id=rec.id,
                     ),
-                    "body": cipher.decrypt_str(
-                        dek,
-                        rec.body_enc,
-                        user_id=uid,
-                        table="records",
-                        column="body_enc",
-                        row_id=rec.id,
-                    ),
+                    "body": dec_body,
                     "snippet": _decrypt_opt_str(
                         cipher,
                         dek,
@@ -435,7 +467,70 @@ class DataRightsRepository:
                 }
             )
 
-        # 8. captures (exclude reverted captures and captures scoped/routed solely to soft-deleted persons)
+        deleted_person_id_strs: set[str] = {str(pid) for pid in deleted_person_ids}
+        deleted_or_held_record_id_strs: set[str] = {str(rid) for rid in deleted_or_held_record_ids}
+
+        # 8. inbox_items (partitioned before captures so excluded inboxItemIds are scrubbed from splitsSummary)
+        inbox_rows = (
+            await user_session.scalars(
+                select(InboxItemRow)
+                .where(InboxItemRow.user_id == uid)
+                .order_by(InboxItemRow.created_at.asc())
+            )
+        ).all()
+        excluded_inbox_id_strs: set[str] = set()
+        inbox_items: list[dict[str, Any]] = []
+        for item in inbox_rows:
+            if (
+                (item.person_id is not None and item.person_id in deleted_person_ids)
+                or (item.record_id is not None and item.record_id in deleted_or_held_record_ids)
+                or (item.status == "resolved" and item.resolution_action == "discard")
+            ):
+                excluded_inbox_id_strs.add(str(item.id))
+                continue
+            inbox_items.append(
+                {
+                    "id": str(item.id),
+                    "personId": _public_person_id(item.person_id),
+                    "captureId": str(item.capture_id) if item.capture_id else None,
+                    "recordId": str(item.record_id) if item.record_id else None,
+                    "kind": item.kind,
+                    "status": item.status,
+                    "factIds": [str(fid) for fid in item.fact_ids],
+                    "candidatePersonIds": [
+                        str(cid)
+                        for cid in item.candidate_person_ids
+                        if cid not in hidden_person_ids
+                    ],
+                    "payload": _decrypt_opt_json(
+                        cipher,
+                        dek,
+                        item.payload_enc,
+                        user_id=uid,
+                        table="inbox_items",
+                        column="payload_enc",
+                        row_id=item.id,
+                    ),
+                    "resolutionAction": item.resolution_action,
+                    "expiresAt": _iso(item.expires_at),
+                    "resolvedAt": _iso(item.resolved_at),
+                    "createdAt": item.created_at.isoformat(),
+                }
+            )
+
+        def _is_excluded_split(split_obj: Any) -> bool:
+            if not isinstance(split_obj, dict):
+                return False
+            s_pid = str(split_obj.get("personId") or "")
+            s_mat_id = str(split_obj.get("materialId") or split_obj.get("recordId") or "")
+            s_pname = str(split_obj.get("personName") or "").strip()
+            return (
+                s_pid in deleted_person_id_strs
+                or s_mat_id in deleted_or_held_record_id_strs
+                or (bool(s_pname) and s_pname in deleted_person_names)
+            )
+
+        # 9. captures (exclude reverted/deleted-person captures; scrub deleted splits on multi-person captures)
         capture_rows = (
             await user_session.scalars(
                 select(CaptureRow)
@@ -458,6 +553,122 @@ class DataRightsRepository:
                 continue
             _track_media(c.audio_object_key)
             _track_media(c.image_object_key)
+
+            raw_text = _decrypt_opt_str(
+                cipher,
+                dek,
+                c.raw_text_enc,
+                user_id=uid,
+                table="captures",
+                column="raw_text_enc",
+                row_id=c.id,
+            )
+            transcript = _decrypt_opt_str(
+                cipher,
+                dek,
+                c.transcript_enc,
+                user_id=uid,
+                table="captures",
+                column="transcript_enc",
+                row_id=c.id,
+            )
+            transcript_marked = _decrypt_opt_str(
+                cipher,
+                dek,
+                c.transcript_marked_enc,
+                user_id=uid,
+                table="captures",
+                column="transcript_marked_enc",
+                row_id=c.id,
+            )
+            splits_summary = _decrypt_opt_json(
+                cipher,
+                dek,
+                c.splits_summary_enc,
+                user_id=uid,
+                table="captures",
+                column="splits_summary_enc",
+                row_id=c.id,
+            )
+
+            had_removed_splits = False
+            surviving_split_dicts: list[dict[str, Any]] = []
+            removed_split_fragments: list[str] = []
+
+            if isinstance(splits_summary, dict) and isinstance(splits_summary.get("splits"), list):
+                filtered_splits: list[Any] = []
+                for s in splits_summary["splits"]:
+                    if _is_excluded_split(s):
+                        had_removed_splits = True
+                        for frag_key in ("body", "tag", "personName"):
+                            frag_val = str(s.get(frag_key) or "").strip()
+                            if frag_val:
+                                removed_split_fragments.append(frag_val)
+                    else:
+                        filtered_splits.append(s)
+                        if isinstance(s, dict):
+                            surviving_split_dicts.append(s)
+                updated_summary = dict(splits_summary)
+                updated_summary["splits"] = filtered_splits
+                if isinstance(updated_summary.get("inboxItemIds"), list):
+                    updated_summary["inboxItemIds"] = [
+                        iid
+                        for iid in updated_summary["inboxItemIds"]
+                        if str(iid) not in excluded_inbox_id_strs
+                    ]
+                    if "pendingCount" in updated_summary and had_removed_splits:
+                        updated_summary["pendingCount"] = len(updated_summary["inboxItemIds"])
+                splits_summary = updated_summary
+            elif isinstance(splits_summary, list):
+                filtered_list: list[Any] = []
+                for s in splits_summary:
+                    if _is_excluded_split(s):
+                        had_removed_splits = True
+                        for frag_key in ("body", "tag", "personName"):
+                            frag_val = str(s.get(frag_key) or "").strip()
+                            if frag_val:
+                                removed_split_fragments.append(frag_val)
+                    else:
+                        filtered_list.append(s)
+                        if isinstance(s, dict):
+                            surviving_split_dicts.append(s)
+                splits_summary = filtered_list
+
+            if had_removed_splits or c.id in deleted_person_capture_ids:
+                surviving_clauses: list[str] = []
+                highlight_names: list[str] = []
+                for s in surviving_split_dicts:
+                    s_pname = str(s.get("personName") or "").strip()
+                    s_body = str(s.get("body") or "").strip()
+                    if s_pname and s_pname not in deleted_person_names:
+                        highlight_names.append(s_pname)
+                    if s_body:
+                        if s_pname and s_pname not in s_body:
+                            surviving_clauses.append(f"{s_pname}：{s_body}")
+                        else:
+                            surviving_clauses.append(s_body)
+                if not surviving_clauses:
+                    surviving_clauses = list(surviving_record_texts_by_capture.get(c.id, []))
+
+                rebuilt_text = "；".join(surviving_clauses)
+                for forbidden_tok in (*deleted_person_names, *removed_split_fragments):
+                    if forbidden_tok:
+                        rebuilt_text = rebuilt_text.replace(forbidden_tok, "")
+
+                if raw_text is not None:
+                    raw_text = rebuilt_text
+                if transcript is not None:
+                    transcript = rebuilt_text
+                if transcript_marked is not None:
+                    escaped_marked = html.escape(rebuilt_text, quote=True)
+                    for hname in sorted(set(highlight_names), key=len, reverse=True):
+                        esc_hname = html.escape(hname, quote=True)
+                        if esc_hname:
+                            escaped_marked = escaped_marked.replace(
+                                esc_hname, f"<mark>{esc_hname}</mark>"
+                            )
+                    transcript_marked = escaped_marked
+
             captures.append(
                 {
                     "id": str(c.id),
@@ -469,42 +680,10 @@ class DataRightsRepository:
                     "imageObjectKey": c.image_object_key,
                     "keepOriginalMedia": c.keep_original_media,
                     "durationMs": c.duration_ms,
-                    "rawText": _decrypt_opt_str(
-                        cipher,
-                        dek,
-                        c.raw_text_enc,
-                        user_id=uid,
-                        table="captures",
-                        column="raw_text_enc",
-                        row_id=c.id,
-                    ),
-                    "transcript": _decrypt_opt_str(
-                        cipher,
-                        dek,
-                        c.transcript_enc,
-                        user_id=uid,
-                        table="captures",
-                        column="transcript_enc",
-                        row_id=c.id,
-                    ),
-                    "transcriptMarked": _decrypt_opt_str(
-                        cipher,
-                        dek,
-                        c.transcript_marked_enc,
-                        user_id=uid,
-                        table="captures",
-                        column="transcript_marked_enc",
-                        row_id=c.id,
-                    ),
-                    "splitsSummary": _decrypt_opt_json(
-                        cipher,
-                        dek,
-                        c.splits_summary_enc,
-                        user_id=uid,
-                        table="captures",
-                        column="splits_summary_enc",
-                        row_id=c.id,
-                    ),
+                    "rawText": raw_text,
+                    "transcript": transcript,
+                    "transcriptMarked": transcript_marked,
+                    "splitsSummary": splits_summary,
                     "safetyCategory": c.safety_category,
                     "promptVersion": c.prompt_version,
                     "modelProfile": c.model_profile,
@@ -515,7 +694,7 @@ class DataRightsRepository:
                 }
             )
 
-        # 9. facts (exclude deleted persons, rejected facts, and facts tied to deleted/held records)
+        # 10. facts (exclude deleted persons, rejected facts, and facts tied to deleted/held records)
         fact_rows = (
             await user_session.scalars(
                 select(FactRow).where(FactRow.user_id == uid).order_by(FactRow.created_at.asc())
@@ -562,48 +741,6 @@ class DataRightsRepository:
                 (f.person_id is not None and f.person_id in deleted_person_ids)
                 or f.status == FactStatus.REJECTED.value
                 or (f.record_id is not None and f.record_id in deleted_or_held_record_ids)
-            )
-        ]
-
-        # 10. inbox_items (exclude deleted persons, deleted/held records, and discarded resolutions)
-        inbox_rows = (
-            await user_session.scalars(
-                select(InboxItemRow)
-                .where(InboxItemRow.user_id == uid)
-                .order_by(InboxItemRow.created_at.asc())
-            )
-        ).all()
-        inbox_items = [
-            {
-                "id": str(item.id),
-                "personId": _public_person_id(item.person_id),
-                "captureId": str(item.capture_id) if item.capture_id else None,
-                "recordId": str(item.record_id) if item.record_id else None,
-                "kind": item.kind,
-                "status": item.status,
-                "factIds": [str(fid) for fid in item.fact_ids],
-                "candidatePersonIds": [
-                    str(cid) for cid in item.candidate_person_ids if cid not in hidden_person_ids
-                ],
-                "payload": _decrypt_opt_json(
-                    cipher,
-                    dek,
-                    item.payload_enc,
-                    user_id=uid,
-                    table="inbox_items",
-                    column="payload_enc",
-                    row_id=item.id,
-                ),
-                "resolutionAction": item.resolution_action,
-                "expiresAt": _iso(item.expires_at),
-                "resolvedAt": _iso(item.resolved_at),
-                "createdAt": item.created_at.isoformat(),
-            }
-            for item in inbox_rows
-            if not (
-                (item.person_id is not None and item.person_id in deleted_person_ids)
-                or (item.record_id is not None and item.record_id in deleted_or_held_record_ids)
-                or (item.status == "resolved" and item.resolution_action == "discard")
             )
         ]
 

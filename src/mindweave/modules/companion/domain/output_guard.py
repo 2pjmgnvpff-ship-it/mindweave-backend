@@ -62,7 +62,7 @@ FORBIDDEN_DEV_JARGON_PHRASES: tuple[str, ...] = (
 
 # ADR-005 #3: Neutral preaching / excusing phrases strictly banned in Tier.SILVER (银箭 · 记恨)
 _SILVER_EXCUSING_RE = re.compile(
-    r"[^。！？!\?\n\x00]*(?:"
+    r"[^。！？!\?\n\x01\x02]*(?:"
     r"换个角度想|换个角度看|换位思考|"
     r"站在(?:他|她|对方|主管|领导|同事)的?(?:角度|立场)|"
     r"也许(?:他|她|对方|人家)?.{0,10}(?:也有苦衷|也有压力|也有难处|不容易|不是故意的|无心的|太忙了)|"
@@ -71,7 +71,7 @@ _SILVER_EXCUSING_RE = re.compile(
     r"(?:你?可以)?试着(?:体谅|理解|包容|原谅)|"
     r"一个巴掌拍不响|退一步海阔天空|各退一步|"
     r"去见见(?:他|她)吧"
-    r")[^。！？!\?\n\x00]*[。！？!\?]?"
+    r")[^。！？!\?\n\x01\x02]*[。！？!\?]?"
 )
 
 # Numeric person-scoring assignment pattern (e.g. "渣男分：85", "海王概率 92%", "欺骗指数为0.88")
@@ -83,13 +83,6 @@ _NUMERIC_PERSON_SCORE_RE = re.compile(
 _RESIDUAL_REC_TAG_RE = re.compile(
     r"[\[【]\s*(?:rec[_:\-#]|记录[#_:：])[0-9a-zA-Z\-_,\s，、;；]*[\]】]?",
     re.IGNORECASE,
-)
-_CODE_SPAN_PROTECT_RE = re.compile(
-    r"(?:(?<=^)|(?<=\n))[ \t]{0,3}(?:`{3,}[\s\S]*?(?:`{3,}|$)|~{3,}[\s\S]*?(?:~{3,}|$))"
-    r"|`{3,}[\s\S]*?(?:`{3,}|$)"
-    r"|~{3,}[\s\S]*?(?:~{3,}|$)"
-    r"|``[^\n`]+``"
-    r"|`[^\n`]+`"
 )
 
 _CLEAN_MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
@@ -131,35 +124,168 @@ class GuardrailReport:
         return bool(self.removed_parasitic or self.removed_scoring or self.removed_dev_jargon)
 
 
+def _iter_code_spans(text: str) -> list[tuple[int, int]]:
+    """Scan CommonMark fenced code blocks (`N >= 3` `` ` `` or `~`, closed or EOF) & inline backtick spans."""
+    spans: list[tuple[int, int]] = []
+    n = len(text)
+    i = 0
+
+    while i < n:
+        ch = text[i]
+        if ch not in ("`", "~"):
+            i += 1
+            continue
+
+        j = i
+        while j < n and text[j] == ch:
+            j += 1
+        run_len = j - i
+
+        line_start = text.rfind("\n", 0, i) + 1
+        prefix = text[line_start:i]
+        at_line_start = len(prefix) <= 3 and all(c in (" ", "\t") for c in prefix)
+
+        if run_len >= 3 and (ch == "`" or at_line_start):
+            span_start = line_start if at_line_start else i
+            line_nl = text.find("\n", j)
+            open_line_end = n if line_nl == -1 else line_nl
+
+            if ch == "`":
+                closed_inline_end = -1
+                p = j
+                while p < open_line_end:
+                    if text[p] == "`":
+                        q = p
+                        while q < open_line_end and text[q] == "`":
+                            q += 1
+                        if (q - p) == run_len:
+                            closed_inline_end = q
+                            break
+                        p = q
+                    else:
+                        p += 1
+                if closed_inline_end != -1:
+                    spans.append((i, closed_inline_end))
+                    i = closed_inline_end
+                    continue
+                if "`" in text[j:open_line_end] and line_nl != -1:
+                    # CommonMark §4.5: backtick fence info string cannot contain backticks
+                    i = j
+                    continue
+
+            if line_nl == -1:
+                spans.append((span_start, n))
+                break
+
+            k = line_nl + 1
+            while k <= n:
+                if k == n:
+                    spans.append((span_start, n))
+                    i = n
+                    break
+                next_nl = text.find("\n", k)
+                line_end = n if next_nl == -1 else next_nl
+                line = text[k:line_end]
+
+                indent = 0
+                while indent < len(line) and line[indent] in (" ", "\t"):
+                    indent += 1
+                if indent <= 3:
+                    c_end = indent
+                    while c_end < len(line) and line[c_end] == ch:
+                        c_end += 1
+                    close_len = c_end - indent
+                    if close_len >= run_len and all(c in (" ", "\t", "\r") for c in line[c_end:]):
+                        spans.append((span_start, line_end))
+                        i = line_end
+                        break
+
+                if next_nl == -1:
+                    spans.append((span_start, n))
+                    i = n
+                    break
+                k = next_nl + 1
+            continue
+
+        if ch == "`":
+            line_nl = text.find("\n", j)
+            open_line_end = n if line_nl == -1 else line_nl
+            closed_end = -1
+            p = j
+            while p < open_line_end:
+                if text[p] == "`":
+                    q = p
+                    while q < open_line_end and text[q] == "`":
+                        q += 1
+                    if (q - p) == run_len:
+                        closed_end = q
+                        break
+                    p = q
+                else:
+                    p += 1
+            if closed_end != -1:
+                spans.append((i, closed_end))
+                i = closed_end
+            else:
+                i = j
+            continue
+
+        i = j
+
+    return spans
+
+
 def _stash_code_spans(text: str) -> tuple[str, list[str]]:
+    spans = _iter_code_spans(text)
+    if not spans:
+        return text, []
     protected: list[str] = []
-
-    def _stash(match: re.Match[str]) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for span_start, span_end in spans:
+        if span_start > cursor:
+            parts.append(text[cursor:span_start])
         idx = len(protected)
-        protected.append(match.group(0))
-        return f"\x00MWCODE{idx}\x00"
-
-    return _CODE_SPAN_PROTECT_RE.sub(_stash, text), protected
+        protected.append(text[span_start:span_end])
+        parts.append(f"\x01MWCODE{idx}\x02")
+        cursor = span_end
+    if cursor < len(text):
+        parts.append(text[cursor:])
+    return "".join(parts), protected
 
 
 def _restore_code_spans(text: str, protected: list[str]) -> str:
+    if not protected:
+        return text
     restored = text
     for idx, original in enumerate(protected):
-        restored = restored.replace(f"\x00MWCODE{idx}\x00", original)
+        restored = restored.replace(f"\x01MWCODE{idx}\x02", original)
     return restored
 
 
-def _tidy_prose(text: str) -> str:
-    masked, protected = _stash_code_spans(text)
+def _tidy_prose_masked(masked: str) -> str:
     cleaned = _CLEAN_MULTI_SPACE_RE.sub(" ", masked)
     cleaned = _DOUBLE_PUNCT_RE.sub(r"\1", cleaned)
     cleaned = _STRAY_CLAUSE_PUNCT_RE.sub("", cleaned)
-    cleaned = cleaned.strip()
-    return _restore_code_spans(cleaned, protected)
+    return cleaned.strip()
 
 
-def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> str:
+def _scrub_silver_excusing_outside_code(text: str) -> str:
     masked, protected = _stash_code_spans(text)
+    scrubbed = _SILVER_EXCUSING_RE.sub("", masked)
+    return _restore_code_spans(scrubbed, protected)
+
+
+def sanitize_text(text: str, *, allow_empty: bool = True) -> GuardrailReport:
+    """Sanitize a user-visible string against parasitic dependency, person-scoring, and dev jargon."""
+    if not text:
+        return GuardrailReport(cleaned_text="" if allow_empty else FALLBACK_SAFE_REPLY)
+
+    masked, protected = _stash_code_spans(text)
+    removed_parasitic: list[str] = []
+    removed_scoring: list[str] = []
+    removed_jargon: list[str] = []
+
     if _RESIDUAL_REC_TAG_RE.search(masked):
         removed_jargon.append("[rec_")
         masked = _RESIDUAL_REC_TAG_RE.sub("", masked)
@@ -168,43 +294,28 @@ def _scrub_residual_rec_outside_code(text: str, removed_jargon: list[str]) -> st
             removed_jargon.append(raw_prefix)
             masked = masked.replace(raw_prefix, "")
 
-    return _restore_code_spans(masked, protected)
-
-
-def sanitize_text(text: str, *, allow_empty: bool = True) -> GuardrailReport:
-    """Sanitize a user-visible string against parasitic dependency, person-scoring, and dev jargon."""
-    if not text:
-        return GuardrailReport(cleaned_text="" if allow_empty else FALLBACK_SAFE_REPLY)
-
-    working = text
-    removed_parasitic: list[str] = []
-    removed_scoring: list[str] = []
-    removed_jargon: list[str] = []
-
-    working = _scrub_residual_rec_outside_code(working, removed_jargon)
-
     for phrase in sorted(FORBIDDEN_PARASITIC_PHRASES, key=len, reverse=True):
-        if phrase in working:
+        if phrase in masked:
             removed_parasitic.append(phrase)
-            working = working.replace(phrase, "")
+            masked = masked.replace(phrase, "")
 
     for phrase in sorted(FORBIDDEN_PSEUDOSCIENCE_PHRASES, key=len, reverse=True):
-        if phrase in working:
+        if phrase in masked:
             removed_scoring.append(phrase)
-            working = working.replace(phrase, "")
+            masked = masked.replace(phrase, "")
 
-    for match in _NUMERIC_PERSON_SCORE_RE.findall(working):
+    for match in _NUMERIC_PERSON_SCORE_RE.findall(masked):
         removed_scoring.append(match)
-    working = _NUMERIC_PERSON_SCORE_RE.sub("", working)
+    masked = _NUMERIC_PERSON_SCORE_RE.sub("", masked)
 
     for phrase in sorted(FORBIDDEN_DEV_JARGON_PHRASES, key=len, reverse=True):
         if phrase in ("[rec_", "【rec_"):
             continue
-        if phrase in working:
+        if phrase in masked:
             removed_jargon.append(phrase)
-            working = working.replace(phrase, "")
+            masked = masked.replace(phrase, "")
 
-    cleaned = _tidy_prose(working)
+    cleaned = _restore_code_spans(_tidy_prose_masked(masked), protected)
     if not cleaned and not allow_empty:
         cleaned = FALLBACK_SAFE_REPLY
 
@@ -229,9 +340,7 @@ def enforce_tier_output_constraints(
         return SILVER_LOYAL_FALLBACK_REPLY if tier is Tier.SILVER else FALLBACK_SAFE_REPLY
 
     trailing_nl_count = min(2, len(text) - len(text.rstrip("\n")))
-    working = text
-    if tier is Tier.SILVER:
-        working = _SILVER_EXCUSING_RE.sub("", working)
+    working = _scrub_silver_excusing_outside_code(text) if tier is Tier.SILVER else text
 
     rep = sanitize_text(working, allow_empty=True)
     cleaned = rep.cleaned_text
@@ -240,8 +349,9 @@ def enforce_tier_output_constraints(
             return ""
         return SILVER_LOYAL_FALLBACK_REPLY if tier is Tier.SILVER else FALLBACK_SAFE_REPLY
 
-    if trailing_nl_count > 0:
-        return cleaned + ("\n" * trailing_nl_count)
+    actual_nl = len(cleaned) - len(cleaned.rstrip("\n"))
+    if trailing_nl_count > actual_nl:
+        return cleaned + ("\n" * (trailing_nl_count - actual_nl))
     return cleaned
 
 
@@ -251,9 +361,11 @@ def sanitize_companion_output(
     tier: Tier | None = None,
 ) -> tuple[CompanionChatOutput, GuardrailReport]:
     """Sanitize all user-facing fields of a `CompanionChatOutput` (including tier-specific rules)."""
-    working_reply = output.reply_text
-    if tier is Tier.SILVER:
-        working_reply = _SILVER_EXCUSING_RE.sub("", working_reply)
+    working_reply = (
+        _scrub_silver_excusing_outside_code(output.reply_text)
+        if tier is Tier.SILVER
+        else output.reply_text
+    )
     reply_rep = sanitize_text(working_reply, allow_empty=True)
     final_reply = reply_rep.cleaned_text
     if not final_reply:
@@ -283,7 +395,7 @@ def sanitize_companion_output(
 
     cleaned_suggestions: list[str] = []
     for item in output.actionable_suggestions:
-        s_input = _SILVER_EXCUSING_RE.sub("", item) if tier is Tier.SILVER else item
+        s_input = _scrub_silver_excusing_outside_code(item) if tier is Tier.SILVER else item
         s_rep = sanitize_text(s_input, allow_empty=True)
         parasitic.extend(s_rep.removed_parasitic)
         scoring.extend(s_rep.removed_scoring)
@@ -408,7 +520,11 @@ class StreamingReplyExtractor:
         return ""
 
 
-def _find_flushable_segments(buf: str) -> tuple[list[str], str]:
+def _find_flushable_segments(
+    buf: str,
+    *,
+    starts_at_line_start: bool = True,
+) -> tuple[list[str], str]:
     """Split `buf` into complete sentence segments while keeping fenced/inline code spans intact."""
     segments: list[str] = []
     start = 0
@@ -448,13 +564,14 @@ def _find_flushable_segments(buf: str) -> tuple[list[str], str]:
                 if j == n:
                     return segments, buf[start:]
                 run_len = j - i
-                if run_len >= fence_len:
-                    if not fence_saw_newline:
+                if not fence_saw_newline:
+                    if fence_char == "`" and run_len == fence_len:
                         in_fence = False
                         fence_char = ""
                         fence_len = 0
                         i = j
                         continue
+                elif run_len >= fence_len:
                     line_start = buf.rfind("\n", start, i) + 1
                     prefix = buf[line_start:i]
                     if len(prefix) <= 3 and all(c in (" ", "\t") for c in prefix):
@@ -503,7 +620,16 @@ def _find_flushable_segments(buf: str) -> tuple[list[str], str]:
             if j == n:
                 return segments, buf[start:]
             run_len = j - i
-            if run_len >= 3:
+            nl_pos = buf.rfind("\n", 0, i)
+            if nl_pos == -1:
+                at_line_start = (
+                    starts_at_line_start and i <= 3 and all(c in (" ", "\t") for c in buf[:i])
+                )
+            else:
+                prefix = buf[nl_pos + 1 : i]
+                at_line_start = len(prefix) <= 3 and all(c in (" ", "\t") for c in prefix)
+
+            if run_len >= 3 and (ch == "`" or at_line_start):
                 in_fence = True
                 fence_char = ch
                 fence_len = run_len
@@ -533,7 +659,7 @@ def _find_flushable_segments(buf: str) -> tuple[list[str], str]:
 class SentenceBufferedStreamGuard:
     """Buffers decoded SSE reply text until sentence terminators (`。！？\\n；!?`) or EOF (`RT-09`, `R2-04`).
 
-    - Tracks Markdown ```` ``` ```` / `~~~` fenced code blocks and inline backtick spans so
+    - Tracks Markdown ```` ``` ```` / `~~~` fenced code blocks (`N >= 3`) and inline backtick spans so
       multi-line code blocks are NEVER split mid-fence on `\\n`, preserving `[rec_<uuid>]`
       literals and leading code indentation inside fences (Invariant I4).
     - Applies `enforce_tier_output_constraints` to each complete sentence/block BEFORE yielding
@@ -546,6 +672,7 @@ class SentenceBufferedStreamGuard:
         self._buf: str = ""
         self._has_emitted_content: bool = False
         self._trailing_newlines: int = 0
+        self._raw_at_line_start: bool = True
 
     def _sanitize_segment(self, seg: str) -> str:
         if not seg:
@@ -569,7 +696,12 @@ class SentenceBufferedStreamGuard:
             return ""
         self._buf += delta
 
-        raw_segments, remainder = _find_flushable_segments(self._buf)
+        raw_segments, remainder = _find_flushable_segments(
+            self._buf,
+            starts_at_line_start=self._raw_at_line_start,
+        )
+        if raw_segments:
+            self._raw_at_line_start = raw_segments[-1].endswith("\n")
         self._buf = remainder
 
         out_parts: list[str] = []

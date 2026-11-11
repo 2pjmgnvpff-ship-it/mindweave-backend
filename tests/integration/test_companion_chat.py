@@ -1704,3 +1704,117 @@ async def test_round2_remediation_fenced_code_sse_and_retry_no_duplicate_user_ms
         ).json()["items"]
         assert [m["role"] for m in hist_c] == ["user", "assistant"]
         assert hist_c[0]["id"] == str(mid)
+
+
+@pytest.mark.asyncio
+async def test_round3_remediation_quadruple_fence_unclosed_eof_and_silver_code_quote(
+    db_container: AppContainer,
+) -> None:
+    """Regression suite for R3-04 across SSE streaming, JSON mode & persisted Silver history."""
+    sample_id = "01965b30-0000-7000-8000-000000000088"
+    sse_replies = [
+        (
+            "<reply>换个角度想也许他也有苦衷。\n"
+            f"嵌套示例：\n````markdown\n```\n    [rec_{sample_id}]\n```\n````\n"
+            "以上为原样代码。</reply>"
+        ),
+        f"<reply>留证模板：\n```text\n对方原话：换个角度想我也有苦衷\n    [rec_{sample_id}]</reply>",
+    ]
+    sse_idx = 0
+
+    class _R3EdgeFenceGateway(DeterministicCompanionGateway):
+        async def stream_companion_reply(
+            self,
+            *,
+            scope: Any,
+            payload: CompanionChatInput,
+            session: AsyncSession | None = None,
+        ) -> AsyncIterator[str]:
+            nonlocal sse_idx
+            raw = sse_replies[sse_idx]
+            sse_idx += 1
+            for pos in range(0, len(raw), 5):
+                yield raw[pos : pos + 5]
+
+        async def generate_companion_reply(
+            self,
+            *,
+            scope: Any,
+            payload: CompanionChatInput,
+            session: AsyncSession | None = None,
+        ) -> tuple[CompanionChatOutput, str, str]:
+            return (
+                CompanionChatOutput(
+                    reply_text=(
+                        "换个角度想他也不是故意的。\n"
+                        f"~~~~yaml\n~~~\n  quote: 对方原话：换个角度想我也有苦衷\n  ref: [rec_{sample_id}]\n~~~\n~~~~\n"
+                        "请把上述客观记录归档。"
+                    ),
+                    alternative_perspectives=["也许对方压力太大"],
+                    actionable_suggestions=[
+                        "你可以试着体谅他。邮件引用 `对方原话：换个角度想我也有苦衷` 固定责任边界。"
+                    ],
+                ),
+                "companion_chat_v0.2",
+                "pro_3_1",
+            )
+
+    gateway = _R3EdgeFenceGateway()
+    queue = RecordingJobQueue()
+    app = _build_test_app(db_container, gateway, queue)
+
+    user_id, token, dek = await _provision_user(db_container)
+    silver_id = await _seed_person(
+        db_container, user_id=user_id, dek=dek, name="甩锅领导", tier=Tier.SILVER, role_tag="上司"
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 1. SSE Turn 1: quadruple-backtick nested fence preserves inner ``` and indented [rec_...]
+        s1 = await client.post(
+            f"/v1/persons/{silver_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-r304-sse-1"},
+            json={"message": "给我四反引号嵌套示例"},
+        )
+        assert s1.status_code == 200
+        text1 = "".join(p["text"] for n, p in _parse_sse_frames(s1.text) if n == "delta")
+        assert "苦衷" not in text1
+        assert f"````markdown\n```\n    [rec_{sample_id}]\n```\n````" in text1
+
+        # 2. SSE Turn 2: unclosed EOF fence + Silver quoted opponent line preserved verbatim
+        s2 = await client.post(
+            f"/v1/persons/{silver_id}/chat/stream",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-r304-sse-2"},
+            json={"message": "给我对方原话留证模板"},
+        )
+        assert s2.status_code == 200
+        text2 = "".join(p["text"] for n, p in _parse_sse_frames(s2.text) if n == "delta")
+        assert "对方原话：换个角度想我也有苦衷" in text2
+        assert f"    [rec_{sample_id}]" in text2
+
+        # 3. Non-streaming JSON Turn 3: quadruple-tilde nested fence + Silver quote inside code
+        j3 = await client.post(
+            f"/v1/persons/{silver_id}/chat/messages?stream=false",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": "idem-r304-json-3"},
+            json={"message": "整理一份四波浪线归档说明"},
+        )
+        assert j3.status_code == 200
+        asst3 = j3.json()["assistantMessage"]
+        assert "也不是故意的" not in asst3["content"]
+        assert "quote: 对方原话：换个角度想我也有苦衷" in asst3["content"]
+        assert f"ref: [rec_{sample_id}]" in asst3["content"]
+        assert asst3["perspectives"] == []
+        assert asst3["suggestions"] == ["邮件引用 `对方原话：换个角度想我也有苦衷` 固定责任边界。"]
+
+        # 4. Persisted chat history matches sanitized/protected outputs across all 3 turns
+        hist = (
+            await client.get(
+                f"/v1/persons/{silver_id}/chat/messages",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        ).json()["items"]
+        asst_msgs = [m for m in hist if m["role"] == "assistant"]
+        assert len(asst_msgs) == 3
+        assert f"    [rec_{sample_id}]" in asst_msgs[0]["content"]
+        assert "对方原话：换个角度想我也有苦衷" in asst_msgs[1]["content"]
+        assert f"    [rec_{sample_id}]" in asst_msgs[1]["content"]
+        assert "quote: 对方原话：换个角度想我也有苦衷" in asst_msgs[2]["content"]

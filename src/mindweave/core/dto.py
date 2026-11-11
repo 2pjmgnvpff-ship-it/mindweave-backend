@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 from mindweave.core.errors import ValidationFailedError
@@ -29,6 +30,19 @@ FORBIDDEN_UI_DEV_PHRASES: tuple[str, ...] = (
 )
 
 
+def _assert_no_null_bytes(value: Any) -> None:
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValueError("Null bytes (\\u0000) are not permitted in text fields")
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _assert_no_null_bytes(k)
+            _assert_no_null_bytes(v)
+    elif isinstance(value, list | tuple | set | frozenset):
+        for item in value:
+            _assert_no_null_bytes(item)
+
+
 class CamelModel(BaseModel):
     """Canonical API DTO base model enforcing camelCase JSON wire format."""
 
@@ -38,6 +52,12 @@ class CamelModel(BaseModel):
         extra="forbid",
         from_attributes=True,
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_null_bytes_in_payload(cls, data: Any) -> Any:
+        _assert_no_null_bytes(data)
+        return data
 
 
 class CursorPage[T](CamelModel):

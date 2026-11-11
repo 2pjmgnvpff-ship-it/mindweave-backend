@@ -70,7 +70,7 @@ class AppContainer:
             reauth_ttl_seconds=settings.reauth_token_ttl_seconds,
         )
         storage = LocalEncryptedBlobStore(settings.blob_storage_dir, cipher)
-        idempotency = IdempotencyService(clk)
+        idempotency = IdempotencyService(clk, cipher=cipher)
         rate_limiter = TokenBucketRateLimiter()
         quotas = QuotaService(
             clk,
@@ -182,8 +182,8 @@ def require_idempotency_key(
     if not idempotency_key or not idempotency_key.strip():
         raise BadRequestError("Idempotency-Key header is required for mutating requests")
     cleaned = idempotency_key.strip()
-    if len(cleaned) > 128:
-        raise ValidationFailedError("Idempotency-Key exceeds 128 characters")
+    if len(cleaned) > 128 or "\x00" in cleaned:
+        raise ValidationFailedError("Idempotency-Key must be 1..128 valid characters")
     return cleaned
 
 

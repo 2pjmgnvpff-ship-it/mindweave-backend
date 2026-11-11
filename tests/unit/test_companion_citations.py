@@ -547,3 +547,83 @@ def test_r2_04_sentence_buffered_stream_guard_preserves_fenced_code_blocks_and_i
     assert f"~~~yaml\n  ref: [rec_{sample_id}]\n~~~\n" in assembled
     assert f"`[。！？] [rec_{sample_id}]`" in assembled
     assert assembled.endswith("按这个格式整理即可。")
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 5, 17, 200])
+def test_r3_04_quadruple_fence_unclosed_eof_fence_and_silver_code_quote_unit(
+    chunk_size: int,
+) -> None:
+    sample_id = "01965b30-0000-7000-8000-000000000088"
+    valid_rec = UUID("01965b30-0000-7000-8000-000000000011")
+
+    def _run_stream(
+        raw_xml: str, *, tier: Tier = Tier.SILVER
+    ) -> tuple[str, tuple[VerifiedCitation, ...]]:
+        extractor = StreamingReplyExtractor()
+        cit_proc = StreamingCitationProcessor({valid_rec})
+        guard = SentenceBufferedStreamGuard(tier=tier)
+        parts: list[str] = []
+        for idx in range(0, len(raw_xml), chunk_size):
+            body = extractor.feed(raw_xml[idx : idx + chunk_size])
+            if body:
+                step = cit_proc.feed(body)
+                flushed = guard.feed(step.delta_text)
+                if flushed:
+                    parts.append(flushed)
+        rem = extractor.finalize()
+        tail_cit = cit_proc.feed(rem).delta_text + cit_proc.finalize().delta_text
+        tail = guard.feed(tail_cit) + guard.finalize()
+        if tail:
+            parts.append(tail)
+        return "".join(parts), cit_proc.verified_citations
+
+    # 1. Quadruple-backtick & quadruple-tilde nested fences + Silver preaching outside fence + valid citation
+    nested_xml = (
+        "<reply>"
+        "换个角度想也许他也有苦衷。\n"
+        f"嵌套示例 [rec_{valid_rec}]：\n"
+        f"````markdown\n```\n    [rec_{sample_id}]\n```\n````\n"
+        f"~~~~yaml\n~~~\n  nested_tilde: [rec_{sample_id}]\n~~~\n~~~~\n"
+        "以上为原样代码。"
+        "</reply>"
+    )
+    out1, cits1 = _run_stream(nested_xml, tier=Tier.SILVER)
+    assert "苦衷" not in out1
+    assert f"````markdown\n```\n    [rec_{sample_id}]\n```\n````" in out1
+    assert f"~~~~yaml\n~~~\n  nested_tilde: [rec_{sample_id}]\n~~~\n~~~~" in out1
+    assert str(valid_rec) not in out1
+    assert cits1 == (VerifiedCitation(index=1, record_id=valid_rec),)
+
+    # 2. Unclosed EOF fence + Silver quoted opponent line inside fence
+    unclosed_xml = (
+        f"<reply>留证模板：\n```text\n对方原话：换个角度想我也有苦衷\n    [rec_{sample_id}]</reply>"
+    )
+    out2, cits2 = _run_stream(unclosed_xml, tier=Tier.SILVER)
+    assert "对方原话：换个角度想我也有苦衷" in out2
+    assert f"    [rec_{sample_id}]" in out2
+    assert cits2 == ()
+
+    # 3. Mid-line tilde wave (`好哒~~~`) in Chinese prose must NOT open a code fence
+    wave_xml = f"<reply>好哒~~~ 已经帮你核对过这条记录 [rec_{valid_rec}] 啦！</reply>"
+    out3, cits3 = _run_stream(wave_xml, tier=Tier.GOLD)
+    assert "好哒~~~" in out3
+    assert "[rec_" not in out3
+    assert cits3 == (VerifiedCitation(index=1, record_id=valid_rec),)
+
+    # 4. Non-streaming CompanionChatOutput preserves Silver quotes inside code while scrubbing prose preaching
+    non_stream_out = CompanionChatOutput(
+        reply_text=(
+            "换个角度想他也不是故意的。"
+            f"请按以下原话归档：\n```text\n对方原话：换个角度想我也有苦衷\n    [rec_{sample_id}]\n```"
+        ),
+        actionable_suggestions=[
+            "你可以试着体谅他。发送邮件确认：`对方原话：换个角度想我也有苦衷` 已留档。"
+        ],
+    )
+    sanitized_silver, _ = sanitize_companion_output(non_stream_out, tier=Tier.SILVER)
+    assert "也不是故意的" not in sanitized_silver.reply_text
+    assert "对方原话：换个角度想我也有苦衷" in sanitized_silver.reply_text
+    assert f"    [rec_{sample_id}]" in sanitized_silver.reply_text
+    assert sanitized_silver.actionable_suggestions == [
+        "发送邮件确认：`对方原话：换个角度想我也有苦衷` 已留档。"
+    ]

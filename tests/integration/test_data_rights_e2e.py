@@ -768,9 +768,24 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
             )
             assert idem_row is not None
             assert idem_row.response_body is not None
-            assert idem_row.response_body["downloadToken"] is None
-            assert idem_row.response_body["downloadPath"] is None
             assert initial_download_token not in json.dumps(idem_row.response_body)
+            if "_enc_v1" in idem_row.response_body:
+                import base64
+
+                dek_check = await db_container.load_user_dek(sess, UserScope(user_a))
+                dec_idem = db_container.cipher.decrypt_json(
+                    dek_check,
+                    base64.b64decode(idem_row.response_body["_enc_v1"]),
+                    user_id=user_a,
+                    table="idempotency_keys",
+                    column="response_body",
+                    row_id=idem_row.id,
+                )
+                assert dec_idem["downloadToken"] is None
+                assert dec_idem["downloadPath"] is None
+            else:
+                assert idem_row.response_body["downloadToken"] is None
+                assert idem_row.response_body["downloadPath"] is None
 
         replay_resp = await client.post(
             "/v1/me/exports",
@@ -1571,3 +1586,127 @@ async def test_export_excludes_soft_deleted_person_facts_aliases_chats_reminders
                 "media/reverted_shot.webp",
             ):
                 assert forbidden_arc not in archive_names
+
+
+@pytest.mark.asyncio
+async def test_export_multiperson_global_capture_scrubs_deleted_person_split_and_transcript(
+    db_container: AppContainer,
+) -> None:
+    from mindweave.main import create_app
+
+    app = create_app(container=db_container)
+    email = "multiperson-split-r3@mindweave.local"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        otp_req = await client.post(
+            "/v1/auth/email/otp:request",
+            json={"email": email, "purpose": "login"},
+        )
+        assert otp_req.status_code == 200
+        otp_data = otp_req.json()
+        verify_resp = await client.post(
+            "/v1/auth/email/otp:verify",
+            json={
+                "challengeId": otp_data["challengeId"],
+                "email": email,
+                "code": otp_data["devOtpCode"],
+            },
+        )
+        assert verify_resp.status_code == 200
+        auth_headers = {"Authorization": f"Bearer {verify_resp.json()['accessToken']}"}
+
+        keep_resp = await client.post(
+            "/v1/persons",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={"nameCn": "林溪", "tier": "gold", "roleTag": "好友"},
+        )
+        assert keep_resp.status_code == 201
+        keep_id = keep_resp.json()["id"]
+
+        del_resp_create = await client.post(
+            "/v1/persons",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={
+                "nameCn": "沈前任",
+                "tier": "silver",
+                "roleTag": "前任",
+                "aliases": ["阿沈"],
+            },
+        )
+        assert del_resp_create.status_code == 201
+        del_id = del_resp_create.json()["id"]
+
+        # Single global capture mentioning BOTH 林溪 (active) and 沈前任 (to be soft-deleted)
+        cap_resp = await client.post(
+            "/v1/captures?sync=true",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+            json={
+                "source": "text",
+                "routeMode": "global",
+                "text": "林溪喜欢茉莉花茶，而且沈前任对芒果严重过敏SecretDeletedSplit",
+            },
+        )
+        assert cap_resp.status_code == 201
+        assert len(cap_resp.json()["splits"]) == 2
+
+        # Soft-delete 沈前任
+        del_resp = await client.delete(
+            f"/v1/persons/{del_id}",
+            headers={**auth_headers, "Idempotency-Key": str(new_id())},
+        )
+        assert del_resp.status_code == 204
+
+        # Step-up reauth & export
+        reauth_req = await client.post(
+            "/v1/auth/email/otp:request",
+            headers=auth_headers,
+            json={"email": email, "purpose": "reauth"},
+        )
+        assert reauth_req.status_code == 200
+        reauth_d = reauth_req.json()
+        reauth_ver = await client.post(
+            "/v1/auth/email/otp:verify",
+            headers=auth_headers,
+            json={
+                "challengeId": reauth_d["challengeId"],
+                "email": email,
+                "code": reauth_d["devOtpCode"],
+            },
+        )
+        assert reauth_ver.status_code == 200
+        reauth_tok = str(reauth_ver.json()["reauthToken"])
+
+        exp_resp = await client.post(
+            "/v1/me/exports",
+            headers={
+                **auth_headers,
+                "X-Reauth-Token": reauth_tok,
+                "Idempotency-Key": str(new_id()),
+            },
+            json={"asyncMode": False},
+        )
+        assert exp_resp.status_code == 201
+        dl_resp = await client.get(exp_resp.json()["downloadPath"], headers=auth_headers)
+        assert dl_resp.status_code == 200
+
+        with zipfile.ZipFile(io.BytesIO(dl_resp.content), mode="r") as zf:
+            raw_data_json = zf.read("data.json").decode("utf-8")
+            data_doc = json.loads(raw_data_json)
+            journal_md = zf.read("journal.md").decode("utf-8")
+
+        # 林溪 survives in materials, captures, and journal.md
+        assert any(m["personId"] == keep_id for m in data_doc["materials"])
+        assert len(data_doc["captures"]) == 1
+        surviving_cap = data_doc["captures"][0]
+        surviving_splits = surviving_cap["splitsSummary"]["splits"]
+        assert len(surviving_splits) == 1
+        assert surviving_splits[0]["personId"] == keep_id
+        assert "茉莉花茶" in surviving_splits[0]["body"]
+        assert "茉莉花茶" in (surviving_cap["transcript"] or "")
+        assert "<mark>林溪</mark>" in (surviving_cap["transcriptMarked"] or "")
+        assert "林溪" in journal_md
+
+        # Zero trace of 沈前任 or SecretDeletedSplit anywhere in captures (splitsSummary, rawText, transcript, transcriptMarked), data.json, or journal.md
+        for leak_token in ("沈前任", "阿沈", "SecretDeletedSplit", del_id):
+            assert leak_token not in raw_data_json, f"Leaked {leak_token!r} in data.json"
+            assert leak_token not in journal_md, f"Leaked {leak_token!r} in journal.md"

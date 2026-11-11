@@ -744,6 +744,15 @@ def test_fact_create_request_lunar_validation_and_material_dto_optional_person_i
             lunar_is_leap_month=True,
         )
 
+    with pytest.raises(PydanticValidationError):
+        FactCreateRequest(
+            type=FactType.DATE,
+            content="阳历却携带农历月日",
+            is_lunar=False,
+            lunar_month=8,
+            lunar_day=15,
+        )
+
     valid_lunar = FactCreateRequest(
         type=FactType.DATE,
         content="农历八月十五",

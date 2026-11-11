@@ -1905,3 +1905,127 @@ async def test_round2_remediations_r2_03_r2_06_r2_07_and_r2_08(
             assert zhou_row.state == PersonState.ARCHIVED.value
             assert lin_row is not None and lin_row.deleted_at is not None
             assert lin_row.state == PersonState.ARCHIVED.value
+
+
+# ============================================================================
+# 11. Round 3 Remediations: R3-05 Lunar->Solar Patch Clears Lunar Fields &
+#     R3-03 Multipart Form Null-Byte Defense
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_round3_remediations_r3_05_lunar_toggle_and_r3_03_multipart_null_bytes(
+    db_container: AppContainer,
+) -> None:
+    scope, token, dek = await _provision_user(db_container)
+    person_id = await _seed_person(db_container, scope, dek, display_name="林溪", tier=Tier.GOLD)
+
+    img = Image.new("RGB", (24, 24), color=(180, 120, 90))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    jpeg_bytes = buf.getvalue()
+
+    gateway = ProgrammableGateway(transcript_text="正常语音", duration_ms=1500)
+    app = _build_test_app(db_container, gateway)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 1. R3-05: Creating solar fact with lunarMonth/lunarDay -> 422
+        bad_create = await client.post(
+            f"/v1/persons/{person_id}/facts",
+            headers=_auth(token, idem="r3-bad-solar-create"),
+            json={
+                "type": "date",
+                "polarity": "neutral",
+                "content": "冲突生日",
+                "isLunar": False,
+                "lunarMonth": 8,
+                "lunarDay": 15,
+            },
+        )
+        assert bad_create.status_code == 422
+
+        # 2. R3-05: Lunar fact toggled to solar clears lunarMonth, lunarDay, lunarIsLeapMonth
+        lunar_resp = await client.post(
+            f"/v1/persons/{person_id}/facts",
+            headers=_auth(token, idem="r3-lunar-create"),
+            json={
+                "type": "date",
+                "polarity": "neutral",
+                "content": "林溪生日",
+                "isLunar": True,
+                "lunarMonth": 8,
+                "lunarDay": 15,
+                "lunarIsLeapMonth": True,
+            },
+        )
+        assert lunar_resp.status_code == 201
+        fid = lunar_resp.json()["id"]
+
+        # Supplying lunarMonth alongside isLunar=False -> 422
+        bad_patch = await client.patch(
+            f"/v1/facts/{fid}",
+            headers=_auth(token, idem="r3-bad-solar-patch", if_match='"1"'),
+            json={"isLunar": False, "lunarMonth": 8},
+        )
+        assert bad_patch.status_code == 422
+
+        solar_patch = await client.patch(
+            f"/v1/facts/{fid}",
+            headers=_auth(token, idem="r3-ok-solar-patch", if_match='"1"'),
+            json={"isLunar": False, "triggerDate": "2026-10-01"},
+        )
+        assert solar_patch.status_code == 200
+        patched_json = solar_patch.json()
+        assert patched_json["isLunar"] is False
+        assert patched_json["lunarMonth"] is None
+        assert patched_json["lunarDay"] is None
+        assert patched_json["lunarIsLeapMonth"] is False
+        assert patched_json["triggerDate"] == "2026-10-01"
+
+        async with db_container.db.user_session(scope) as sess:
+            rem_row = await sess.scalar(
+                select(ReminderRow).where(
+                    ReminderRow.user_id == scope.user_id,
+                    ReminderRow.fact_id == UUID(fid),
+                )
+            )
+            assert rem_row is not None
+            assert rem_row.is_lunar is False
+            assert rem_row.is_leap_month is False
+            assert rem_row.target_month == 10
+            assert rem_row.target_day == 1
+
+        # 3. R3-03: Multipart form null bytes in capture & memory routers -> 422 (never 500)
+        cap_null = await client.post(
+            "/v1/captures?sync=true",
+            headers=_auth(token, idem="r3-null-cap"),
+            data={"source": "text", "routeMode": "global", "text": "恶意\x00空字节"},
+            files={"audio": ("clip.webm", VALID_WEBM_BYTES, "audio/webm")},
+        )
+        assert cap_null.status_code == 422
+
+        voice_null_text = await client.post(
+            "/v1/voice/ingest",
+            headers=_auth(token, idem="r3-null-voice-text"),
+            data={"routeMode": "global", "text": "语音\x00注入"},
+            files={"audio": ("clip.webm", VALID_WEBM_BYTES, "audio/webm")},
+        )
+        assert voice_null_text.status_code == 422
+
+        voice_null_urlencoded = await client.post(
+            "/v1/voice/ingest",
+            headers={
+                **_auth(token, idem="r3-null-voice-form"),
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            content=b"routeMode=global&text=urlencoded%00nullbyte",
+        )
+        assert voice_null_urlencoded.status_code == 422
+
+        mat_null = await client.post(
+            f"/v1/persons/{person_id}/materials",
+            headers=_auth(token, idem="r3-null-mat"),
+            data={"title": "标题\x00空字节", "body": "正常正文", "stampCode": "st\x001"},
+            files={"photo": ("sunset.jpg", jpeg_bytes, "image/jpeg")},
+        )
+        assert mat_null.status_code == 422

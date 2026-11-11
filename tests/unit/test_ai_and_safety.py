@@ -993,5 +993,33 @@ def test_r2_01_lethal_suicide_acts_never_suppressed_by_stressor_or_bitter_laught
     assert res.category is expected, f"Got {res.category} ({res.matched_rule}) for {text!r}"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Intra-CJK emoji / symbol / slash obfuscation -> MUST trigger CRISIS / VIOLENCE_VICTIM!
+        ("我已经站在天台准备跳🎉楼了", SafetyCategory.CRISIS),
+        ("今晚准备自/杀结束一切", SafetyCategory.CRISIS),
+        ("买好了木炭今晚烧🔥炭走了", SafetyCategory.CRISIS),
+        ("整瓶安|眠*药都吞下了", SafetyCategory.CRISIS),
+        ("已经走到28楼窗台准备往下跳了", SafetyCategory.CRISIS),
+        ("站在长江大桥护栏边准备跳下去一了百了", SafetyCategory.CRISIS),
+        ("老公喝醉了家⚡️暴动手打我救命", SafetyCategory.VIOLENCE_VICTIM),
+        # Benign recreational sports & everyday cold medicine -> MUST stay NORMAL!
+        ("周末和朋友去玩蹦极，站在高台往下跳太刺激了", SafetyCategory.NORMAL),
+        ("去张家界大桥玩蹦极往下跳超爽", SafetyCategory.NORMAL),
+        ("周末去游乐场坐跳楼机太刺激了", SafetyCategory.NORMAL),
+        ("重感冒嗓子疼，准备吞药睡一觉", SafetyCategory.NORMAL),
+        ("发烧38度，吃点退烧药先去睡一觉", SafetyCategory.NORMAL),
+    ],
+)
+def test_r3_02_l1_safety_emoji_symbol_evasion_and_sport_medicine_non_false_positives(
+    text: str,
+    expected: SafetyCategory,
+) -> None:
+    engine = L1SafetyEngine()
+    res = engine.evaluate(text)
+    assert res.category is expected, f"Got {res.category} ({res.matched_rule}) for {text!r}"
+
+
 async def _unused_dummy_for_typecheck() -> AdapterCallResponse:  # pragma: no cover
     return AdapterCallResponse(text="", model="fake", input_tokens=0, output_tokens=0)

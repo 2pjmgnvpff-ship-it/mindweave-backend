@@ -15,7 +15,7 @@ from mindweave.core.errors import (
     ValidationFailedError,
     VersionMismatchError,
 )
-from mindweave.core.idempotency import IdempotencyService, hash_request_payload
+from mindweave.core.idempotency import hash_request_payload
 from mindweave.core.ids import new_id
 from mindweave.modules.people.domain.copy_policy import (
     MAX_CONTEXT_SUB_LEN,
@@ -257,7 +257,7 @@ class PeopleService:
             )
             profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_profile(profile)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=201, response_body=body
             )
             return body, 201
@@ -451,7 +451,7 @@ class PeopleService:
 
             profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_profile(profile)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=200, response_body=body
             )
             return body, 200
@@ -486,7 +486,7 @@ class PeopleService:
                 person_id=person_id,
                 now=now,
             )
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=204, response_body={"deleted": True}
             )
 
@@ -543,7 +543,7 @@ class PeopleService:
 
             outcome = TierTransitionOutcome(plan=plan, version=target_row.version)
             body: dict[str, Any] = serialize_outcome(outcome)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=200, response_body=body
             )
             return body, 200
@@ -609,7 +609,7 @@ class PeopleService:
 
             outcome = MoveOutcome(plan=plan, version=target_row.version)
             body: dict[str, Any] = serialize_outcome(outcome)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=200, response_body=body
             )
             return body, 200
@@ -670,7 +670,7 @@ class PeopleService:
             )
             decrypted = self._repo.decrypt_alias_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_alias(decrypted)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=201, response_body=body
             )
             return body, 201
@@ -703,7 +703,7 @@ class PeopleService:
             await self._repo.delete_alias_row(
                 session, scope, person_id=person_id, alias_id=alias_id
             )
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=204, response_body={"deleted": True}
             )
 
@@ -765,7 +765,7 @@ class PeopleService:
             )
             profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_profile(profile)
-            await IdempotencyService.complete(
+            await self._container.idempotency.complete(
                 session, idem_row, status_code=200, response_body=body
             )
 

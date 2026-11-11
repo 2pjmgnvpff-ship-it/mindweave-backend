@@ -152,7 +152,17 @@ class StreamingCitationProcessor:
         # Streaming state machine (character-exact for chunk-split invariance)
         self._in_code_fence: bool = False
         self._fence_char: str = ""
+        self._fence_len: int = 0
+        self._fence_saw_newline: bool = False
+        self._fence_indent_count: int = 0
+        self._fence_close_count: int = 0
+        self._fence_trailing_ws: bool = False
+
         self._fence_run_buf: str = ""
+        self._fence_run_at_line_start: bool = True
+        self._at_line_start: bool = True
+        self._line_indent: int = 0
+
         self._in_inline_code: bool = False
         self._inline_tick_len: int = 0
         self._inline_close_buf: str = ""
@@ -238,6 +248,99 @@ class StreamingCitationProcessor:
             self._pending_space = ""
         self._just_stripped_citation = False
 
+    def _enter_code_fence(self, fence_char: str, fence_len: int) -> None:
+        self._in_code_fence = True
+        self._fence_char = fence_char
+        self._fence_len = fence_len
+        self._fence_saw_newline = False
+        self._fence_indent_count = 0
+        self._fence_close_count = 0
+        self._fence_trailing_ws = False
+
+    def _reset_code_fence(self) -> None:
+        self._in_code_fence = False
+        self._fence_char = ""
+        self._fence_len = 0
+        self._fence_saw_newline = False
+        self._fence_indent_count = 0
+        self._fence_close_count = 0
+        self._fence_trailing_ws = False
+
+    def _feed_fenced_char(
+        self,
+        ch: str,
+        out: list[str],
+        step_new: list[VerifiedCitation],
+    ) -> int:
+        if not self._fence_saw_newline:
+            if self._fence_char == "`" and self._fence_close_count > 0 and ch != "`":
+                if self._fence_close_count == self._fence_len:
+                    # Single-line N-backtick inline code span closed right before `ch`
+                    self._reset_code_fence()
+                    self._at_line_start = False
+                    return self._process_non_fenced_char(ch, out, step_new)
+                self._fence_close_count = 0
+
+            out.append(ch)
+            self._last_emitted_char = ch
+            if ch == "\n":
+                self._fence_saw_newline = True
+                self._fence_indent_count = 0
+                self._fence_close_count = 0
+                self._fence_trailing_ws = False
+            elif self._fence_char == "`" and ch == "`":
+                self._fence_close_count += 1
+            return 0
+
+        out.append(ch)
+        self._last_emitted_char = ch
+
+        if ch == "\n":
+            if self._fence_indent_count >= 0 and self._fence_close_count >= self._fence_len:
+                self._reset_code_fence()
+                self._at_line_start = True
+                self._line_indent = 0
+            else:
+                self._fence_indent_count = 0
+                self._fence_close_count = 0
+                self._fence_trailing_ws = False
+            return 0
+
+        if ch == "\r":
+            return 0
+
+        if (
+            self._fence_indent_count >= 0
+            and self._fence_close_count == 0
+            and not self._fence_trailing_ws
+        ):
+            if ch in (" ", "\t"):
+                self._fence_indent_count += 1
+                if self._fence_indent_count > 3:
+                    self._fence_indent_count = -1
+            elif ch == self._fence_char:
+                self._fence_close_count = 1
+            else:
+                self._fence_indent_count = -1
+        elif (
+            self._fence_indent_count >= 0
+            and self._fence_close_count > 0
+            and not self._fence_trailing_ws
+        ):
+            if ch == self._fence_char:
+                self._fence_close_count += 1
+            elif ch in (" ", "\t") and self._fence_close_count >= self._fence_len:
+                self._fence_trailing_ws = True
+            else:
+                self._fence_indent_count = -1
+                self._fence_close_count = 0
+        elif self._fence_trailing_ws and ch not in (" ", "\t"):
+            self._fence_indent_count = -1
+            self._fence_close_count = 0
+            self._fence_trailing_ws = False
+
+        return 0
+
     def _feed_inline_code_char(self, ch: str, out: list[str]) -> None:
         if ch == "`":
             self._inline_close_buf += ch
@@ -260,6 +363,9 @@ class StreamingCitationProcessor:
             self._inline_tick_len = 0
             out.append(ch)
             self._last_emitted_char = ch
+            if ch == "\n":
+                self._at_line_start = True
+                self._line_indent = 0
             return
 
         out.append(ch)
@@ -338,25 +444,63 @@ class StreamingCitationProcessor:
 
         # Not inside `_tag_buf`: check for opening bracket or single horizontal space holdback
         if ch in _OPEN_BRACKETS:
+            self._at_line_start = False
             self._tag_buf = ch
             return 0
+
+        if ch == "\n":
+            self._at_line_start = True
+            self._line_indent = 0
+        elif ch in (" ", "\t") and self._at_line_start:
+            self._line_indent += 1
+            if self._line_indent > 3:
+                self._at_line_start = False
+        elif ch != "\r":
+            self._at_line_start = False
 
         self._emit_plain_char(ch, out)
         return 0
 
-    def _flush_tilde_run_outside(
+    def _resolve_fence_run_before_char(
         self,
+        ch: str,
         out: list[str],
         step_new: list[VerifiedCitation],
-    ) -> int:
-        if not self._fence_run_buf:
-            return 0
+    ) -> tuple[bool, int]:
         run = self._fence_run_buf
+        run_at_line_start = self._fence_run_at_line_start
         self._fence_run_buf = ""
+        run_char = run[0]
+        run_len = len(run)
+
+        if run_len >= 3 and (run_char == "`" or run_at_line_start):
+            self._flush_pending_space_before_code(out)
+            out.append(run)
+            self._last_emitted_char = run_char
+            self._enter_code_fence(run_char, run_len)
+            return True, self._feed_fenced_char(ch, out, step_new)
+
+        if run_char == "`":
+            self._flush_pending_space_before_code(out)
+            out.append(run)
+            self._last_emitted_char = "`"
+            if ch in ("\n", "\r"):
+                out.append(ch)
+                self._last_emitted_char = ch
+                if ch == "\n":
+                    self._at_line_start = True
+                    self._line_indent = 0
+            else:
+                self._in_inline_code = True
+                self._inline_tick_len = run_len
+                self._inline_close_buf = ""
+                self._feed_inline_code_char(ch, out)
+            return True, 0
+
         delta = 0
         for c in run:
             delta += self._process_outside_fence_char(c, out, step_new)
-        return delta
+        return False, delta
 
     def _process_non_fenced_char(
         self,
@@ -367,51 +511,30 @@ class StreamingCitationProcessor:
         hallucinated_delta = 0
 
         if not self._tag_buf and ch in ("`", "~"):
-            if not self._fence_run_buf or self._fence_run_buf[0] == ch:
+            if not self._fence_run_buf:
+                self._fence_run_at_line_start = self._at_line_start
+                self._at_line_start = False
+                self._fence_run_buf = ch
+                return 0
+            if self._fence_run_buf[0] == ch:
                 self._fence_run_buf += ch
-                if len(self._fence_run_buf) == 3:
-                    self._flush_pending_space_before_code(out)
-                    out.append(self._fence_run_buf)
-                    self._last_emitted_char = ch
-                    self._in_code_fence = True
-                    self._fence_char = ch
-                    self._fence_run_buf = ""
                 return 0
 
-            # Mismatched delimiter (`~` followed by `` ` ``, or `` ` `` followed by `~`)
-            if self._fence_run_buf[0] == "`":
-                tick_run = self._fence_run_buf
-                self._fence_run_buf = ""
-                self._flush_pending_space_before_code(out)
-                out.append(tick_run)
-                self._last_emitted_char = "`"
-                self._in_inline_code = True
-                self._inline_tick_len = len(tick_run)
-                self._inline_close_buf = ""
-                self._feed_inline_code_char(ch, out)
-                return 0
-
-            hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
+            handled, delta = self._resolve_fence_run_before_char(ch, out, step_new)
+            hallucinated_delta += delta
+            if handled:
+                return hallucinated_delta
+            # Previous tilde run was ordinary text; start buffering the new delimiter `ch`
+            self._fence_run_at_line_start = self._at_line_start
+            self._at_line_start = False
             self._fence_run_buf = ch
             return hallucinated_delta
 
         if self._fence_run_buf:
-            if self._fence_run_buf[0] == "`":
-                tick_run = self._fence_run_buf
-                self._fence_run_buf = ""
-                self._flush_pending_space_before_code(out)
-                out.append(tick_run)
-                self._last_emitted_char = "`"
-                if ch in ("\n", "\r"):
-                    out.append(ch)
-                    self._last_emitted_char = ch
-                else:
-                    self._in_inline_code = True
-                    self._inline_tick_len = len(tick_run)
-                    self._inline_close_buf = ""
-                    self._feed_inline_code_char(ch, out)
-                return 0
-            hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
+            handled, delta = self._resolve_fence_run_before_char(ch, out, step_new)
+            hallucinated_delta += delta
+            if handled:
+                return hallucinated_delta
 
         hallucinated_delta += self._process_outside_fence_char(ch, out, step_new)
         return hallucinated_delta
@@ -426,20 +549,7 @@ class StreamingCitationProcessor:
 
         for ch in chunk:
             if self._in_code_fence:
-                if ch == self._fence_char:
-                    self._fence_run_buf += ch
-                    if len(self._fence_run_buf) == 3:
-                        out.append(self._fence_run_buf)
-                        self._last_emitted_char = self._fence_char
-                        self._fence_run_buf = ""
-                        self._in_code_fence = False
-                        self._fence_char = ""
-                else:
-                    if self._fence_run_buf:
-                        out.append(self._fence_run_buf)
-                        self._fence_run_buf = ""
-                    out.append(ch)
-                    self._last_emitted_char = ch
+                hallucinated_delta += self._feed_fenced_char(ch, out, step_new)
                 continue
 
             if self._in_inline_code:
@@ -460,11 +570,7 @@ class StreamingCitationProcessor:
         hallucinated_delta = 0
 
         if self._in_code_fence:
-            if self._fence_run_buf:
-                out.append(self._fence_run_buf)
-                self._fence_run_buf = ""
-            self._in_code_fence = False
-            self._fence_char = ""
+            self._reset_code_fence()
         elif self._in_inline_code:
             if self._inline_close_buf:
                 out.append(self._inline_close_buf)
@@ -473,7 +579,16 @@ class StreamingCitationProcessor:
             self._inline_tick_len = 0
         else:
             if self._fence_run_buf:
-                hallucinated_delta += self._flush_tilde_run_outside(out, step_new)
+                run = self._fence_run_buf
+                run_at_line_start = self._fence_run_at_line_start
+                self._fence_run_buf = ""
+                if run[0] == "`" or (len(run) >= 3 and run_at_line_start):
+                    self._flush_pending_space_before_code(out)
+                    out.append(run)
+                    self._last_emitted_char = run[-1]
+                else:
+                    for c in run:
+                        hallucinated_delta += self._process_outside_fence_char(c, out, step_new)
 
             if self._tag_buf:
                 tail = self._tag_buf

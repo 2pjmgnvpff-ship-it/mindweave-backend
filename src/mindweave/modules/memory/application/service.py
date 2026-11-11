@@ -982,22 +982,28 @@ class MemoryService:
                 row.time_status = req.time_status.value
             if req.trigger_date is not None:
                 row.trigger_date = req.trigger_date
-            if req.is_lunar is not None:
-                row.is_lunar = req.is_lunar
-                if req.is_lunar is False and req.lunar_is_leap_month is None:
-                    row.lunar_is_leap_month = False
-            if req.lunar_month is not None:
-                row.lunar_month = req.lunar_month
-            if req.lunar_day is not None:
-                row.lunar_day = req.lunar_day
-            if req.lunar_is_leap_month is not None:
-                row.lunar_is_leap_month = req.lunar_is_leap_month
-            if row.is_lunar and (row.lunar_month is None or row.lunar_day is None):
-                raise ValidationFailedError(
-                    "lunarMonth and lunarDay are required when isLunar is true"
-                )
-            if row.lunar_is_leap_month and not row.is_lunar:
-                raise ValidationFailedError("lunarIsLeapMonth requires isLunar=true")
+            target_is_lunar = req.is_lunar if req.is_lunar is not None else row.is_lunar
+            if not target_is_lunar:
+                if req.lunar_month is not None or req.lunar_day is not None:
+                    raise ValidationFailedError("lunarMonth and lunarDay require isLunar=true")
+                if req.lunar_is_leap_month is True:
+                    raise ValidationFailedError("lunarIsLeapMonth requires isLunar=true")
+                row.is_lunar = False
+                row.lunar_month = None
+                row.lunar_day = None
+                row.lunar_is_leap_month = False
+            else:
+                row.is_lunar = True
+                if req.lunar_month is not None:
+                    row.lunar_month = req.lunar_month
+                if req.lunar_day is not None:
+                    row.lunar_day = req.lunar_day
+                if req.lunar_is_leap_month is not None:
+                    row.lunar_is_leap_month = req.lunar_is_leap_month
+                if row.lunar_month is None or row.lunar_day is None:
+                    raise ValidationFailedError(
+                        "lunarMonth and lunarDay are required when isLunar is true"
+                    )
             if req.status is not None:
                 row.status = req.status.value
                 if req.status is FactStatus.CONFIRMED:

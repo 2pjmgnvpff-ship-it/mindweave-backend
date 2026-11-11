@@ -114,6 +114,8 @@ class FactCreateRequest(CamelModel):
     def _validate_lunar_fields(self) -> FactCreateRequest:
         if self.is_lunar and (self.lunar_month is None or self.lunar_day is None):
             raise ValueError("lunarMonth and lunarDay are required when isLunar is true")
+        if not self.is_lunar and (self.lunar_month is not None or self.lunar_day is not None):
+            raise ValueError("lunarMonth and lunarDay require isLunar=true")
         if self.lunar_is_leap_month and not self.is_lunar:
             raise ValueError("lunarIsLeapMonth requires isLunar=true")
         return self

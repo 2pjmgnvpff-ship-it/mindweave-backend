@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import ValidationError
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 
 from mindweave.core.dependencies import (
     AppContainer,
@@ -47,6 +47,17 @@ router = APIRouter(tags=["memory"])
 __all__ = ["expire_stale_venting_items", "router"]
 
 
+def _reject_null_bytes_in_form(form: FormData) -> None:
+    for key, value in form.multi_items():
+        if "\x00" in key:
+            raise ValidationFailedError("Null bytes are not permitted in form fields")
+        if isinstance(value, str):
+            if "\x00" in value:
+                raise ValidationFailedError("Null bytes are not permitted in form fields")
+        elif isinstance(value, UploadFile) and value.filename and "\x00" in value.filename:
+            raise ValidationFailedError("Null bytes are not permitted in form fields")
+
+
 def _parse_bool_flag(raw: object, *, default: bool = False) -> bool:
     if raw is None:
         return default
@@ -68,6 +79,7 @@ async def _parse_material_create_request(
         "application/x-www-form-urlencoded"
     ):
         form = await request.form()
+        _reject_null_bytes_in_form(form)
         photo_bytes: bytes | None = None
         for field_name in ("photo", "image", "file"):
             upload = form.get(field_name)

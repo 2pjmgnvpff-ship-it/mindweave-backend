@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sse_starlette.sse import EventSourceResponse
-from starlette.datastructures import UploadFile
+from starlette.datastructures import FormData, UploadFile
 
 from mindweave.core.dependencies import (
     AppContainer,
@@ -33,6 +33,17 @@ from mindweave.shared.enums import CaptureSource, RouteMode
 from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["capture"])
+
+
+def _reject_null_bytes_in_form(form: FormData) -> None:
+    for key, value in form.multi_items():
+        if "\x00" in key:
+            raise ValidationFailedError("Null bytes are not permitted in form fields")
+        if isinstance(value, str):
+            if "\x00" in value:
+                raise ValidationFailedError("Null bytes are not permitted in form fields")
+        elif isinstance(value, UploadFile) and value.filename and "\x00" in value.filename:
+            raise ValidationFailedError("Null bytes are not permitted in form fields")
 
 
 def _parse_optional_bool(raw: object) -> bool | None:
@@ -96,6 +107,7 @@ async def _parse_capture_ingest_request(
         "application/x-www-form-urlencoded"
     ):
         form = await request.form()
+        _reject_null_bytes_in_form(form)
         audio_bytes: bytes | None = None
         image_bytes: bytes | None = None
 
@@ -204,6 +216,8 @@ def _optional_idempotency_key(
     if idempotency_key is None or not idempotency_key.strip():
         return None
     cleaned = idempotency_key.strip()
+    if "\x00" in cleaned:
+        raise ValidationFailedError("Null bytes are not permitted in Idempotency-Key")
     if len(cleaned) > 128:
         raise ValidationFailedError("Idempotency-Key exceeds 128 characters")
     return cleaned
