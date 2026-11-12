@@ -1235,6 +1235,13 @@ export function openPersonJournal(personId) {
   setArrowPopoverOpen(false);
   viewport.setAttribute('data-view-mode', 'person-journal');
   viewport.setAttribute('data-has-photo', String(Boolean(p.hasPhoto)));
+  const stageEl = document.getElementById('scrapbookArtifactsStage');
+  const hubEl = document.getElementById('casualRelationshipsHub');
+  if (stageEl) stageEl.hidden = false;
+  if (hubEl) {
+    hubEl.hidden = true;
+    hubEl.setAttribute('aria-hidden', 'true');
+  }
 
   const isCasualPerson = state.casualIds.includes(p.id);
   if (btnBackToCasualList) {
@@ -1288,6 +1295,13 @@ export function openCasualDirectory() {
   state.viewMode = 'casual-directory';
   setArrowPopoverOpen(false);
   viewport.setAttribute('data-view-mode', 'casual-directory');
+  const stageEl = document.getElementById('scrapbookArtifactsStage');
+  const hubEl = document.getElementById('casualRelationshipsHub');
+  if (stageEl) stageEl.hidden = true;
+  if (hubEl) {
+    hubEl.hidden = false;
+    hubEl.setAttribute('aria-hidden', 'false');
+  }
 
   if (btnBackToCasualList) btnBackToCasualList.hidden = true;
   document.getElementById('journalFolioDate').textContent = 'CRYSTAL';
@@ -1888,6 +1902,7 @@ function initCenterCapsuleInteractions() {
   let scrubbing = false;
   let startX = 0;
   let scrubbedBtn = null;
+  let downTargetAvatar = null;
 
   dockCenterCapsule.addEventListener('dragstart', (e) => e.preventDefault());
 
@@ -1897,6 +1912,7 @@ function initCenterCapsuleInteractions() {
     activePointerId = e.pointerId;
     scrubbing = false;
     scrubbedBtn = null;
+    downTargetAvatar = state.capsuleExpanded ? e.target.closest('.capsule-obj-avatar') : null;
     startX = e.clientX;
   });
 
@@ -1945,9 +1961,10 @@ function initCenterCapsuleInteractions() {
       return;
     }
 
-    if (!dockCenterCapsule.contains(e.target)) return;
+    if (!dockCenterCapsule.contains(e.target) && !downTargetAvatar) return;
 
-    const tappedAvatar = e.target.closest('.capsule-obj-avatar');
+    const tappedAvatar = e.target.closest('.capsule-obj-avatar') || downTargetAvatar;
+    downTargetAvatar = null;
     if (state.capsuleExpanded && tappedAvatar && tappedAvatar.dataset.capsuleTarget) {
       selectCapsuleTarget(tappedAvatar.dataset.capsuleTarget);
       setCapsuleExpanded(false);
@@ -2429,30 +2446,78 @@ function initDirectionalVoiceInteractions() {
     setVoiceDragZone('current');
   };
 
+  let holdTriggerTimer = null;
+  let orbDownX = 0;
+  let orbDownY = 0;
+  let orbLastX = 0;
+  let orbLastY = 0;
+
   dockVoiceOrbBtn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     draggingFromOrb = true;
+    orbDownX = e.clientX;
+    orbDownY = e.clientY;
+    orbLastX = e.clientX;
+    orbLastY = e.clientY;
     try {
       dockVoiceOrbBtn.setPointerCapture(e.pointerId);
     } catch (_) {}
-    startVoiceHold('current');
-    updatePointerDrag(e.clientX, e.clientY);
+    if (holdTriggerTimer) clearTimeout(holdTriggerTimer);
+    holdTriggerTimer = setTimeout(() => {
+      holdTriggerTimer = null;
+      if (draggingFromOrb && !state.voiceHolding) {
+        startVoiceHold('current');
+        updatePointerDrag(orbLastX, orbLastY);
+      }
+    }, 260);
   });
 
   window.addEventListener('pointermove', (e) => {
-    if (!draggingFromOrb || !state.voiceHolding) return;
+    if (!draggingFromOrb) return;
+    orbLastX = e.clientX;
+    orbLastY = e.clientY;
+    if (!state.voiceHolding) {
+      if (Math.hypot(e.clientX - orbDownX, e.clientY - orbDownY) > 14) {
+        if (holdTriggerTimer) {
+          clearTimeout(holdTriggerTimer);
+          holdTriggerTimer = null;
+        }
+        startVoiceHold('current');
+        updatePointerDrag(e.clientX, e.clientY);
+      }
+      return;
+    }
     updatePointerDrag(e.clientX, e.clientY);
   });
 
   window.addEventListener('pointerup', () => {
     if (!draggingFromOrb) return;
     draggingFromOrb = false;
+    if (holdTriggerTimer) {
+      clearTimeout(holdTriggerTimer);
+      holdTriggerTimer = null;
+    }
+    if (!state.voiceHolding) {
+      if (quickCaptureSheet.classList.contains('is-open')) {
+        closeQuickCaptureSheet();
+      } else {
+        setCapsuleExpanded(false);
+        setArrowPopoverOpen(false);
+        closeDispatchModal();
+        openQuickCaptureSheet();
+      }
+      return;
+    }
     finishVoiceHoldAndRoute();
   });
 
   window.addEventListener('pointercancel', () => {
     if (!draggingFromOrb) return;
     draggingFromOrb = false;
+    if (holdTriggerTimer) {
+      clearTimeout(holdTriggerTimer);
+      holdTriggerTimer = null;
+    }
     cancelVoiceHoldSession();
     stopBrowserMicCapture();
   });
