@@ -7,11 +7,12 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import Field
 from sqlalchemy import text
 
@@ -208,6 +209,14 @@ def create_app(
                 request_id=req_id,
             )
         return ReadinessStatusResponse(status="ready", database="ok")
+
+    if resolved_settings.environment in ("dev", "test"):
+        workbench_path = Path(__file__).resolve().parent / "tools" / "workbench.html"
+
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        @app.get("/workbench", response_class=HTMLResponse, include_in_schema=False)
+        async def dev_workbench() -> HTMLResponse:
+            return HTMLResponse(content=workbench_path.read_text(encoding="utf-8"))
 
     canonical_prefix = resolved_settings.api_prefix.rstrip("/") or "/v1"
     for module_router in _ALL_MODULE_ROUTERS:
