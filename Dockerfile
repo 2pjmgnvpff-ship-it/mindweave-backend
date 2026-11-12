@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Multi-stage non-root Python 3.12 container built with `uv`
+# Multi-stage non-root Python 3.12 container built with `uv` (Google Cloud Run & Docker ready)
 
 FROM ghcr.io/astral-sh/uv:0.5.14 AS uv_bin
 
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # ----------------------------------------------------------------------------
-# Stage 2: Minimal non-root runtime image
+# Stage 2: Non-root runtime image (includes PostgreSQL 15 for zero-config Cloud Run demo)
 # ----------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm AS runtime
 
@@ -40,7 +40,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
     MINDWEAVE_BLOB_STORAGE_DIR="/var/lib/mindweave/blobs"
 
-RUN groupadd --gid 10001 mindweave \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-15 postgresql-client-15 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 mindweave \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin mindweave \
     && mkdir -p /var/lib/mindweave/blobs \
     && chown -R mindweave:mindweave /var/lib/mindweave
@@ -60,7 +63,7 @@ USER mindweave:mindweave
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os, urllib.request; port = os.environ.get('PORT', '8000'); urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=3)"
 
 CMD ["/app/scripts/entrypoint.sh"]
