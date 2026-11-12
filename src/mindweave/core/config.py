@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     service_name: str = "mindweave-backend"
     api_prefix: str = "/v1"
     debug: bool = False
+    embed_worker_in_api: bool = False
 
     # PostgreSQL connections:
     # - app_database_url MUST connect as a NOBYPASSRLS role (enforces RLS!)

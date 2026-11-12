@@ -91,17 +91,35 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app_instance: FastAPI) -> AsyncIterator[None]:
+        import asyncio
+
         app_instance.state.container = app_container
         wire_container_services(app_container)
+        worker_task: asyncio.Task[None] | None = None
+        if resolved_settings.embed_worker_in_api:
+            from mindweave.workers.__main__ import build_default_worker_runner
+
+            embedded_runner = build_default_worker_runner(app_container)
+            worker_task = asyncio.create_task(
+                embedded_runner.run_forever(poll_interval=0.5),
+                name="mindweave-embedded-worker",
+            )
         logger.info(
             "app.startup",
             service=resolved_settings.service_name,
             environment=resolved_settings.environment,
             ai_primary_provider=resolved_settings.ai_primary_provider,
+            embed_worker_in_api=resolved_settings.embed_worker_in_api,
         )
         try:
             yield
         finally:
+            if worker_task is not None:
+                worker_task.cancel()
+                try:
+                    await worker_task
+                except asyncio.CancelledError:
+                    pass
             if owns_container:
                 await app_container.db.dispose()
             logger.info("app.shutdown", service=resolved_settings.service_name)
