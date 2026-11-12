@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -13,6 +14,7 @@ import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import Field
 from sqlalchemy import text
 
@@ -35,6 +37,11 @@ from mindweave.modules.telemetry.api.router import router as telemetry_router
 from mindweave.wiring import wire_container_services
 
 logger = get_logger(__name__)
+
+mimetypes.add_type("text/javascript", ".mjs")
+mimetypes.add_type("text/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/webp", ".webp")
 
 _SAFE_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -228,10 +235,29 @@ def create_app(
             )
         return ReadinessStatusResponse(status="ready", database="ok")
 
+    webapp_dir = Path(__file__).resolve().parent / "webapp"
+    if webapp_dir.is_dir():
+        for subdir_name in ("assets", "styles", "scripts"):
+            subdir = webapp_dir / subdir_name
+            if subdir.is_dir():
+                app.mount(
+                    f"/{subdir_name}",
+                    StaticFiles(directory=str(subdir)),
+                    name=f"webapp-{subdir_name}",
+                )
+
+        webapp_index_path = webapp_dir / "index.html"
+
+        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+        async def production_webapp_root() -> HTMLResponse:
+            return HTMLResponse(
+                content=webapp_index_path.read_text(encoding="utf-8"),
+                headers={"Cache-Control": "no-cache"},
+            )
+
     if resolved_settings.environment in ("dev", "test"):
         workbench_path = Path(__file__).resolve().parent / "tools" / "workbench.html"
 
-        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
         @app.get("/workbench", response_class=HTMLResponse, include_in_schema=False)
         async def dev_workbench() -> HTMLResponse:
             return HTMLResponse(content=workbench_path.read_text(encoding="utf-8"))

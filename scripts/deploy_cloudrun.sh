@@ -54,7 +54,7 @@ SERVICE_URL="$(gcloud run services describe "$SERVICE_NAME" --project "$PROJECT_
 echo ""
 echo "=================================================================="
 echo "✅ MindWeave (心络) 部署成功！已生成 Google Cloud Run 公共链接："
-echo "🌐 实测工作台入口 : ${SERVICE_URL}"
+echo "🌐 心络网页端成品 : ${SERVICE_URL}"
 echo "📖 Swagger API文档: ${SERVICE_URL}/docs"
 echo "🩺 数据库就绪探针 : ${SERVICE_URL}/readyz"
 echo "=================================================================="
