@@ -76,6 +76,8 @@ services:
         required: false
     environment:
       MINDWEAVE_ENVIRONMENT: ${MINDWEAVE_ENVIRONMENT:-dev}
+      MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE: ${MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE:-true}
+      MINDWEAVE_CORS_ORIGINS: '["*"]'
       MINDWEAVE_APP_DATABASE_URL: postgresql+asyncpg://mindweave_app:mindweave_app@postgres:5432/mindweave
       MINDWEAVE_SYSTEM_DATABASE_URL: postgresql+asyncpg://mindweave_system:mindweave_system@postgres:5432/mindweave
       MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@postgres:5432/mindweave
@@ -102,11 +104,20 @@ services:
       MINDWEAVE_SYSTEM_DATABASE_URL: postgresql+asyncpg://mindweave_system:mindweave_system@postgres:5432/mindweave
       MINDWEAVE_MIGRATION_DATABASE_URL: postgresql+asyncpg://mindweave_owner:mindweave_owner@postgres:5432/mindweave
       MINDWEAVE_BLOB_STORAGE_DIR: /var/lib/mindweave/blobs
-    command: ["python", "-m", "mindweave.workers"]
+    command: ["python", "-m", "mindweave.workers", "--poll-interval", "0.5"]
     volumes:
       - blob_data:/var/lib/mindweave/blobs
     healthcheck:
       disable: true
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["tunnel", "--no-autoupdate", "--url", "http://api:8000"]
 
 volumes:
   pg_data:
