@@ -5,9 +5,12 @@ PG_BIN_DIR="/usr/lib/postgresql/15/bin"
 LOCAL_PGDATA="${MINDWEAVE_LOCAL_PGDATA:-/tmp/mindweave-pgdata}"
 LOCAL_PGPORT="${MINDWEAVE_LOCAL_PGPORT:-55432}"
 
+mkdir -p "${MINDWEAVE_BLOB_STORAGE_DIR:-/tmp/mindweave-blobs}"
+
 # Auto-enable Gemini adapter when MINDWEAVE_GEMINI_API_KEY is provided
 if [ -n "${MINDWEAVE_GEMINI_API_KEY:-}" ] && [ -z "${MINDWEAVE_AI_PRIMARY_PROVIDER:-}" ]; then
   export MINDWEAVE_AI_PRIMARY_PROVIDER="gemini"
+  export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-fake}"
   export MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED="${MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED:-true}"
 fi
 
@@ -23,7 +26,7 @@ if [ -z "${MINDWEAVE_APP_DATABASE_URL:-}" ] && [ -x "$PG_BIN_DIR/initdb" ]; then
       "$PG_BIN_DIR/initdb" -D "$LOCAL_PGDATA" --username=postgres --auth=trust --encoding=UTF8 --locale=C.UTF-8 >/dev/null
     fi
     rm -f "$LOCAL_PGDATA/postmaster.pid"
-    "$PG_BIN_DIR/postgres" -D "$LOCAL_PGDATA" -p "$LOCAL_PGPORT" -h 127.0.0.1 -k /tmp &
+    "$PG_BIN_DIR/postgres" -D "$LOCAL_PGDATA" -p "$LOCAL_PGPORT" -h 127.0.0.1 -k /tmp -c dynamic_shared_memory_type=mmap -c shared_buffers=64MB &
 
     i=0
     while ! "$PG_BIN_DIR/pg_isready" -h 127.0.0.1 -p "$LOCAL_PGPORT" >/dev/null 2>&1; do

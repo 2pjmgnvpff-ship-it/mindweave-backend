@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 # Multi-stage non-root Python 3.12 container built with `uv` (Google Cloud Run & Docker ready)
 
 FROM ghcr.io/astral-sh/uv:0.5.14 AS uv_bin
@@ -18,8 +17,7 @@ COPY --from=uv_bin /uv /uvx /bin/
 WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev
 
 COPY src ./src
 COPY evals ./evals
@@ -27,8 +25,7 @@ COPY prompts ./prompts
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev
 
 # ----------------------------------------------------------------------------
 # Stage 2: Non-root runtime image (includes PostgreSQL 15 for zero-config Cloud Run demo)
@@ -38,7 +35,7 @@ FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    MINDWEAVE_BLOB_STORAGE_DIR="/var/lib/mindweave/blobs"
+    MINDWEAVE_BLOB_STORAGE_DIR="/tmp/mindweave-blobs"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-15 postgresql-client-15 \
