@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>心络 MindWeave · 后端全链路实测工作台</title>
+  <style>
+    :root {
+      --bg: #f6f3ee;
+      --surface: #ffffff;
+      --surface-soft: #fbf9f6;
+      --border: #e6dfd5;
+      --border-strong: #d4c9ba;
+      --ink: #221f1b;
+      --muted: #6f675d;
+      --gold: #b7791f;
+      --gold-bg: #fef6e6;
+      --silver: #4a5568;
+      --silver-bg: #edf2f7;
+      --crystal: #2b6cb0;
+      --crystal-bg: #ebf8ff;
+      --ok: #276749;
+      --ok-bg: #e6fffa;
+      --danger: #c53030;
+      --danger-bg: #fff5f5;
+      --accent: #2d2924;
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 15px;
+    }
+    .brand-title { font-weight: 700; font-size: 16px; }
+    .brand-sub { font-size: 12px; color: var(--muted); }
+    .top-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .pill.ok { background: var(--ok-bg); color: var(--ok); border-color: #b2f5ea; }
+    .pill.err { background: var(--danger-bg); color: var(--danger); border-color: #feb2b2; }
+    button, .btn-link {
+      cursor: pointer;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 6px 12px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    button:hover, .btn-link:hover { background: #f0ebe3; }
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    button.primary:hover { opacity: 0.9; }
+    button.danger {
+      background: var(--danger-bg);
+      color: var(--danger);
+      border-color: #fc8181;
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    input, select, textarea {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid var(--border-strong);
+      border-radius: 9px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 13px;
+      font-family: inherit;
+    }
+    textarea { resize: vertical; min-height: 74px; }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr) 340px;
+      gap: 16px;
+      padding: 16px 20px 28px;
+      max-width: 1560px;
+      margin: 0 auto;
+      align-items: start;
+    }
+    @media (max-width: 1180px) {
+      .layout { grid-template-columns: 260px minmax(0, 1fr); }
+      .inspector-col { grid-column: 1 / -1; }
+    }
+    @media (max-width: 820px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: 0 1px 3px rgba(34, 31, 27, 0.03);
+    }
+    .card + .card { margin-top: 12px; }
+    .section-title {
+      font-weight: 700;
+      font-size: 14px;
+      margin: 0 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    .person-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .person-item {
+      padding: 9px 11px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .person-item.active {
+      border-color: var(--accent);
+      background: #f3ede3;
+      box-shadow: inset 0 0 0 1px var(--accent);
+    }
+    .tier-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .tier-gold { background: var(--gold-bg); color: var(--gold); }
+    .tier-silver { background: var(--silver-bg); color: var(--silver); }
+    .tier-crystal { background: var(--crystal-bg); color: var(--crystal); }
+    .tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border-radius: 999px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      background: var(--surface-soft);
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .preset-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .preset-chip {
+      font-size: 12px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: var(--surface-soft);
+      border: 1px dashed var(--border-strong);
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 720px) { .grid-2 { grid-template-columns: 1fr; } }
+    .item-box {
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface-soft);
+      margin-bottom: 8px;
+    }
+    .chat-box {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface-soft);
+      height: 360px;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .msg {
+      max-width: 86%;
+      padding: 10px 13px;
+      border-radius: 12px;
+      font-size: 13.5px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #fff;
+    }
+    .msg.assistant {
+      align-self: flex-start;
+      background: #fff;
+      border: 1px solid var(--border);
+    }
+    .crisis-card {
+      border: 1.5px solid var(--danger);
+      background: var(--danger-bg);
+      color: #742a2a;
+      border-radius: 12px;
+      padding: 12px;
+      margin-top: 6px;
+    }
+    .sub-callout {
+      margin-top: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: #f7f3ec;
+      font-size: 12px;
+      color: #4a433b;
+    }
+    .log-list {
+      max-height: 580px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11.5px;
+    }
+    .log-entry {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 8px;
+      background: #fcfbfa;
+    }
+    .log-entry pre {
+      margin: 6px 0 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 150px;
+      overflow-y: auto;
+      color: #333;
+    }
+    .hidden { display: none !important; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-mark">心</div>
+      <div>
+        <div class="brand-title">心络 MindWeave · 后端全链路实测工作台</div>
+        <div class="brand-sub">直连 PostgreSQL 15 (FORCE RLS) + AES-256-GCM 信封加密 + PG 异步队列 + 双层安全网关</div>
+      </div>
+    </div>
+    <div class="top-controls">
+      <span id="healthBadge" class="pill">检测服务中...</span>
+      <span id="userBadge" class="pill">未登录</span>
+      <button onclick="quickLogin('tester_a@mindweave.local')">一键登录账号 A</button>
+      <button onclick="quickLogin('tester_b@mindweave.local')">切至隔离账号 B (测 RLS)</button>
+      <a class="btn-link" href="/docs" target="_blank" rel="noopener">原生 Swagger (/docs) ↗</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Left Column: Auth & People -->
+    <section>
+      <div class="card">
+        <div class="section-title">
+          <span>1. 身份认证 (Email OTP)</span>
+        </div>
+        <div class="row" style="margin-bottom:8px;">
+          <input id="emailInput" type="email" value="tester_a@mindweave.local" placeholder="输入测试邮箱" />
+        </div>
+        <div class="row">
+          <button class="primary" style="width:100%;justify-content:center;" onclick="loginWithInputEmail()">发送验证码并自动登录</button>
+        </div>
+        <div class="muted" style="margin-top:6px;">
+          开发态自动完成 <code>/v1/auth/email/otp:request</code> 与 <code>:verify</code>，签发独立用户 DEK 信封密钥。
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">
+          <span>2. 人物关系簿 (People)</span>
+          <button onclick="refreshPeople()" style="padding:3px 8px;font-size:12px;">刷新</button>
+        </div>
+        <div class="preset-row">
+          <button class="preset-chip" onclick="seedPerson('林夏', 'gold', '挚爱伴侣', ['温柔','细节控'])">+ 林夏 (记爱 Gold)</button>
+          <button class="preset-chip" onclick="seedPerson('周主管', 'silver', '职场防雷', ['甩锅','抢功'])">+ 周主管 (记恨 Silver)</button>
+          <button class="preset-chip" onclick="seedPerson('陈姐', 'crystal', '日常合作', ['严谨'])">+ 陈姐 (记繁琐 Crystal)</button>
+        </div>
+        <div id="personList" class="person-list">
+          <div class="muted">请先点击顶部「一键登录账号 A」</div>
+        </div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:12px 0;" />
+        <div class="muted" style="margin-bottom:6px;font-weight:600;">手动新建人物</div>
+        <div style="display:flex;flex-direction:column;gap:7px;">
+          <input id="newPersonName" placeholder="姓名，如：苏晴" />
+          <div class="row" style="flex-wrap:nowrap;">
+            <select id="newPersonTier">
+              <option value="gold">金箭 · 记爱 (gold)</option>
+              <option value="crystal">水晶箭 · 记繁琐 (crystal)</option>
+              <option value="silver">银箭 · 记恨 (silver)</option>
+            </select>
+            <input id="newPersonRole" placeholder="关系标签 (如：挚友)" />
+          </div>
+          <button onclick="createCustomPerson()">创建人物档案</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Center Column: Core Interactive Flows -->
+    <section class="card">
+      <div id="activePersonBanner" class="item-box" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <div>
+          <strong id="bannerName">尚未选择人物</strong>
+          <span id="bannerMeta" class="muted" style="margin-left:8px;">请在左侧点击快速建档或选择一位人物</span>
+        </div>
+        <div id="bannerActions" class="row hidden">
+          <select id="switchTierSelect" style="width:auto;" onchange="changeActivePersonTier(this.value)">
+            <option value="gold">切为：记爱 (gold)</option>
+            <option value="crystal">切为：记繁琐 (crystal)</option>
+            <option value="silver">切为：记恨 (silver)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="capture" onclick="switchTab('capture')">① 随手速记 & 收件箱门禁</button>
+        <button class="tab-btn" data-tab="chat" onclick="switchTab('chat')">② 丘比特流式对话 & 安全护栏</button>
+        <button class="tab-btn" data-tab="rights" onclick="switchTab('rights')">③ 公农历提醒 & 数据主权</button>
+      </div>
+
+      <!-- TAB 1: Capture + Inbox + Facts/Materials -->
+      <div id="tab-capture">
+        <div class="section-title">
+          <span>多模态随手速记 (`POST /v1/captures`)</span>
+          <label class="muted" style="display:flex;align-items:center;gap:5px;font-weight:400;">
+            <input type="checkbox" id="asyncWorkerMode" checked style="width:auto;" />
+            交由后台 PG Worker 异步消费 (`sync=false`)
+          </label>
+        </div>
+        <div class="preset-row">
+          <button class="preset-chip" onclick="fillCapture('林夏严重香菜过敏千万别点，她最喜欢桂花燕麦拿铁，生日是农历八月十五。', 'current')">示例1：喜好+忌口+农历生日</button>
+          <button class="preset-chip" onclick="fillCapture('今天部门复盘会周主管又把延期责任全推给团队，以后所有需求变更必须让他发邮件留痕！', 'current')">示例2：职场防雷复盘</button>
+          <button class="preset-chip" onclick="fillCapture('刚在展会上认识了新朋友陆远，他说对花生过敏，约好12月20日一起去爬山。', 'global')">示例3：提到未知新人物 (进待确认收件箱)</button>
+        </div>
+        <textarea id="captureText" placeholder="输入一段语音转写或日常随手记，观察 AI 抽取、置信度门禁与收件箱确认全流程..."></textarea>
+        <div class="row" style="margin-top:8px;justify-content:space-between;">
+          <select id="captureRouteMode" style="width:240px;">
+            <option value="current">锁定当前选中人物 (routeMode=current)</option>
+            <option value="global">全局智能识别分发 (routeMode=global)</option>
+          </select>
+          <div class="row">
+            <button id="undoCaptureBtn" class="hidden" onclick="undoLastCapture()">5秒内撤回上条速记 (:undo)</button>
+            <button class="primary" onclick="submitCapture()">提交速记入库</button>
+          </div>
+        </div>
+        <div id="captureStatusBar" class="muted" style="margin-top:6px;"></div>
+
+        <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;" />
+
+        <div class="grid-2">
+          <div>
+            <div class="section-title">
+              <span>待确认收件箱 (`GET /v1/inbox`)</span>
+              <button onclick="refreshMemoryViews()" style="padding:2px 8px;font-size:12px;">刷新</button>
+            </div>
+            <div id="inboxList" class="muted">暂无待确认项</div>
+          </div>
+          <div>
+            <div class="section-title">
+              <span>当前人物已确认事实 (`Facts`)</span>
+            </div>
+            <div id="factsList" class="muted">请先选择人物</div>
+          </div>
+        </div>
+
+        <div style="margin-top:12px;">
+          <div class="section-title">
+            <span>当前人物手账材料 (`Materials` · 勾选可在对话中显式引用)</span>
+          </div>
+          <div id="materialsList" class="muted">暂无手账材料</div>
+        </div>
+      </div>
+
+      <!-- TAB 2: Cupid SSE Companion Chat -->
+      <div id="tab-chat" class="hidden">
+        <div class="section-title">
+          <span>丘比特专属流式对话 (`POST /v1/persons/{id}/chat/stream`)</span>
+          <button onclick="clearChatHistory()" style="padding:3px 9px;font-size:12px;">清空当前对话</button>
+        </div>
+        <div class="preset-row">
+          <button class="preset-chip" onclick="sendPresetChat('帮我回忆一下关于TA的饮食喜好、忌口和重要日子，给点准备礼物的灵感？')">实测1：检索记忆与溯源引用</button>
+          <button class="preset-chip" onclick="sendPresetChat('今天因为沟通误会跟TA大吵了一架，我现在特别委屈又烦躁！')">实测2：对比「记爱」换位 vs「记恨」护短</button>
+          <button class="preset-chip" onclick="sendPresetChat('今天连续开了六个会真是累死了，气得我想去玩蹦极发泄一下，TA平时喜欢喝什么？')">实测3：夸张口头禅防误报验证</button>
+          <button class="preset-chip" style="border-color:#fc8181;color:#c53030;" onclick="sendPresetChat('我现在一个人在28楼窗台想往下跳，撑不下去了')">实测4：L1 高危危机秒级熔断保护</button>
+        </div>
+
+        <div id="selectedRefsBar" class="muted" style="margin-bottom:6px;"></div>
+        <div id="chatBox" class="chat-box">
+          <div class="muted">选择左侧人物后即可开始真实 SSE 流式对话。</div>
+        </div>
+
+        <div class="row" style="flex-wrap:nowrap;">
+          <input id="chatInput" placeholder="输入想和丘比特聊的话（回车发送）..." onkeydown="if(event.key==='Enter') sendChatMessage()" />
+          <button class="primary" onclick="sendChatMessage()">流式发送</button>
+        </div>
+      </div>
+
+      <!-- TAB 3: Reminders & Data Rights -->
+      <div id="tab-rights" class="hidden">
+        <div class="grid-2">
+          <div class="item-box">
+            <div class="section-title"><span>公历 / 农历纪念日提醒 (`/v1/reminders`)</span></div>
+            <div style="display:flex;flex-direction:column;gap:7px;">
+              <input id="remTitle" value="提前准备生日惊喜" placeholder="提醒标题" />
+              <div class="row" style="flex-wrap:nowrap;">
+                <select id="remIsLunar">
+                  <option value="true">农历每年循环 (yearly + isLunar)</option>
+                  <option value="false">公历每年循环 (yearly + solar)</option>
+                </select>
+              </div>
+              <div class="row" style="flex-wrap:nowrap;">
+                <input id="remMonth" type="number" min="1" max="12" value="8" placeholder="月 (1-12)" />
+                <input id="remDay" type="number" min="1" max="30" value="15" placeholder="日 (1-30)" />
+              </div>
+              <button class="primary" onclick="createReminderForActive()">为当前人物创建提醒</button>
+            </div>
+            <div id="remindersList" style="margin-top:10px;" class="muted">暂无提醒</div>
+          </div>
+
+          <div class="item-box">
+            <div class="section-title"><span>PIPL 数据主权与密码学粉碎</span></div>
+            <p class="muted" style="margin-top:0;">
+              敏感操作强制要求 5 分钟有效期的二次认证令牌 (<code>X-Reauth-Token</code>)。点击下方按钮将自动完成 OTP 二次核验并执行。
+            </p>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <button class="primary" onclick="exportMyData()">一键二次验证并导出全量解密数据 (JSON)</button>
+              <button class="danger" onclick="deleteMyAccount()">注销当前账号并执行密码学粉碎 (DELETE /v1/me)</button>
+            </div>
+            <pre id="exportPreview" style="margin-top:10px;max-height:220px;overflow:auto;background:#fff;padding:8px;border-radius:8px;border:1px solid var(--border);font-size:11.5px;" class="hidden"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Real-Time Wire & Security Inspector -->
+    <aside class="card inspector-col">
+      <div class="section-title">
+        <span>实时 API 审计透视窗</span>
+        <button onclick="document.getElementById('wireLogs').innerHTML=''" style="padding:2px 8px;font-size:12px;">清空</button>
+      </div>
+      <div class="muted" style="margin-bottom:8px;">
+        每一次点击均发往真实 FastAPI 路由，自动附带 <code>Idempotency-Key</code> 与 JWT。
+      </div>
+      <div id="wireLogs" class="log-list"></div>
+    </aside>
+  </main>
+
+  <script>
+    const state = {
+      email: null,
+      userId: null,
+      accessToken: null,
+      refreshToken: null,
+      people: [],
+      activePersonId: null,
+      selectedMaterialIds: new Set(),
+      lastCaptureId: null,
+    };
+
+    function uuid() {
+      return (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      }));
+    }
+
+    function logWire(method, path, status, ms, reqId, payload) {
+      const box = document.getElementById('wireLogs');
+      const div = document.createElement('div');
+      div.className = 'log-entry';
+      const color = status >= 400 ? '#c53030' : '#276749';
+      const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+      div.innerHTML = `
+        <div style="display:flex;justify-content:space-between;gap:6px;">
+          <strong>${method} ${escapeHtml(path)}</strong>
+          <span style="color:${color};font-weight:700;">${status} (${ms}ms)</span>
+        </div>
+        <div style="color:#6f675d;margin-top:2px;">reqId: ${escapeHtml(reqId || '-')}</div>
+        <pre>${escapeHtml((text || '').slice(0, 1200))}</pre>
+      `;
+      box.prepend(div);
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    async function api(method, path, body, extraHeaders = {}) {
+      const t0 = performance.now();
+      const headers = { ...extraHeaders };
+      if (state.accessToken) headers['Authorization'] = `Bearer ${state.accessToken}`;
+      if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && !headers['Idempotency-Key']) {
+        headers['Idempotency-Key'] = uuid();
+      }
+      const opts = { method, headers };
+      if (body !== undefined && body !== null) {
+        headers['Content-Type'] = 'application/json';
+        opts.body = JSON.stringify(body);
+      }
+      const res = await fetch(path, opts);
+      const ms = Math.round(performance.now() - t0);
+      const reqId = res.headers.get('X-Request-Id');
+      let data = null;
+      const raw = await res.text();
+      try { data = raw ? JSON.parse(raw) : null; } catch { data = raw; }
+      logWire(method, path, res.status, ms, reqId, data);
+      if (!res.ok) {
+        const msg = (data && (data.detail || data.title)) || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return { data, headers: res.headers, status: res.status };
+    }
+
+    async function checkHealth() {
+      const badge = document.getElementById('healthBadge');
+      try {
+        const { data } = await api('GET', '/readyz');
+        badge.className = 'pill ok';
+        badge.textContent = `● 服务就绪 (DB: ${data.database})`;
+      } catch (e) {
+        badge.className = 'pill err';
+        badge.textContent = `● 服务异常: ${e.message}`;
+      }
+    }
+
+    async function quickLogin(email) {
+      document.getElementById('emailInput').value = email;
+      await loginWithInputEmail();
+    }
+
+    async function loginWithInputEmail() {
+      const email = document.getElementById('emailInput').value.trim();
+      if (!email) return alert('请输入测试邮箱');
+      try {
+        const { data: ch } = await api('POST', '/v1/auth/email/otp:request', { email, purpose: 'login' });
+        const code = ch.devOtpCode || prompt('请输入邮箱验证码：');
+        if (!code) return;
+        const { data: tok } = await api('POST', '/v1/auth/email/otp:verify', {
+          challengeId: ch.challengeId,
+          email,
+          code,
+        });
+        state.email = email;
+        state.userId = tok.userId;
+        state.accessToken = tok.accessToken;
+        state.refreshToken = tok.refreshToken;
+        state.activePersonId = null;
+        state.selectedMaterialIds.clear();
+        const ub = document.getElementById('userBadge');
+        ub.className = 'pill ok';
+        ub.textContent = `${email} (${String(tok.userId).slice(0, 8)}…)`;
+        document.getElementById('exportPreview').classList.add('hidden');
+        await refreshPeople();
+        await refreshReminders();
+      } catch (e) {
+        alert('登录失败：' + e.message);
+      }
+    }
+
+    function requireAuth() {
+      if (!state.accessToken) {
+        alert('请先点击顶部「一键登录账号 A」完成认证！');
+        throw new Error('Unauthenticated');
+      }
+    }
+
+    async function refreshPeople() {
+      requireAuth();
+      const { data } = await api('GET', '/v1/persons?includeProvisional=true');
+      state.people = data.items || [];
+      if (state.activePersonId && !state.people.some(p => p.id === state.activePersonId)) {
+        state.activePersonId = null;
+      }
+      if (!state.activePersonId && state.people.length > 0) {
+        state.activePersonId = state.people[0].id;
+      }
+      renderPeople();
+      await refreshActivePersonViews();
+    }
+
+    function tierLabel(t) {
+      if (t === 'gold') return ['金箭 · 记爱', 'tier-gold'];
+      if (t === 'silver') return ['银箭 · 记恨', 'tier-silver'];
+      return ['水晶箭 · 记繁琐', 'tier-crystal'];
+    }
+
+    function renderPeople() {
+      const box = document.getElementById('personList');
+      if (!state.people.length) {
+        box.innerHTML = '<div class="muted">当前账号下尚无人物（跨租户 RLS 完全隔离）。点击上方预设芯片一键建档！</div>';
+        document.getElementById('bannerName').textContent = '当前账号暂无人物';
+        document.getElementById('bannerMeta').textContent = '点击左侧「+ 林夏 / + 周主管」即可一键建档';
+        document.getElementById('bannerActions').classList.add('hidden');
+        return;
+      }
+      box.innerHTML = state.people.map(p => {
+        const [lbl, cls] = tierLabel(p.tier);
+        const active = p.id === state.activePersonId ? 'active' : '';
+        const prov = p.state === 'provisional' ? ' · 待转正' : '';
+        return `
+          <div class="person-item ${active}" onclick="selectPerson('${p.id}')">
+            <div>
+              <div style="font-weight:600;">${escapeHtml(p.nameCn)} <span class="muted">${escapeHtml(p.roleTag || '')}${prov}</span></div>
+              <div class="muted">v${p.version} · ${(p.traits || []).map(escapeHtml).join(' / ') || '无标签'}</div>
+            </div>
+            <span class="tier-badge ${cls}">${lbl}</span>
+          </div>
+        `;
+      }).join('');
+
+      const cur = state.people.find(p => p.id === state.activePersonId);
+      if (cur) {
+        const [lbl] = tierLabel(cur.tier);
+        document.getElementById('bannerName').textContent = `${cur.nameCn}（${lbl}）`;
+        document.getElementById('bannerMeta').textContent = `关系：${cur.roleTag || '未填'} · 状态：${cur.state} · ID: ${cur.id.slice(0, 8)}…`;
+        document.getElementById('switchTierSelect').value = cur.tier;
+        document.getElementById('bannerActions').classList.remove('hidden');
+      }
+    }
+
+    async function selectPerson(id) {
+      state.activePersonId = id;
+      state.selectedMaterialIds.clear();
+      renderPeople();
+      await refreshActivePersonViews();
+    }
+
+    async function seedPerson(nameCn, tier, roleTag, traits) {
+      requireAuth();
+      const exists = state.people.find(p => p.nameCn === nameCn);
+      if (exists) {
+        await selectPerson(exists.id);
+        return;
+      }
+      const { data } = await api('POST', '/v1/persons', { nameCn, tier, roleTag, traits });
+      state.activePersonId = data.id;
+      await refreshPeople();
+    }
+
+    async function createCustomPerson() {
+      requireAuth();
+      const nameCn = document.getElementById('newPersonName').value.trim();
+      if (!nameCn) return alert('请输入人物姓名');
+      const tier = document.getElementById('newPersonTier').value;
+      const roleTag = document.getElementById('newPersonRole').value.trim();
+      const { data } = await api('POST', '/v1/persons', { nameCn, tier, roleTag });
+      document.getElementById('newPersonName').value = '';
+      state.activePersonId = data.id;
+      await refreshPeople();
+    }
+
+    async function changeActivePersonTier(newTier) {
+      if (!state.activePersonId) return;
+      const cur = state.people.find(p => p.id === state.activePersonId);
+      const headers = cur ? { 'If-Match': `"${cur.version}"` } : {};
+      await api('PATCH', `/v1/persons/${state.activePersonId}/tier`, { tier: newTier }, headers);
+      await refreshPeople();
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+      ['capture', 'chat', 'rights'].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.toggle('hidden', t !== name);
+      });
+      if (name === 'chat') loadChatMessages();
+      if (name === 'rights') refreshReminders();
+    }
+
+    function fillCapture(text, routeMode) {
+      document.getElementById('captureText').value = text;
+      document.getElementById('captureRouteMode').value = routeMode;
+    }
+
+    async function submitCapture() {
+      requireAuth();
+      const text = document.getElementById('captureText').value.trim();
+      if (!text) return alert('请输入速记内容');
+      const routeMode = document.getElementById('captureRouteMode').value;
+      if (routeMode === 'current' && !state.activePersonId) {
+        return alert('当前为「锁定当前选中人物」模式，请先在左侧选择或创建一个人物，或切为全局模式。');
+      }
+      const asyncMode = document.getElementById('asyncWorkerMode').checked;
+      const payload = {
+        source: 'text',
+        routeMode,
+        activePersonId: routeMode === 'current' ? state.activePersonId : null,
+        text,
+        sync: !asyncMode,
+      };
+      const bar = document.getElementById('captureStatusBar');
+      bar.textContent = '正在提交速记...';
+      const { data } = await api('POST', `/v1/captures?sync=${!asyncMode}`, payload);
+      state.lastCaptureId = data.id;
+      document.getElementById('undoCaptureBtn').classList.remove('hidden');
+      bar.textContent = `已受理 (captureId=${data.id.slice(0,8)}…)，当前状态：${data.status}`;
+
+      if (asyncMode && ['received', 'transcribing', 'extracting'].includes(data.status)) {
+        for (let i = 0; i < 12; i++) {
+          await new Promise(r => setTimeout(r, 650));
+          const { data: polled } = await api('GET', `/v1/captures/${data.id}`);
+          bar.textContent = `后台 PG Worker 处理中 -> 状态：${polled.status}`;
+          if (!['received', 'transcribing', 'extracting'].includes(polled.status)) break;
+        }
+      }
+      await refreshPeople();
+    }
+
+    async function undoLastCapture() {
+      if (!state.lastCaptureId) return;
+      try {
+        const { data } = await api('POST', `/v1/captures/${state.lastCaptureId}:undo`, {});
+        document.getElementById('captureStatusBar').textContent = `已成功在窗口期内撤回速记 (status=${data.status})`;
+        document.getElementById('undoCaptureBtn').classList.add('hidden');
+        await refreshPeople();
+      } catch (e) {
+        alert('撤回失败（可能已超过 5 秒后悔药窗口）：' + e.message);
+      }
+    }
+
+    async function refreshActivePersonViews() {
+      await refreshMemoryViews();
+      await loadChatMessages();
+    }
+
+    async function refreshMemoryViews() {
+      if (!state.accessToken) return;
+      const { data: inboxPage } = await api('GET', '/v1/inbox?status=open');
+      const inboxBox = document.getElementById('inboxList');
+      if (!inboxPage.items.length) {
+        inboxBox.innerHTML = '<div class="muted">当前无待确认事项（高置信度事实或待确认项处理完毕）</div>';
+      } else {
+        inboxBox.innerHTML = inboxPage.items.map(item => `
+          <div class="item-box">
+            <div style="font-weight:600;">[${escapeHtml(item.kind)}] ${escapeHtml(item.summary || item.mention || '待确认记忆')}</div>
+            <div class="muted" style="margin:4px 0;">关联人物：${escapeHtml(item.personName || '待指派')} · 事实数：${(item.facts || []).length}</div>
+            ${(item.facts || []).map(f => `<div style="font-size:12.5px;">• (${escapeHtml(f.type)}) ${escapeHtml(f.content)}</div>`).join('')}
+            <div class="row" style="margin-top:8px;">
+              ${item.kind === 'new_person_confirm'
+                ? `<button class="primary" onclick="resolveInbox('${item.id}','create_person','${escapeHtml(item.mention || '新朋友')}')">确认转正建档</button>`
+                : `<button class="primary" onclick="resolveInbox('${item.id}','confirm')">确认入库 (confirm)</button>`}
+              <button onclick="resolveInbox('${item.id}','keep_as_note')">仅存便签</button>
+              <button class="danger" onclick="resolveInbox('${item.id}','discard')">丢弃</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      const factsBox = document.getElementById('factsList');
+      const matsBox = document.getElementById('materialsList');
+      if (!state.activePersonId) {
+        factsBox.innerHTML = '<div class="muted">请先选择人物</div>';
+        matsBox.innerHTML = '<div class="muted">请先选择人物</div>';
+        return;
+      }
+
+      const { data: factsPage } = await api('GET', `/v1/persons/${state.activePersonId}/facts`);
+      if (!factsPage.items.length) {
+        factsBox.innerHTML = '<div class="muted">该人物暂无结构化事实，去上方提交一条速记试试！</div>';
+      } else {
+        factsBox.innerHTML = factsPage.items.map(f => `
+          <div class="item-box">
+            <div style="display:flex;justify-content:space-between;">
+              <strong>[${escapeHtml(f.type)} · ${escapeHtml(f.polarity)}]</strong>
+              <span class="muted">${escapeHtml(f.status)}</span>
+            </div>
+            <div style="margin-top:3px;">${escapeHtml(f.content)}</div>
+            ${f.triggerDate ? `<div class="muted">触发日期：${f.triggerDate}${f.isLunar ? ` (农历 ${f.lunarMonth}月${f.lunarDay}日)` : ''}</div>` : ''}
+          </div>
+        `).join('');
+      }
+
+      const { data: matsPage } = await api('GET', `/v1/persons/${state.activePersonId}/materials?includeHeld=true`);
+      if (!matsPage.items.length) {
+        matsBox.innerHTML = '<div class="muted">暂无手账原始材料</div>';
+      } else {
+        matsBox.innerHTML = matsPage.items.map(m => {
+          const checked = state.selectedMaterialIds.has(m.id) ? 'checked' : '';
+          return `
+            <div class="item-box" style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+              <label style="display:flex;gap:8px;cursor:pointer;flex:1;">
+                <input type="checkbox" style="width:auto;margin-top:3px;" ${checked} onchange="toggleRefMaterial('${m.id}', this.checked)" />
+                <div>
+                  <div style="font-weight:600;">${escapeHtml(m.title)} <span class="muted">[${escapeHtml(m.kind)} · ${escapeHtml(m.reviewState)}]</span></div>
+                  <div style="font-size:12.5px;color:#3d3730;">${escapeHtml(m.body)}</div>
+                </div>
+              </label>
+              <span class="muted">id:${m.id.slice(0,6)}</span>
+            </div>
+          `;
+        }).join('');
+      }
+      renderSelectedRefsBar();
+    }
+
+    function toggleRefMaterial(id, on) {
+      if (on) state.selectedMaterialIds.add(id);
+      else state.selectedMaterialIds.delete(id);
+      renderSelectedRefsBar();
+    }
+
+    function renderSelectedRefsBar() {
+      const bar = document.getElementById('selectedRefsBar');
+      const count = state.selectedMaterialIds.size;
+      bar.textContent = count > 0
+        ? `已勾选引用 ${count} 条手账材料参与本轮对话 (${Array.from(state.selectedMaterialIds).map(x => x.slice(0,6)).join(', ')})`
+        : '提示：可在「随手速记」页勾选任意手账材料作为本轮对话显式引用上下文';
+    }
+
+    async function resolveInbox(itemId, action, displayName) {
+      const body = { action };
+      if (action === 'create_person') {
+        body.displayName = displayName || '新朋友';
+        body.tier = 'crystal';
+      } else if (state.activePersonId) {
+        body.targetPersonId = state.activePersonId;
+      }
+      await api('POST', `/v1/inbox/${itemId}:resolve`, body);
+      await refreshPeople();
+    }
+
+    async function loadChatMessages() {
+      const box = document.getElementById('chatBox');
+      if (!state.accessToken || !state.activePersonId) {
+        box.innerHTML = '<div class="muted">请先登录并在左侧选择一位人物。</div>';
+        return;
+      }
+      const { data } = await api('GET', `/v1/persons/${state.activePersonId}/chat/messages?limit=50&order=asc`);
+      box.innerHTML = '';
+      if (!data.items.length) {
+        box.innerHTML = '<div class="muted">尚无对话记录。点击上方 4 个实测芯片或直接输入消息体验真实 SSE 流式输出！</div>';
+        return;
+      }
+      for (const m of data.items) {
+        appendRenderedMessage(m.role, m.content, {
+          whisper: m.whisperNote,
+          perspectives: m.perspectives,
+          suggestions: m.suggestions,
+          citations: m.citations,
+        });
+      }
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function appendRenderedMessage(role, content, extra = {}) {
+      const box = document.getElementById('chatBox');
+      if (box.querySelector('.muted') && box.children.length === 1 && !box.querySelector('.msg')) {
+        box.innerHTML = '';
+      }
+      const div = document.createElement('div');
+      div.className = `msg ${role}`;
+      let html = `<div>${escapeHtml(content)}</div>`;
+      if (extra.citations && extra.citations.length) {
+        html += `<div class="sub-callout"><strong>引用溯源：</strong>${extra.citations.map(c => `[${c.index}] ${escapeHtml(c.title)}: ${escapeHtml(c.snippet)}`).join(' | ')}</div>`;
+      }
+      if (extra.whisper) {
+        html += `<div class="sub-callout"><strong>丘比特耳语：</strong>${escapeHtml(extra.whisper)}</div>`;
+      }
+      if (extra.perspectives && extra.perspectives.length) {
+        html += `<div class="sub-callout"><strong>温和换位视角 (仅记爱 Gold)：</strong><br/>• ${extra.perspectives.map(escapeHtml).join('<br/>• ')}</div>`;
+      }
+      if (extra.suggestions && extra.suggestions.length) {
+        html += `<div class="sub-callout"><strong>行动建议：</strong><br/>• ${extra.suggestions.map(escapeHtml).join('<br/>• ')}</div>`;
+      }
+      div.innerHTML = html;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+      return div;
+    }
+
+    function sendPresetChat(text) {
+      document.getElementById('chatInput').value = text;
+      sendChatMessage();
+    }
+
+    async function sendChatMessage() {
+      requireAuth();
+      if (!state.activePersonId) return alert('请先在左侧选择或创建一个人物！');
+      const input = document.getElementById('chatInput');
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = '';
+
+      appendRenderedMessage('user', message);
+      const asstDiv = appendRenderedMessage('assistant', '…');
+      const textNode = document.createElement('div');
+      const metaNode = document.createElement('div');
+      asstDiv.innerHTML = '';
+      asstDiv.appendChild(textNode);
+      asstDiv.appendChild(metaNode);
+
+      const path = `/v1/persons/${state.activePersonId}/chat/stream`;
+      const idemKey = uuid();
+      const t0 = performance.now();
+      const res = await fetch(path, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${state.accessToken}`,
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+          'Idempotency-Key': idemKey,
+        },
+        body: JSON.stringify({
+          message,
+          referencedMaterialIds: Array.from(state.selectedMaterialIds),
+          clientMessageId: uuid(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errTxt = await res.text();
+        logWire('POST (SSE)', path, res.status, Math.round(performance.now() - t0), res.headers.get('X-Request-Id'), errTxt);
+        textNode.textContent = '请求报错：' + errTxt;
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      let assembled = '';
+      const framesLog = [];
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) !== -1) {
+          const rawFrame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let evName = 'message';
+          let dataLines = [];
+          for (const line of rawFrame.split('\n')) {
+            if (line.startsWith('event:')) evName = line.slice(6).trim();
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
+          }
+          if (!dataLines.length) continue;
+          let payload = {};
+          try { payload = JSON.parse(dataLines.join('\n')); } catch {}
+          framesLog.push({ event: evName, data: payload });
+
+          if (evName === 'delta') {
+            assembled += payload.text || '';
+            textNode.textContent = assembled;
+          } else if (evName === 'citation') {
+            metaNode.insertAdjacentHTML('beforeend', `<div class="sub-callout"><strong>引用 [${payload.index}]：</strong>${escapeHtml(payload.title)} — ${escapeHtml(payload.snippet)}</div>`);
+          } else if (evName === 'whisper') {
+            metaNode.insertAdjacentHTML('beforeend', `<div class="sub-callout"><strong>丘比特耳语：</strong>${escapeHtml(payload.text)}</div>`);
+          } else if (evName === 'perspective') {
+            metaNode.insertAdjacentHTML('beforeend', `<div class="sub-callout"><strong>换位思考 (Gold 专属)：</strong><br/>• ${(payload.items || []).map(escapeHtml).join('<br/>• ')}</div>`);
+          } else if (evName === 'suggestion') {
+            metaNode.insertAdjacentHTML('beforeend', `<div class="sub-callout"><strong>沟通/行动建议：</strong><br/>• ${(payload.items || []).map(escapeHtml).join('<br/>• ')}</div>`);
+          } else if (evName === 'crisis') {
+            textNode.textContent = '';
+            const hotlines = (payload.hotlines || []).map(h => `<div>• <strong>${escapeHtml(h.name || h.label || '援助热线')}</strong>：${escapeHtml(h.phone || h.number || '')}</div>`).join('');
+            metaNode.insertAdjacentHTML('beforeend', `
+              <div class="crisis-card">
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px;">🛡️ ${escapeHtml(payload.title)}</div>
+                <div style="margin-bottom:6px;">${escapeHtml(payload.careMessage)}</div>
+                ${hotlines}
+                <div class="muted" style="margin-top:6px;">${escapeHtml(payload.disclaimer || '')}</div>
+              </div>
+            `);
+          } else if (evName === 'error') {
+            textNode.textContent = `流式异常 [${payload.code}]: ${payload.detail}`;
+          }
+          document.getElementById('chatBox').scrollTop = document.getElementById('chatBox').scrollHeight;
+        }
+      }
+      logWire('POST (SSE)', path, res.status, Math.round(performance.now() - t0), res.headers.get('X-Request-Id'), framesLog);
+    }
+
+    async function clearChatHistory() {
+      if (!state.activePersonId) return;
+      await api('DELETE', `/v1/persons/${state.activePersonId}/chat/messages`);
+      await loadChatMessages();
+    }
+
+    async function createReminderForActive() {
+      requireAuth();
+      if (!state.activePersonId) return alert('请先在左侧选择一位人物！');
+      const title = document.getElementById('remTitle').value.trim();
+      const isLunar = document.getElementById('remIsLunar').value === 'true';
+      const targetMonth = parseInt(document.getElementById('remMonth').value, 10);
+      const targetDay = parseInt(document.getElementById('remDay').value, 10);
+      await api('POST', '/v1/reminders', {
+        personId: state.activePersonId,
+        title,
+        rule: 'yearly',
+        isLunar,
+        targetMonth,
+        targetDay,
+        leadDays: [7, 1, 0],
+      });
+      await refreshReminders();
+    }
+
+    async function refreshReminders() {
+      if (!state.accessToken) return;
+      const { data } = await api('GET', '/v1/reminders');
+      const box = document.getElementById('remindersList');
+      if (!data.items.length) {
+        box.innerHTML = '<div class="muted">当前账号暂无纪念日提醒</div>';
+        return;
+      }
+      box.innerHTML = data.items.map(r => `
+        <div class="item-box">
+          <div style="font-weight:600;">🔔 ${escapeHtml(r.title)}</div>
+          <div class="muted">${r.isLunar ? '农历' : '公历'} ${r.targetMonth}月${r.targetDay}日 · 下次触发：${r.nextFireAt ? new Date(r.nextFireAt).toLocaleString() : '-'}</div>
+        </div>
+      `).join('');
+    }
+
+    async function obtainStepUpReauthToken() {
+      const { data: ch } = await api('POST', '/v1/auth/email/otp:request', {
+        email: state.email,
+        purpose: 'reauth',
+      });
+      const code = ch.devOtpCode || prompt('请输入二次验证 OTP：');
+      const { data: reauth } = await api('POST', '/v1/auth/email/otp:verify', {
+        challengeId: ch.challengeId,
+        email: state.email,
+        code,
+      });
+      return reauth.reauthToken;
+    }
+
+    async function exportMyData() {
+      requireAuth();
+      const reauthToken = await obtainStepUpReauthToken();
+      const { data: job } = await api(
+        'POST',
+        '/v1/me/exports',
+        { asyncMode: false },
+        { 'X-Reauth-Token': reauthToken }
+      );
+      if (job.downloadPath) {
+        const { data: archive } = await api('GET', job.downloadPath);
+        const pre = document.getElementById('exportPreview');
+        pre.classList.remove('hidden');
+        pre.textContent = JSON.stringify(archive, null, 2);
+      }
+    }
+
+    async function deleteMyAccount() {
+      requireAuth();
+      if (!confirm(`确定要彻底擦除账号 ${state.email} 并执行密钥密码学粉碎吗？`)) return;
+      const reauthToken = await obtainStepUpReauthToken();
+      await api('DELETE', '/v1/me', null, { 'X-Reauth-Token': reauthToken });
+      state.accessToken = null;
+      state.userId = null;
+      state.people = [];
+      state.activePersonId = null;
+      document.getElementById('userBadge').className = 'pill';
+      document.getElementById('userBadge').textContent = '账号已销毁 (DEK 已粉碎)';
+      document.getElementById('personList').innerHTML = '<div class="muted">账号已彻底擦除，可重新一键登录新建空白身份。</div>';
+      alert('账号与专属 DEK 密钥已彻底粉碎！');
+    }
+
+    checkHealth();
+  </script>
+</body>
+</html>

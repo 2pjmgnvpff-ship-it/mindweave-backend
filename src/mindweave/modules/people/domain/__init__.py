@@ -1,0 +1,63 @@
+"""Pure domain policies and entities for the People module."""
+
+from mindweave.modules.people.domain.copy_policy import (
+    FORBIDDEN_UI_DEV_PHRASES,
+    assert_no_forbidden_ui_phrases,
+    derive_cupid_title,
+    derive_monogram,
+    find_forbidden_phrase,
+    validate_alias_text,
+    validate_name_cn,
+    validate_optional_copy_field,
+    validate_traits,
+    validate_visual_tokens,
+)
+from mindweave.modules.people.domain.entities import (
+    CopyPolicyViolationError,
+    InvalidMoveError,
+    InvalidTierTransitionError,
+    PersonAlias,
+    PersonDomainError,
+    PersonProfile,
+    PhotoSlot,
+    default_visual_tokens,
+)
+from mindweave.modules.people.domain.tier_transition import (
+    MovePlan,
+    PersonRankEntry,
+    TierPartition,
+    TierTransitionPlan,
+    compute_move,
+    compute_new_person_rank,
+    compute_tier_transition,
+    partition_person_ids,
+)
+
+__all__ = [
+    "FORBIDDEN_UI_DEV_PHRASES",
+    "CopyPolicyViolationError",
+    "InvalidMoveError",
+    "InvalidTierTransitionError",
+    "MovePlan",
+    "PersonAlias",
+    "PersonDomainError",
+    "PersonProfile",
+    "PersonRankEntry",
+    "PhotoSlot",
+    "TierPartition",
+    "TierTransitionPlan",
+    "assert_no_forbidden_ui_phrases",
+    "compute_move",
+    "compute_new_person_rank",
+    "compute_tier_transition",
+    "default_visual_tokens",
+    "derive_cupid_title",
+    "derive_monogram",
+    "find_forbidden_phrase",
+    "partition_person_ids",
+    "validate_alias_text",
+    "validate_name_cn",
+    "validate_optional_copy_field",
+    "validate_traits",
+    "validate_visual_tokens",
+]

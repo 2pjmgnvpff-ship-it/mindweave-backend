@@ -1,0 +1,19 @@
+{
+  "name": "mindweave-backend",
+  "options": {
+    "allow-unauthenticated": true,
+    "memory": "1Gi",
+    "cpu": "1"
+  },
+  "env": {
+    "MINDWEAVE_ENVIRONMENT": {
+      "description": "Runtime environment (dev enables the built-in interactive test workbench at /)",
+      "value": "dev",
+      "required": false
+    },
+    "MINDWEAVE_GEMINI_API_KEY": {
+      "description": "Optional: paste your Google AI Studio Gemini API Key to use real Gemini 2.5 Flash (leave blank to use the smart offline AI engine)",
+      "required": false
+    }
+  }
+}
