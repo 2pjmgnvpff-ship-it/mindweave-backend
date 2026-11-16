@@ -153,7 +153,7 @@ function questionControls(m, personId, ctx) {
               }
             },
           },
-          h('span', { class: 'mono-seal', style: sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }),
+          h('span', { class: ['mono-seal', c.tier === 'silver' && 'is-cloaked'], style: c.tier === 'silver' ? {} : sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }),
           h('span', { text: c.displayName }),
         ),
       );

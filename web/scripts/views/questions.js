@@ -50,7 +50,7 @@ function noteFor(item, list) {
             'aria-label': `是${c.displayName}`,
             onClick: () => resolve(item, { action: 'assign_person', targetPersonId: c.personId }, `好，记到「${c.displayName}」那页了`, list),
           },
-          h('span', { class: 'mono-seal', style: sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }),
+          h('span', { class: ['mono-seal', c.tier === 'silver' && 'is-cloaked'], style: c.tier === 'silver' ? {} : sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }),
           h('span', { text: c.displayName }),
         ),
       );

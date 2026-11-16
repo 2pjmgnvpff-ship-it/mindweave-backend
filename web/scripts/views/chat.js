@@ -22,7 +22,7 @@ const EMPTY_COPY = {
   crystal: (n) => `要给「${n}」回个消息、备份礼物？问丘比特就好。`,
 };
 
-let state = { personId: null, attached: new Set(), streaming: null, built: false };
+let state = { personId: null, attached: new Set(), streaming: null, built: false, historySeq: 0, liveClientIds: new Set() };
 let els = {};
 
 function build() {
@@ -196,16 +196,34 @@ function toggleDrawer(open) {
 }
 
 async function loadHistory() {
+  const pid = state.personId;
+  const seq = ++state.historySeq;
   const p = person();
   clear(els.messages);
+  const anchor = document.createComment('history-end');
+  els.messages.appendChild(anchor);
   const tier = p?.tier || 'crystal';
   try {
-    const res = await api.chatHistory(state.personId, { limit: 40 });
-    const items = res.items || [];
-    if (!items.length) els.messages.appendChild(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }));
-    for (const m of items) els.messages.append(...historyMessage(m, state.personId, tier));
+    const res = await api.chatHistory(pid, { limit: 40 });
+    if (state.personId !== pid || state.historySeq !== seq || !anchor.isConnected) return;
+    const rawItems = res.items || [];
+    const liveIdx = rawItems.findIndex((m) => m.clientMessageId && state.liveClientIds.has(m.clientMessageId));
+    const items = liveIdx >= 0 ? rawItems.slice(0, liveIdx) : rawItems;
+    const hasLive = Boolean(anchor.nextSibling);
+    if (!items.length && !hasLive) {
+      els.messages.insertBefore(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }), anchor);
+    } else if (items.length) {
+      const frag = document.createDocumentFragment();
+      for (const m of items) frag.append(...historyMessage(m, pid, tier));
+      els.messages.insertBefore(frag, anchor);
+    }
+    anchor.remove();
   } catch {
-    els.messages.appendChild(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }));
+    if (state.personId !== pid || state.historySeq !== seq || !anchor.isConnected) return;
+    if (!anchor.nextSibling) {
+      els.messages.insertBefore(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }), anchor);
+    }
+    anchor.remove();
   }
   scrollDown();
 }
@@ -282,7 +300,9 @@ function send() {
   state.attached.clear();
   renderTray();
   toggleDrawer(false);
-  stream(text, ids, { clientMessageId: uuid(), idem: uuid() });
+  const attempt = { clientMessageId: uuid(), idem: uuid() };
+  state.liveClientIds.add(attempt.clientMessageId);
+  stream(text, ids, attempt);
 }
 
 export function openChat(personId) {
@@ -297,6 +317,7 @@ export function openChat(personId) {
   const root = $('#chat');
   const changed = state.personId !== pid;
   state.personId = pid;
+  state.liveClientIds.clear();
   const p = s.people[pid];
   const tier = p.tier || 'crystal';
   root.dataset.arrowTier = tier;
@@ -325,6 +346,7 @@ export function closeChat() {
   const root = $('#chat');
   if (root.hidden) return;
   state.streaming?.abort();
+  state.historySeq += 1;
   toggleDrawer(false);
   root.classList.remove('is-active');
   for (const id of ['journalCanvas', 'dock']) $(`#${id}`).inert = false;

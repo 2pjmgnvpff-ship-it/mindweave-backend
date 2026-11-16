@@ -1,5 +1,5 @@
 // dom.js — tiny DOM helpers. All dynamic text goes through textContent / text nodes.
-// Never assign innerHTML with data. The single exception is `svg()`, which only accepts
+// Never assign HTML strings with data. The single exception is `svg()`, which only accepts
 // constant SVG markup that ships with the app (see static-svg comment below).
 
 const FORBIDDEN_PROPS = new Set(['innerHTML', 'outerHTML', 'insertAdjacentHTML']);

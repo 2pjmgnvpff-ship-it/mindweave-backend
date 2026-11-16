@@ -3,7 +3,7 @@
 import { h, clear, svg, $ } from '../dom.js';
 import { store } from '../store.js';
 import { monogramOf, sealStyle } from '../decor.js';
-import { DIRECTORY_SVG } from '../icons.js';
+import { DIRECTORY_SVG, SPARK_SVG } from '../icons.js';
 import { TIER_LABEL } from '../format.js';
 import { actions } from '../actions.js';
 
@@ -154,8 +154,11 @@ export function initDock() {
   });
   capsule.addEventListener('pointercancel', () => (scrub = null));
   capsule.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') setExpanded(false);
-    else if ((e.key === 'Enter' || e.key === ' ') && e.target === capsule) {
+    if (e.key === 'Escape') {
+      const hadInnerFocus = capsule.contains(document.activeElement);
+      setExpanded(false);
+      if (hadInnerFocus) capsule.focus({ preventScroll: true });
+    } else if ((e.key === 'Enter' || e.key === ' ') && e.target === capsule) {
       e.preventDefault();
       setExpanded(!expanded);
     } else if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('.capsule-obj-avatar')) {
@@ -163,7 +166,9 @@ export function initDock() {
       choose(e.target.closest('.capsule-obj-avatar'));
     }
   });
-  $('#aiOrb').addEventListener('click', () => actions.openChat(store.get().view === 'journal' ? store.get().activePersonId : null));
+  const aiOrb = $('#aiOrb');
+  aiOrb.append(svg(SPARK_SVG, 'ai-orb-spark-icon'));
+  aiOrb.addEventListener('click', () => actions.openChat(store.get().view === 'journal' ? store.get().activePersonId : null));
   store.subscribe(render);
   render(store.get());
 }

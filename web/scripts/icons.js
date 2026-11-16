@@ -1,5 +1,5 @@
 // icons.js — constant SVG markup shipped with the app (never user data).
-// Rendered only through dom.svg(), the single audited innerHTML sink.
+// Rendered only through dom.svg(), the single audited SVG markup sink.
 
 export const ARROW_SVGS = {
   gold: `<svg viewBox="0 0 36 22" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="goldArrowGrad" x1="0" y1="0" x2="36" y2="22" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FCE49C"/><stop offset="48%" stop-color="#D99B38"/><stop offset="100%" stop-color="#9E6816"/></linearGradient></defs><line x1="4" y1="11" x2="27" y2="11" stroke="url(#goldArrowGrad)" stroke-width="2.1" stroke-linecap="round"/><path d="M4 11L1.5 6.8L6.8 9.2M4 11L1.5 15.2L6.8 12.8M8.2 11L5.8 7.2M8.2 11L5.8 14.8" stroke="url(#goldArrowGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M33.5 11C30.6 7.4 26.2 6.2 24.8 8.7C24.2 9.8 25.1 11 25.1 11C25.1 11 24.2 12.2 24.8 13.3C26.2 15.8 30.6 14.6 33.5 11Z" fill="url(#goldArrowGrad)"/></svg>`,

@@ -1,6 +1,6 @@
 // decor.js — D2 deterministic decoration generator.
 // Same (id, date, tier) → same ticket number, film caption, stamp, tape & seal colours.
-// Only palette tones that already exist in the V10 reference / design tokens are used.
+// Only palette tones from the design tokens are used.
 
 export const TIERS = ['gold', 'silver', 'crystal'];
 

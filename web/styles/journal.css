@@ -1,6 +1,6 @@
 /* ==========================================================================
    心络 · journal — scrollable scrapbook page (hero + collage flow) & 记繁琐 directory
-   V10 artifacts re-flowed vertically so no material is ever silently dropped.
+   Vertical scrapbook flow so no material is ever silently dropped.
    ========================================================================== */
 .journal-scroll {
   position: absolute; inset: 0; z-index: 5; overflow-y: auto; overflow-x: hidden;
@@ -162,7 +162,7 @@
 .mw-viewport[data-journal-edition="hobonichi"] .mat-note { background: rgba(255, 255, 255, 0.8); border: 1.2px solid rgba(92, 108, 96, 0.32); border-radius: 8px; box-shadow: 4px 4px 0 rgba(246, 206, 152, 0.45); }
 .mw-viewport[data-journal-edition="museglass"] .mat-note { border-radius: 20px; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%); box-shadow: 0 20px 42px rgba(108, 94, 142, 0.13), inset 0 1px 0 #ffffff; }
 
-/* voice slip (V10 extracted slip + charm) */
+/* voice slip (extracted slip + charm) */
 .mat-voice { padding: 11px 13px 10px; border-radius: 12px; background: linear-gradient(168deg, rgba(255, 254, 250, 0.95) 0%, rgba(250, 243, 232, 0.92) 100%); border: 1px solid rgba(255, 255, 255, 0.96); box-shadow: 0 12px 26px rgba(46, 30, 16, 0.12), inset 0 0 0 1px rgba(207, 150, 56, 0.22); }
 .mw-viewport[data-arrow-tier="silver"] .mat-voice { background: linear-gradient(168deg, rgba(250, 253, 255, 0.95) 0%, rgba(236, 243, 250, 0.92) 100%); box-shadow: 0 12px 26px rgba(34, 46, 58, 0.12), inset 0 0 0 1px rgba(120, 148, 176, 0.28); }
 .mw-viewport[data-arrow-tier="crystal"] .mat-voice { background: linear-gradient(168deg, rgba(251, 255, 255, 0.95) 0%, rgba(235, 248, 251, 0.92) 100%); box-shadow: 0 12px 26px rgba(42, 88, 102, 0.12), inset 0 0 0 1px rgba(96, 178, 198, 0.3); }

@@ -61,7 +61,17 @@ export function upsertPerson(person) {
 export function applyTierChange({ personId, tier, coreIds, casualIds }) {
   const s = store.get();
   const p = s.people[personId];
-  const people = p ? { ...s.people, [personId]: { ...p, tier } } : s.people;
+  let people = s.people;
+  if (p) {
+    const next = { ...p, tier };
+    if (p.tier !== tier) {
+      delete next.sealBg;
+      delete next.sealColor;
+      delete next.tapeColor;
+      delete next.tabColor;
+    }
+    people = { ...s.people, [personId]: next };
+  }
   let core = coreIds;
   let casual = casualIds;
   if (!core || !casual) {

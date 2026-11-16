@@ -118,7 +118,49 @@ try {
     await page.waitForFunction(() => !document.querySelector('.mat-card.is-pencil'));
   });
 
+  await step('voice hold: short tap shows hint without sending; >=1.5s hold ingests voice', async () => {
+    let voicePosts = 0;
+    const onReq = (req) => {
+      if (req.method() === 'POST' && req.url().includes('/v1/voice/ingest')) voicePosts += 1;
+    };
+    page.on('request', onReq);
+    try {
+      const box = await page.locator('#voiceOrb').boundingBox();
+      if (!box) throw new Error('#voiceOrb missing bounding box');
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      // Short tap (<300ms): hint appears, zero network request
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.waitForTimeout(80);
+      await page.mouse.up();
+      await page.waitForSelector('#holdHint.is-visible');
+      await page.waitForTimeout(350);
+      if (voicePosts !== 0) throw new Error(`short tap triggered ${voicePosts} voice upload(s)`);
+
+      // Long hold (>=1.5s): /v1/voice/ingest -> voice slip lands on page
+      const beforeCards = await page.locator('.mat-card[data-material-id]').count();
+      const ingestPromise = page.waitForResponse(
+        (r) => r.url().includes('/v1/voice/ingest') && r.request().method() === 'POST',
+      );
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.waitForSelector('#voiceStage.is-active');
+      await page.waitForTimeout(1600);
+      await page.mouse.up();
+      const ingestRes = await ingestPromise;
+      if (ingestRes.status() !== 200) throw new Error(`/v1/voice/ingest returned ${ingestRes.status()}`);
+      if (voicePosts !== 1) throw new Error(`expected 1 voice upload, got ${voicePosts}`);
+      await page.waitForSelector('.mat-card[data-material-id] .voice-charm');
+      await page.waitForFunction((prev) => document.querySelectorAll('.mat-card[data-material-id]').length > prev, beforeCards);
+      await shot('voice_capture');
+    } finally {
+      page.off('request', onReq);
+    }
+  });
+
   await step('chat with Cupid: streamed reply + citation pill', async () => {
+    await page.waitForFunction(() => !document.querySelector('#toastHost .mw-toast'));
     await page.click('#aiOrb');
     await page.waitForSelector('#chat.is-active .chat-text-input');
     await page.fill('.chat-text-input', '妈妈膝盖不舒服，我能做点什么？');
@@ -138,10 +180,21 @@ try {
     await shot('citation_jump');
   });
 
-  await step('change arrow to silver (with undo toast, cloaked seal)', async () => {
+  await step('keyboard & silver cloak: capsule/popover Esc + change arrow to silver', async () => {
+    await page.focus('#capsule');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#capsule.is-expanded');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('#capsule.is-expanded'));
+
     await page.click('.pinned-arrow-tack-btn');
     await page.waitForSelector('.arrow-selector-popover.is-open');
     await shot('arrow_popover');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.arrow-selector-popover.is-open'));
+
+    await page.click('.pinned-arrow-tack-btn');
+    await page.waitForSelector('.arrow-selector-popover.is-open');
     await page.click('.arrow-choice-item:nth-child(2)');
     await page.waitForFunction(() => document.querySelector('#app').dataset.arrowTier === 'silver');
     await page.waitForSelector('.mw-toast .mw-toast-undo');
@@ -150,6 +203,7 @@ try {
   });
 
   await step('settings: switch paper to parchment', async () => {
+    await page.waitForFunction(() => !document.querySelector('#toastHost .mw-toast'));
     await page.click('#settingsBtn');
     await page.waitForSelector('.edition-chip-card');
     await shot('settings');
@@ -160,7 +214,6 @@ try {
   });
 
   await step('crystal → 记繁琐 directory', async () => {
-    await page.waitForTimeout(5200);
     await page.click('.pinned-arrow-tack-btn');
     await page.click('.arrow-choice-item:nth-child(3)');
     await page.waitForSelector('#backToCasual:not([hidden])');

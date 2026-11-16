@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -9,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import mindweave.modules.capture as _capture_pkg  # noqa: F401
 from mindweave.ai.ports import ModelGatewayPort
@@ -81,6 +83,80 @@ def _parse_iso_date(raw: str | None) -> date | None:
         return date.fromisoformat(raw.strip()[:10])
     except ValueError:
         return None
+
+
+def _normalize_record_body(text: str) -> str:
+    """Normalize text for duplicate record detection by stripping whitespace and punctuation."""
+    folded = unicodedata.normalize("NFKC", text or "")
+    return "".join(
+        ch for ch in folded if not ch.isspace() and not unicodedata.category(ch).startswith("P")
+    )
+
+
+async def _load_normalized_records_for_person(
+    session: AsyncSession,
+    *,
+    container: AppContainer,
+    dek: bytes,
+    user_id: UUID,
+    person_id: UUID,
+) -> dict[str, RecordRow]:
+    rows = (
+        await session.scalars(
+            select(RecordRow)
+            .where(
+                RecordRow.user_id == user_id,
+                RecordRow.person_id == person_id,
+                RecordRow.deleted_at.is_(None),
+            )
+            .order_by(RecordRow.created_at.asc(), RecordRow.id.asc())
+        )
+    ).all()
+    by_norm: dict[str, RecordRow] = {}
+    for rec in rows:
+        body = container.cipher.decrypt_str(
+            dek,
+            rec.body_enc,
+            user_id=user_id,
+            table="records",
+            column="body_enc",
+            row_id=rec.id,
+        )
+        norm = _normalize_record_body(body)
+        if norm:
+            by_norm.setdefault(norm, rec)
+    return by_norm
+
+
+async def _load_existing_fact_keys_for_record(
+    session: AsyncSession,
+    *,
+    container: AppContainer,
+    dek: bytes,
+    user_id: UUID,
+    record_id: UUID,
+) -> set[tuple[str, str]]:
+    rows = (
+        await session.scalars(
+            select(FactRow).where(
+                FactRow.user_id == user_id,
+                FactRow.record_id == record_id,
+                FactRow.invalid_at.is_(None),
+            )
+        )
+    ).all()
+    keys: set[tuple[str, str]] = set()
+    for row in rows:
+        content = container.cipher.decrypt_str(
+            dek,
+            row.content_enc,
+            user_id=user_id,
+            table="facts",
+            column="content_enc",
+            row_id=row.id,
+        )
+        keys.add((row.type, _normalize_record_body(content)))
+    return keys
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,6 +401,29 @@ async def writeback_facts_from_chat_message(
                 session=session,
             )
         except Exception:
+            # Deduplicate fallback note if the exact same normalized text already exists for this person
+            existing_records = await _load_normalized_records_for_person(
+                session,
+                container=container,
+                dek=dek,
+                user_id=scope.user_id,
+                person_id=scope.person_id,
+            )
+            fallback_norm = _normalize_record_body(raw_user_text)
+            if fallback_norm and fallback_norm in existing_records:
+                capture_row.status = CaptureStatus.SAVED_AS_NOTE.value
+                capture_row.error_code = "extraction_failed"
+                capture_row.completed_at = now
+                await session.flush()
+                return WritebackResult(
+                    capture_id=capture_id,
+                    record_ids=[],
+                    confirmed_fact_ids=[],
+                    pending_fact_ids=[],
+                    inbox_item_ids=[],
+                    status=capture_row.status,
+                )
+
             # Invariant I2 graceful degradation: never lose user input on extraction failure
             rec_id = new_id()
             fallback_title = "聊天随手备忘"
@@ -504,6 +603,10 @@ async def writeback_facts_from_chat_message(
 
         multi_person = len(distinct_targets) > 1
         records_by_person: dict[UUID, RecordRow] = {}
+        existing_records_cache: dict[UUID, dict[str, RecordRow]] = {}
+        existing_facts_cache: dict[UUID, set[tuple[str, str]]] = {}
+        clean_body = sanitize_text(raw_user_text, allow_empty=True).cleaned_text or raw_user_text
+        clean_body_norm = _normalize_record_body(clean_body)
 
         for target_pid, cands, is_locked_to_current, item in resolved_items:
             target_person = persons_by_id[target_pid]
@@ -512,67 +615,97 @@ async def writeback_facts_from_chat_message(
 
             rec_row_existing = records_by_person.get(target_pid)
             if rec_row_existing is None:
-                rec_id = new_id()
-                raw_title = item.title.strip() or item.content.strip()[:24] or "手帐便签"
-                clean_title = sanitize_text(raw_title, allow_empty=True).cleaned_text or "手帐便签"
-                clean_body = (
-                    sanitize_text(raw_user_text, allow_empty=True).cleaned_text or raw_user_text
-                )
-                clean_snippet = (
-                    sanitize_text(item.content.strip()[:80], allow_empty=True).cleaned_text
-                    or clean_title
-                )
-                is_gold_venting = extract_out.is_venting_or_irony and target_tier is Tier.GOLD
-                rec_state = (
-                    RecordReviewState.HELD.value
-                    if is_gold_venting
-                    else RecordReviewState.NORMAL.value
-                )
-                rec_row_existing = RecordRow(
-                    id=rec_id,
-                    user_id=scope.user_id,
-                    person_id=target_pid,
-                    capture_id=capture_id,
-                    kind=RecordKind.NOTE.value,
-                    title_enc=container.cipher.encrypt_str(
-                        dek,
-                        clean_title,
+                if target_pid not in existing_records_cache:
+                    existing_records_cache[target_pid] = await _load_normalized_records_for_person(
+                        session,
+                        container=container,
+                        dek=dek,
                         user_id=scope.user_id,
-                        table="records",
-                        column="title_enc",
-                        row_id=rec_id,
-                    ),
-                    body_enc=container.cipher.encrypt_str(
-                        dek,
-                        clean_body,
-                        user_id=scope.user_id,
-                        table="records",
-                        column="body_enc",
-                        row_id=rec_id,
-                    ),
-                    snippet_enc=container.cipher.encrypt_str(
-                        dek,
-                        clean_snippet,
-                        user_id=scope.user_id,
-                        table="records",
-                        column="snippet_enc",
-                        row_id=rec_id,
-                    ),
-                    happened_on=local_today,
-                    pinned=True,
-                    review_state=rec_state,
-                    version=1,
-                    created_at=now,
-                    updated_at=now,
+                        person_id=target_pid,
+                    )
+                dedup_rec = (
+                    existing_records_cache[target_pid].get(clean_body_norm)
+                    if clean_body_norm
+                    else None
                 )
-                session.add(rec_row_existing)
-                await session.flush()
-                records_by_person[target_pid] = rec_row_existing
-                record_ids.append(rec_id)
+                if dedup_rec is not None:
+                    rec_row_existing = dedup_rec
+                    records_by_person[target_pid] = dedup_rec
+                    existing_facts_cache[dedup_rec.id] = await _load_existing_fact_keys_for_record(
+                        session,
+                        container=container,
+                        dek=dek,
+                        user_id=scope.user_id,
+                        record_id=dedup_rec.id,
+                    )
+                else:
+                    rec_id = new_id()
+                    raw_title = item.title.strip() or item.content.strip()[:24] or "手帐便签"
+                    clean_title = (
+                        sanitize_text(raw_title, allow_empty=True).cleaned_text or "手帐便签"
+                    )
+                    clean_snippet = (
+                        sanitize_text(item.content.strip()[:80], allow_empty=True).cleaned_text
+                        or clean_title
+                    )
+                    is_gold_venting = extract_out.is_venting_or_irony and target_tier is Tier.GOLD
+                    rec_state = (
+                        RecordReviewState.HELD.value
+                        if is_gold_venting
+                        else RecordReviewState.NORMAL.value
+                    )
+                    rec_row_existing = RecordRow(
+                        id=rec_id,
+                        user_id=scope.user_id,
+                        person_id=target_pid,
+                        capture_id=capture_id,
+                        kind=RecordKind.NOTE.value,
+                        title_enc=container.cipher.encrypt_str(
+                            dek,
+                            clean_title,
+                            user_id=scope.user_id,
+                            table="records",
+                            column="title_enc",
+                            row_id=rec_id,
+                        ),
+                        body_enc=container.cipher.encrypt_str(
+                            dek,
+                            clean_body,
+                            user_id=scope.user_id,
+                            table="records",
+                            column="body_enc",
+                            row_id=rec_id,
+                        ),
+                        snippet_enc=container.cipher.encrypt_str(
+                            dek,
+                            clean_snippet,
+                            user_id=scope.user_id,
+                            table="records",
+                            column="snippet_enc",
+                            row_id=rec_id,
+                        ),
+                        happened_on=local_today,
+                        pinned=True,
+                        review_state=rec_state,
+                        version=1,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    session.add(rec_row_existing)
+                    await session.flush()
+                    records_by_person[target_pid] = rec_row_existing
+                    record_ids.append(rec_id)
+                    existing_facts_cache[rec_id] = set()
 
             clean_fact_content = (
                 sanitize_text(item.content, allow_empty=True).cleaned_text or item.content.strip()
             )
+            fact_key = (item.fact_type.value, _normalize_record_body(clean_fact_content))
+            known_fact_keys = existing_facts_cache.setdefault(rec_row_existing.id, set())
+            if fact_key in known_fact_keys:
+                continue
+            known_fact_keys.add(fact_key)
+
             raw_fact_title = item.title.strip() or clean_fact_content[:24] or "手帐便签"
             clean_fact_title = (
                 sanitize_text(raw_fact_title, allow_empty=True).cleaned_text or "手帐便签"

@@ -1818,3 +1818,176 @@ async def test_round3_remediation_quadruple_fence_unclosed_eof_and_silver_code_q
         assert "对方原话：换个角度想我也有苦衷" in asst_msgs[1]["content"]
         assert f"    [rec_{sample_id}]" in asst_msgs[1]["content"]
         assert "quote: 对方原话：换个角度想我也有苦衷" in asst_msgs[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_writeback_deduplicates_normalized_record_body_per_person(
+    db_container: AppContainer,
+) -> None:
+    """T3: chat write-back skips creating duplicate RecordRow when normalized body already exists for the same person."""
+    gateway = DeterministicCompanionGateway()
+    queue = RecordingJobQueue()
+    app = _build_test_app(db_container, gateway, queue)
+
+    user_id, token, dek = await _provision_user(db_container)
+    mom_id = await _seed_person(
+        db_container, user_id=user_id, dek=dek, name="妈妈", tier=Tier.GOLD, role_tag="家人"
+    )
+    friend_id = await _seed_person(
+        db_container, user_id=user_id, dek=dek, name="林屿", tier=Tier.CRYSTAL, role_tag="同事"
+    )
+
+    existing_rec_id, _ = await _seed_record_and_fact(
+        db_container,
+        user_id=user_id,
+        person_id=mom_id,
+        dek=dek,
+        title="桂花乌龙备忘",
+        body="妈妈最近特别喜欢喝温热的桂花乌龙茶。",
+        fact_type=FactType.PREFERENCE,
+        fact_content="最近特别喜欢喝温热的桂花乌龙茶",
+    )
+
+    def _single_pref_extract(pid: UUID) -> ExtractRecordOutput:
+        return ExtractRecordOutput(
+            facts=[
+                ExtractedFactItem(
+                    person_mention="妈妈",
+                    person_id=pid,
+                    fact_type=FactType.PREFERENCE,
+                    polarity=Polarity.POSITIVE,
+                    time_status=TimeStatus.CURRENT,
+                    source_speaker=SourceSpeaker.NARRATOR,
+                    title="偏爱桂花乌龙",
+                    content="最近特别喜欢喝温热的桂花乌龙茶",
+                    confidence=0.95,
+                )
+            ]
+        )
+
+    async def _post_and_get_latest_user_msg(
+        client: AsyncClient, person_id: UUID, message: str, idem_key: str
+    ) -> UUID:
+        resp = await client.post(
+            f"/v1/persons/{person_id}/chat/messages?stream=false",
+            headers={"Authorization": f"Bearer {token}", "Idempotency-Key": idem_key},
+            json={"message": message},
+        )
+        assert resp.status_code == 200
+        async with db_container.db.user_session(UserScope(user_id)) as sess:
+            msg_row = await sess.scalar(
+                select(ChatMessageRow)
+                .where(
+                    ChatMessageRow.user_id == user_id,
+                    ChatMessageRow.person_id == person_id,
+                    ChatMessageRow.role == "user",
+                )
+                .order_by(ChatMessageRow.created_at.desc(), ChatMessageRow.id.desc())
+            )
+            assert msg_row is not None
+            return msg_row.id
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        # 1. Whitespace & punctuation variations of an already-recorded body for `mom_id`
+        msg_dup_id = await _post_and_get_latest_user_msg(
+            client,
+            mom_id,
+            "  妈妈最近特别喜欢喝，温热的桂花乌龙茶！ ",
+            "idem-t3-dup-1",
+        )
+        gateway.next_extract_output = _single_pref_extract(mom_id)
+        wb_dup = await writeback_facts_from_chat_message(
+            db_container,
+            scope=PersonScope(user_id=user_id, person_id=mom_id),
+            message_id=msg_dup_id,
+            model_gateway=gateway,
+        )
+        assert wb_dup.record_ids == []
+        assert wb_dup.confirmed_fact_ids == []
+        assert wb_dup.pending_fact_ids == []
+        assert wb_dup.inbox_item_ids == []
+
+        # 2. Extraction-failure fallback on duplicate body must also skip creating a duplicate RecordRow
+        msg_fail_id = await _post_and_get_latest_user_msg(
+            client,
+            mom_id,
+            "妈妈最近特别喜欢喝温热的桂花乌龙茶？",
+            "idem-t3-dup-fail",
+        )
+
+        class _FailingExtractGateway(DeterministicCompanionGateway):
+            async def extract_record(
+                self,
+                *,
+                scope: UserScope,
+                payload: ExtractRecordInput,
+                session: AsyncSession | None = None,
+            ) -> tuple[ExtractRecordOutput, str, str]:
+                raise RuntimeError("simulated extraction outage")
+
+        wb_fail = await writeback_facts_from_chat_message(
+            db_container,
+            scope=PersonScope(user_id=user_id, person_id=mom_id),
+            message_id=msg_fail_id,
+            model_gateway=_FailingExtractGateway(),
+        )
+        assert wb_fail.record_ids == []
+        assert wb_fail.pending_fact_ids == []
+        assert wb_fail.inbox_item_ids == []
+
+        # 3. Same text on a DIFFERENT person (`friend_id`) must NOT be suppressed (strict per-person isolation)
+        msg_other_id = await _post_and_get_latest_user_msg(
+            client,
+            friend_id,
+            "妈妈最近特别喜欢喝温热的桂花乌龙茶。",
+            "idem-t3-other-person",
+        )
+        gateway.next_extract_output = _single_pref_extract(friend_id)
+        wb_other = await writeback_facts_from_chat_message(
+            db_container,
+            scope=PersonScope(user_id=user_id, person_id=friend_id),
+            message_id=msg_other_id,
+            model_gateway=gateway,
+        )
+        assert len(wb_other.record_ids) == 1
+        assert wb_other.record_ids[0] != existing_rec_id
+
+    async with db_container.db.user_session(UserScope(user_id)) as sess:
+        mom_records = list(
+            (
+                await sess.scalars(
+                    select(RecordRow).where(
+                        RecordRow.user_id == user_id,
+                        RecordRow.person_id == mom_id,
+                        RecordRow.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        assert [r.id for r in mom_records] == [existing_rec_id]
+
+        mom_facts = list(
+            (
+                await sess.scalars(
+                    select(FactRow).where(
+                        FactRow.user_id == user_id,
+                        FactRow.person_id == mom_id,
+                        FactRow.invalid_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        assert len(mom_facts) == 1
+
+        friend_records = list(
+            (
+                await sess.scalars(
+                    select(RecordRow).where(
+                        RecordRow.user_id == user_id,
+                        RecordRow.person_id == friend_id,
+                        RecordRow.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+        )
+        assert len(friend_records) == 1

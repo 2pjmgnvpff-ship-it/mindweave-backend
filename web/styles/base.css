@@ -1,6 +1,6 @@
 /* ==========================================================================
    心络 · base — tokens, reset, stage, paper editions, folio bar, arrow pin, toast
-   Ported from the V10 visual reference (tactile scrapbook). System fonts only.
+   Tactile scrapbook styles using system fonts only.
    ========================================================================== */
 :root {
   --studio-sunbeam-1: rgba(255, 234, 216, 0.76);

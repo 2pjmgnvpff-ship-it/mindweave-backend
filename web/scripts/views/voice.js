@@ -1,4 +1,4 @@
-// voice.js — D3 hold-to-talk on the left orb with the V10 split-arc gesture.
+// voice.js — D3 hold-to-talk on the left orb with the split-arc gesture.
 // drag up = 自动分析 (global) · right/default = this person (current) · far = cancel (red, no popup).
 // < 300 ms → discarded with a quiet '按住说话' hint. Real waveform from an AnalyserNode.
 import { $, svg } from '../dom.js';

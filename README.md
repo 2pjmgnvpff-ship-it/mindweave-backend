@@ -31,6 +31,21 @@ docker compose logs -f tunnel
 
 ```bash
 make lint && make typecheck && make arch
-make test   # 287 passed (含 43 项红队对抗回归测试)
-make eval   # 65/65 离线评测集 100% 通过
+make test   # 含单元、架构、Postgres RLS 集成与红队对抗测试
+make eval   # 离线评测集
 ```
+
+---
+
+## 4. 切换 AI 提供方
+
+通过环境变量 `MINDWEAVE_AI_PRIMARY_PROVIDER`（与可选的降级通道 `MINDWEAVE_AI_FALLBACK_PROVIDER`）即可在五种提供方之间切换（任务路由见 [`src/mindweave/ai/routing.yaml`](./src/mindweave/ai/routing.yaml)）：
+
+| 提供方 | `MINDWEAVE_AI_PRIMARY_PROVIDER` | 必填密钥 / 模型环境变量 | 说明 |
+|---|---|---|---|
+| 离线确定性桩 | `fake` | 无需密钥 | 本地开发与离线 E2E 默认项；`prod_cn` 环境禁止启用 |
+| Google Gemini | `gemini` | `MINDWEAVE_GEMINI_API_KEY`（可选 `MINDWEAVE_GEMINI_MODEL_FAST` / `MINDWEAVE_GEMINI_MODEL_CHAT`，默认 `gemini-2.5-flash`；`MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED`） | 仅用于内部自测与非国内环境；`prod_cn` 强制拦截 |
+| 阿里百炼（通义千问） | `dashscope` | `MINDWEAVE_DASHSCOPE_API_KEY`（默认 `qwen-plus` / 视觉 `qwen-vl-max`，可通过 `MINDWEAVE_DASHSCOPE_EXTRACT_MODEL`、`MINDWEAVE_DASHSCOPE_VISION_MODEL`、`MINDWEAVE_DASHSCOPE_BASE_URL` 覆盖） | 中国大陆合规备案模型之一 |
+| 火山方舟（豆包） | `ark` | `MINDWEAVE_ARK_API_KEY`（可选 `MINDWEAVE_ARK_CHAT_MODEL` 默认 `doubao-1-5-pro-32k`、`MINDWEAVE_ARK_BASE_URL`） | 中国大陆合规备案模型之一 |
+| DeepSeek | `deepseek` | `MINDWEAVE_DEEPSEEK_API_KEY`（可选 `MINDWEAVE_DEEPSEEK_CHAT_MODEL` 默认 `deepseek-chat`、`MINDWEAVE_DEEPSEEK_BASE_URL`） | 严禁配置 `deepseek-reasoner` / `*-r1` 推理模型（遵循 ADR-001 首字延迟上限） |
+

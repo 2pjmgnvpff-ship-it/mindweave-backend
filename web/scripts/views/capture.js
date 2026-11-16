@@ -230,7 +230,7 @@ export function openTextCapture({ personId = null, prompt = '', directory = fals
         ? h(
             'span',
             { class: 'capture-scope' },
-            h('span', { class: 'mono-seal', style: sealStyle(person), text: monogramOf(person) }),
+            h('span', { class: ['mono-seal', person.tier === 'silver' && 'is-cloaked'], style: person.tier === 'silver' ? {} : sealStyle(person), text: monogramOf(person) }),
             h('span', { text: `${person.nameCn} · ${TIER_LABEL[person.tier]?.short || ''}` }),
           )
         : null,
@@ -251,9 +251,13 @@ export function flyAvatars(splits) {
   const target = capsule ? capsule.getBoundingClientRect() : null;
   splits.slice(0, 5).forEach((s, i) => {
     const person = store.get().people[s.personId] || { nameCn: s.personName, tier: s.tier };
+    const isSilver = person.tier === 'silver';
     const el = h(
       'div',
-      { class: 'fly-avatar', style: { ...sealStyle({ id: s.personId, ...person }), 'margin-left': `${(i - (splits.length - 1) / 2) * 50 - 20}px` } },
+      {
+        class: ['fly-avatar', isSilver && 'is-cloaked'],
+        style: { ...(isSilver ? {} : sealStyle({ id: s.personId, ...person })), 'margin-left': `${(i - (splits.length - 1) / 2) * 50 - 20}px` },
+      },
       monogramOf({ ...person, nameCn: person.nameCn || s.personName }),
       h('span', { class: 'fly-name', text: person.nameCn || s.personName || '' }),
     );

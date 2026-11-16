@@ -5,15 +5,16 @@ let open = null;
 
 export function closeSheet() {
   if (!open) return;
-  const { layer, onClose, restore, keyHandler } = open;
+  const { layer, onClose, restore, keyHandler, rafId } = open;
   open = null;
+  if (rafId) cancelAnimationFrame(rafId);
   layer.classList.remove('is-open');
   document.removeEventListener('keydown', keyHandler);
   setTimeout(() => {
     if (!open) clear(layer);
   }, 340);
   if (onClose) onClose();
-  if (restore && typeof restore.focus === 'function') restore.focus();
+  if (restore && typeof restore.focus === 'function') restore.focus({ preventScroll: true });
 }
 
 /**
@@ -39,11 +40,17 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus } = {
     if (e.key === 'Escape') closeSheet();
   };
   document.addEventListener('keydown', keyHandler);
-  open = { layer, onClose, restore: document.activeElement, keyHandler };
-  requestAnimationFrame(() => {
+  const entry = { layer, onClose, restore: document.activeElement, keyHandler, rafId: 0 };
+  open = entry;
+  entry.rafId = requestAnimationFrame(() => {
+    if (open !== entry) return;
     layer.classList.add('is-open');
     const target = initialFocus || sheet.querySelector('textarea, input, button:not(.sheet-grabber)');
-    if (target) setTimeout(() => target.focus({ preventScroll: true }), 120);
+    if (target) {
+      setTimeout(() => {
+        if (open === entry) target.focus({ preventScroll: true });
+      }, 120);
+    }
   });
   return { el: sheet, close: closeSheet };
 }
