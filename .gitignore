@@ -9,3 +9,6 @@ __pycache__/
 htmlcov/
 .data/
 .env
+
+# read-only V10 prototype reference (never served, never shipped)
+.v10_reference/

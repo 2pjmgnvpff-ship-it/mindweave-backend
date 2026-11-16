@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fbf6ef"/>
+      <stop offset="100%" stop-color="#f1e3cf"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#paper)"/>
+  <rect x="96" y="96" width="320" height="320" rx="64" fill="#fbeed6" stroke="#966418" stroke-width="14"/>
+  <rect x="122" y="122" width="268" height="268" rx="48" fill="none" stroke="#cf9638" stroke-width="5" stroke-dasharray="14 12"/>
+  <text x="256" y="322" text-anchor="middle" font-family="'Songti SC','Noto Serif SC',serif" font-size="196" font-weight="700" fill="#8a5a14">心</text>
+</svg>

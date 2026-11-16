@@ -1,0 +1,318 @@
+/* ==========================================================================
+   心络 · base — tokens, reset, stage, paper editions, folio bar, arrow pin, toast
+   Ported from the V10 visual reference (tactile scrapbook). System fonts only.
+   ========================================================================== */
+:root {
+  --studio-sunbeam-1: rgba(255, 234, 216, 0.76);
+  --studio-sunbeam-2: rgba(252, 241, 226, 0.32);
+
+  --ink-espresso: #261915;
+  --ink-warm-brown: #5b4841;
+  --ink-taupe: #9b857e;
+  --ink-faint: #bfb0aa;
+  --graphite: #5f5b58;
+
+  --gold-primary: #cf9638;
+  --gold-soft: rgba(212, 160, 72, 0.18);
+  --silver-primary: #6f8498;
+  --silver-soft: rgba(118, 140, 162, 0.18);
+  --crystal-primary: #5298e8;
+  --crystal-aurora: #a27bf0;
+  --crystal-soft: rgba(108, 188, 246, 0.22);
+  --voice-cancel-red: #e04d44;
+
+  --font-serif: 'Songti SC', 'Noto Serif SC', 'Source Han Serif SC', STSong, Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+
+  --ease-spring: cubic-bezier(0.22, 1.24, 0.36, 1);
+  --ease-silk: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --dock-bottom: calc(18px + var(--safe-b));
+  --top-pad: calc(34px + var(--safe-t));
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; -webkit-font-smoothing: antialiased; }
+
+html, body {
+  width: 100%;
+  min-height: 100%;
+  font-family: var(--font-sans);
+  color: var(--ink-espresso);
+  background: #f9f4ec;
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+img { -webkit-user-drag: none; user-select: none; -webkit-user-select: none; }
+button, input, textarea { font-family: inherit; border: none; background: none; color: inherit; font-size: inherit; }
+button { cursor: pointer; }
+[hidden] { display: none !important; }
+.sr-only { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+:focus { outline: none; }
+:focus-visible { outline: 2.5px solid rgba(207, 150, 56, 0.85); outline-offset: 2px; border-radius: 10px; }
+
+/* --------------------------------------------------------------------------
+   Stage: full-screen on phones, a centred journal column on larger screens
+   -------------------------------------------------------------------------- */
+.mw-stage {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mw-viewport {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  background: #f9f4ec;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+}
+@media (min-width: 600px) {
+  .mw-stage {
+    padding: 16px;
+    background:
+      linear-gradient(126deg, transparent 28%, var(--studio-sunbeam-1) 46%, var(--studio-sunbeam-2) 61%, transparent 75%),
+      linear-gradient(180deg, #b1acb4 0%, #c4bfc6 48%, #d6cfd4 69.5%, #aeb3c1 70.5%, #909cb7 84%, #7e8ca9 100%);
+  }
+  .mw-viewport {
+    width: 430px;
+    height: min(932px, calc(100dvh - 32px));
+    border-radius: 40px;
+    box-shadow: 0 32px 80px rgba(36, 28, 44, 0.34), 0 6px 20px rgba(36, 28, 44, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.6);
+  }
+}
+
+.mw-boot-veil {
+  position: absolute; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(165deg, #fbf6ef 0%, #f3e7d7 100%);
+  font-family: var(--font-serif); font-size: 22px; letter-spacing: 0.4em; color: var(--ink-taupe);
+  transition: opacity 0.4s ease;
+}
+.mw-boot-veil.is-gone { opacity: 0; pointer-events: none; }
+
+/* --------------------------------------------------------------------------
+   Paper canvas + 6 editions (cotton is default)
+   -------------------------------------------------------------------------- */
+.journal-atelier-canvas { position: relative; flex: 1; width: 100%; height: 100%; overflow: hidden; isolation: isolate; transition: background 0.45s ease; }
+.mw-viewport[data-journal-edition="cotton"] .journal-atelier-canvas {
+  background: radial-gradient(circle at 86% 14%, rgba(255, 232, 198, 0.55) 0%, rgba(255, 244, 228, 0.18) 38%, transparent 65%), linear-gradient(165deg, #fbf6ef 0%, #f7efe3 54%, #f3e7d7 100%);
+}
+.mw-viewport[data-journal-edition="dotgrid"] .journal-atelier-canvas {
+  background-color: #f5f4ef;
+  background-image: linear-gradient(90deg, rgba(52, 44, 38, 0.09) 0%, rgba(52, 44, 38, 0.025) 14px, transparent 34px), radial-gradient(rgba(116, 108, 98, 0.28) 0.95px, transparent 1px);
+  background-size: 100% 100%, 18px 18px; background-position: 0 0, 9px 9px;
+}
+.mw-viewport[data-journal-edition="parchment"] .journal-atelier-canvas {
+  background: radial-gradient(ellipse at center, rgba(255, 251, 244, 0.55) 0%, rgba(225, 209, 188, 0.42) 100%),
+    repeating-linear-gradient(0deg, rgba(145, 122, 96, 0.025) 0px, rgba(145, 122, 96, 0.025) 1px, transparent 1px, transparent 3px),
+    repeating-linear-gradient(90deg, rgba(145, 122, 96, 0.022) 0px, rgba(145, 122, 96, 0.022) 1px, transparent 1px, transparent 3px), #f3eadf;
+}
+.mw-viewport[data-journal-edition="traveler"] .journal-atelier-canvas {
+  background: radial-gradient(circle at 22% 18%, rgba(255, 243, 224, 0.36) 0%, transparent 56%), radial-gradient(rgba(118, 84, 48, 0.09) 1px, transparent 1px), linear-gradient(168deg, #ead8bf 0%, #e1caac 56%, #d7bc9a 100%);
+  background-size: 100% 100%, 26px 26px, 100% 100%;
+}
+.mw-viewport[data-journal-edition="hobonichi"] .journal-atelier-canvas {
+  background-color: #fcfbf6;
+  background-image: linear-gradient(to right, rgba(132, 148, 138, 0.16) 0.8px, transparent 0.8px), linear-gradient(to bottom, rgba(132, 148, 138, 0.16) 0.8px, transparent 0.8px);
+  background-size: 14px 14px; background-position: 6px 6px;
+}
+.mw-viewport[data-journal-edition="museglass"] .journal-atelier-canvas {
+  background: radial-gradient(circle at 20% 24%, rgba(255, 214, 206, 0.48) 0%, transparent 48%), radial-gradient(circle at 84% 34%, rgba(212, 226, 255, 0.52) 0%, transparent 52%), radial-gradient(circle at 52% 78%, rgba(255, 236, 200, 0.42) 0%, transparent 55%), linear-gradient(165deg, #faf7fc 0%, #f5f2f8 52%, #eef2f9 100%);
+}
+
+.paper-fiber-layer {
+  position: absolute; inset: 0; z-index: 1; opacity: 0.34; pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.18'/%3E%3C/svg%3E");
+}
+.paper-sunlight-dapple {
+  position: absolute; top: -30px; right: -40px; width: 280px; height: 290px; z-index: 1; pointer-events: none; opacity: 0;
+  background: repeating-linear-gradient(-32deg, rgba(255, 250, 240, 0.52) 0px, rgba(255, 250, 240, 0.52) 18px, rgba(198, 168, 132, 0.07) 18px, rgba(198, 168, 132, 0.07) 34px);
+  mask-image: radial-gradient(ellipse at 68% 32%, black 15%, transparent 72%);
+  -webkit-mask-image: radial-gradient(ellipse at 68% 32%, black 15%, transparent 72%);
+  transition: opacity 0.4s ease;
+}
+.mw-viewport[data-journal-edition="cotton"] .paper-sunlight-dapple { opacity: 1; }
+
+.paper-margin-rule { position: absolute; pointer-events: none; z-index: 1; transition: all 0.4s ease; }
+.mw-viewport[data-journal-edition="cotton"] .paper-margin-rule { top: 0; bottom: 0; left: 30px; width: 2px; background: linear-gradient(90deg, rgba(168, 144, 118, 0.18), rgba(255, 255, 255, 0.8)); }
+.mw-viewport[data-journal-edition="dotgrid"] .paper-margin-rule { top: 56px; left: 22px; right: 22px; height: 1px; background: rgba(120, 114, 104, 0.16); }
+.mw-viewport[data-journal-edition="parchment"] .paper-margin-rule { inset: 52px 18px 94px 18px; border: 1px solid rgba(164, 136, 100, 0.28); border-radius: 18px; box-shadow: inset 0 0 0 3px rgba(255, 250, 242, 0.5), inset 0 0 0 4px rgba(164, 136, 100, 0.14); }
+.mw-viewport[data-journal-edition="traveler"] .paper-margin-rule { top: 16px; bottom: 16px; left: 12px; width: 0; border-left: 1.5px dashed rgba(122, 84, 46, 0.34); }
+.mw-viewport[data-journal-edition="hobonichi"] .paper-margin-rule { top: 98px; bottom: 92px; left: 56px; width: 1px; background: rgba(212, 112, 92, 0.32); }
+.mw-viewport[data-journal-edition="museglass"] .paper-margin-rule { inset: 48px 14px 88px 14px; border-radius: 28px; border: 1px solid rgba(255, 255, 255, 0.72); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9); }
+
+.tn-elastic-band {
+  display: none; position: absolute; top: 0; bottom: 0; right: 13px; width: 4px; z-index: 4;
+  background: linear-gradient(90deg, #9c4722 0%, #c86438 50%, #7d3516 100%);
+  box-shadow: -2px 0 5px rgba(58, 32, 14, 0.22); pointer-events: none;
+}
+.mw-viewport[data-journal-edition="traveler"] .tn-elastic-band { display: block; }
+.tn-tin-clasp {
+  position: absolute; top: 48%; left: -4px; width: 12px; height: 22px; border-radius: 3px;
+  background: linear-gradient(180deg, #d8d4cc 0%, #9b958c 52%, #c7c2b8 100%); box-shadow: 0 3px 6px rgba(38, 22, 10, 0.32);
+}
+
+.hobo-date-masthead {
+  display: none; position: absolute; top: calc(var(--top-pad) + 12px); left: 24px; z-index: 6;
+  align-items: baseline; gap: 9px; padding-bottom: 5px; border-bottom: 1.5px solid rgba(52, 46, 42, 0.72); pointer-events: none;
+}
+.mw-viewport[data-journal-edition="hobonichi"][data-view-mode="person-journal"] .hobo-date-masthead { display: flex; }
+.hobo-big-num { font-family: var(--font-serif); font-size: 32px; font-weight: 700; line-height: 0.9; color: #c8523b; }
+.hobo-date-col { display: flex; flex-direction: column; }
+.hobo-month-wk { font-size: 9.5px; font-weight: 700; letter-spacing: 0.1em; color: var(--ink-espresso); }
+.hobo-quote-line { font-family: var(--font-serif); font-size: 9.5px; color: var(--ink-taupe); }
+
+/* --------------------------------------------------------------------------
+   Top-left folio bar (settings gear · back pill · date · subject)
+   -------------------------------------------------------------------------- */
+.journal-top-left-bar {
+  position: absolute; top: calc(var(--top-pad) + 14px); left: 18px; z-index: 28;
+  display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 120px); transition: left 0.3s ease;
+}
+.mw-viewport[data-journal-edition="hobonichi"][data-view-mode="person-journal"] .journal-top-left-bar { left: 150px; top: calc(var(--top-pad) + 16px); max-width: calc(100% - 240px); }
+.quiet-gear-btn {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-taupe); background: rgba(255, 252, 248, 0.55); border: 1px solid rgba(255, 255, 255, 0.8);
+  transition: color 0.2s ease, background 0.2s ease, transform 0.25s var(--ease-spring);
+}
+.quiet-gear-btn:hover { color: var(--ink-warm-brown); background: rgba(255, 255, 255, 0.9); transform: rotate(24deg); }
+.quiet-gear-btn svg { width: 16px; height: 16px; }
+.back-to-casual-pill {
+  display: inline-flex; align-items: center; gap: 3px; padding: 4px 10px 4px 7px; border-radius: 999px;
+  background: rgba(255, 252, 248, 0.88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(124, 186, 204, 0.55); box-shadow: 0 4px 12px rgba(42, 28, 18, 0.08);
+  font-size: 11px; font-weight: 700; color: var(--ink-espresso); flex-shrink: 0;
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.back-to-casual-pill:hover { background: #ffffff; transform: translateX(-2px); }
+.journal-folio-whisper {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--font-serif);
+  font-size: 12.5px; letter-spacing: 0.08em; color: var(--ink-taupe);
+}
+.folio-subject { font-weight: 600; color: var(--ink-warm-brown); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* --------------------------------------------------------------------------
+   Top-right tactile arrow pushpin (gold / silver / crystal)
+   -------------------------------------------------------------------------- */
+.top-right-arrow-pin-anchor {
+  position: absolute; top: var(--top-pad); right: 12px; z-index: 58;
+  display: flex; flex-direction: column; align-items: flex-end;
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+.mw-viewport[data-view-mode="casual-directory"] .top-right-arrow-pin-anchor { opacity: 0; pointer-events: none; transform: scale(0.88); }
+.pinned-arrow-tack-btn { position: relative; width: 78px; height: 78px; display: flex; align-items: center; justify-content: center; transition: transform 0.24s var(--ease-spring); }
+.pinned-arrow-tack-btn:hover { transform: scale(1.06) translate(-1px, 1px); }
+.pinned-arrow-tack-btn.is-striking { animation: arrowPinStrike 0.48s var(--ease-spring); }
+@keyframes arrowPinStrike {
+  0% { transform: translate(14px, -16px) scale(1.16); opacity: 0.55; }
+  58% { transform: translate(-2px, 2px) scale(0.95); opacity: 1; }
+  100% { transform: translate(0, 0) scale(1); opacity: 1; }
+}
+.pinned-paper-chit {
+  position: absolute; left: 6px; bottom: 4px; width: 48px; height: 48px; border-radius: 5px 12px 5px 6px;
+  background: linear-gradient(145deg, rgba(255, 253, 248, 0.92) 0%, rgba(244, 234, 218, 0.86) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.96);
+  box-shadow: -2px 5px 12px rgba(48, 32, 18, 0.11), 0 1px 3px rgba(48, 32, 18, 0.08);
+  transform: rotate(-5deg); pointer-events: none;
+}
+.pinned-arrow-tack-btn[data-tier="silver"] .pinned-paper-chit { background: linear-gradient(145deg, rgba(249, 252, 255, 0.94) 0%, rgba(229, 237, 246, 0.88) 100%); }
+.pinned-arrow-tack-btn[data-tier="crystal"] .pinned-paper-chit {
+  background: linear-gradient(138deg, rgba(235, 252, 255, 0.96) 0%, rgba(226, 238, 255, 0.92) 52%, rgba(245, 228, 255, 0.92) 100%);
+  box-shadow: -2px 6px 15px rgba(82, 152, 232, 0.24), 2px -1px 10px rgba(178, 122, 242, 0.18), inset 0 0 0 1px rgba(255, 255, 255, 0.98);
+}
+.chit-inner-border { position: absolute; inset: 4px; border-radius: 3px; border: 1px dashed rgba(174, 142, 106, 0.34); }
+.pinned-arrow-tack-btn[data-tier="silver"] .chit-inner-border { border-color: rgba(116, 142, 168, 0.36); }
+.pinned-arrow-tack-btn[data-tier="crystal"] .chit-inner-border { border-color: rgba(112, 164, 238, 0.52); }
+.chit-dog-ear {
+  position: absolute; top: -1px; right: -1px; width: 12px; height: 12px;
+  background: linear-gradient(225deg, transparent 48%, rgba(255, 255, 255, 0.95) 50%, rgba(226, 212, 192, 0.9) 100%);
+  border-bottom-left-radius: 3px; box-shadow: -1px 2px 3px rgba(42, 28, 16, 0.08);
+}
+.arrow-shaft-cast-shadow {
+  position: absolute; left: 22px; bottom: 14px; width: 54px; height: 7px; border-radius: 99px;
+  background: linear-gradient(90deg, rgba(38, 24, 14, 0.24) 0%, rgba(38, 24, 14, 0.08) 65%, transparent 100%);
+  transform-origin: left center; transform: rotate(-18deg); filter: blur(2.4px); pointer-events: none;
+}
+.pinned-arrow-tack-btn[data-tier="crystal"] .arrow-shaft-cast-shadow {
+  height: 9px; background: linear-gradient(90deg, rgba(64, 196, 242, 0.42) 0%, rgba(168, 118, 246, 0.32) 48%, rgba(252, 152, 208, 0.22) 80%, transparent 100%); filter: blur(3px);
+}
+.pinned-arrow-3d-img {
+  position: relative; z-index: 3; width: 78px; height: 78px; object-fit: contain; pointer-events: none;
+  filter: drop-shadow(-1px 3px 4px rgba(38, 24, 14, 0.16)) drop-shadow(-3px 8px 12px rgba(38, 24, 14, 0.14));
+}
+.pinned-arrow-tack-btn[data-tier="crystal"] .pinned-arrow-3d-img {
+  filter: saturate(1.22) contrast(1.04) drop-shadow(-2px 4px 7px rgba(68, 178, 236, 0.34)) drop-shadow(3px 7px 12px rgba(172, 116, 240, 0.26));
+}
+.arrow-selector-popover {
+  margin-top: 4px; width: 214px; padding: 6px; border-radius: 20px;
+  background: rgba(255, 252, 248, 0.96); backdrop-filter: blur(26px) saturate(155%); -webkit-backdrop-filter: blur(26px) saturate(155%);
+  border: 1px solid rgba(255, 255, 255, 0.96);
+  box-shadow: 0 24px 48px -10px rgba(36, 22, 14, 0.24), 0 4px 12px rgba(36, 22, 14, 0.08), inset 0 1px 0 #ffffff;
+  display: flex; flex-direction: column; gap: 5px; transform-origin: 86% 0%;
+  transform: scale(0.86) translateY(-8px); opacity: 0; pointer-events: none; visibility: hidden;
+  transition: transform 0.26s var(--ease-spring), opacity 0.2s ease, visibility 0s linear 0.26s;
+}
+.arrow-selector-popover.is-open { transform: scale(1) translateY(0); opacity: 1; pointer-events: auto; visibility: visible; transition: transform 0.26s var(--ease-spring), opacity 0.2s ease; }
+.arrow-choice-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 14px; text-align: left; transition: background 0.18s ease; }
+.arrow-choice-item:hover { background: rgba(244, 234, 222, 0.65); }
+.arrow-choice-item.is-selected { background: #ffffff; box-shadow: 0 4px 12px rgba(42, 26, 14, 0.08), inset 0 0 0 1px rgba(207, 150, 56, 0.35); }
+.choice-icon-orb { width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.choice-icon-orb > span, .choice-icon-orb svg { width: 22px; height: 15px; display: inline-flex; }
+.choice-icon-orb.gold { background: rgba(218, 162, 62, 0.16); }
+.choice-icon-orb.silver { background: rgba(126, 154, 182, 0.18); }
+.choice-icon-orb.crystal { background: linear-gradient(135deg, rgba(164, 232, 246, 0.28) 0%, rgba(212, 194, 252, 0.24) 100%); }
+.choice-copy { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.choice-copy strong { font-size: 12px; font-weight: 700; color: var(--ink-espresso); }
+.choice-copy small { font-size: 10px; line-height: 1.35; color: var(--ink-warm-brown); }
+.choice-check { font-size: 12px; font-weight: 700; color: var(--gold-primary); opacity: 0; }
+.arrow-choice-item.is-selected .choice-check { opacity: 1; }
+
+/* --------------------------------------------------------------------------
+   Whisper toast with 5 s countdown ring (undo / tier confirmations)
+   -------------------------------------------------------------------------- */
+.mw-toast-host {
+  position: absolute; left: 50%; bottom: calc(var(--dock-bottom) + 70px); z-index: 150;
+  transform: translateX(-50%); width: max-content; max-width: calc(100% - 32px); pointer-events: none;
+}
+.mw-toast {
+  display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 15px; border-radius: 999px;
+  background: rgba(38, 25, 21, 0.92); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.22); box-shadow: 0 12px 28px rgba(28, 18, 12, 0.24);
+  color: #fffaf5; font-size: 12px; font-weight: 600;
+  opacity: 0; transform: translateY(10px) scale(0.96); pointer-events: none;
+  transition: opacity 0.24s ease, transform 0.28s var(--ease-spring);
+}
+.mw-toast.is-visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+.mw-toast-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mw-toast.no-action { padding-right: 15px; }
+.mw-toast-undo {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  padding: 4px 10px 4px 4px; border-radius: 999px; background: rgba(255, 250, 242, 0.14); color: #ffe6b8; font-weight: 700;
+}
+.mw-toast-undo:hover { background: rgba(255, 250, 242, 0.24); }
+.mw-toast-ring { width: 22px; height: 22px; transform: rotate(-90deg); }
+.mw-toast-ring circle { fill: none; stroke-width: 2.4; }
+.mw-toast-ring .ring-track { stroke: rgba(255, 255, 255, 0.18); }
+.mw-toast-ring .ring-progress { stroke: #ffd793; stroke-linecap: round; stroke-dasharray: 56.55; stroke-dashoffset: 0; }
+.mw-toast.is-counting .ring-progress { animation: toastRing var(--toast-ms, 5000ms) linear forwards; }
+@keyframes toastRing { to { stroke-dashoffset: 56.55; } }
+
+/* --------------------------------------------------------------------------
+   Reduced motion
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
+  .mw-toast.is-counting .ring-progress { animation: none; }
+}

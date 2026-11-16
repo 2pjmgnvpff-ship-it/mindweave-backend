@@ -135,3 +135,9 @@ export function monogramOf(person) {
   const n = String(person?.nameCn || '').trim();
   return n ? Array.from(n)[0] : '·';
 }
+
+/** Inline style object for a monogram seal (safe colours only). */
+export function sealStyle(person, date) {
+  const d = personDecor(person, date);
+  return { background: d.sealBg, color: d.sealColor };
+}
