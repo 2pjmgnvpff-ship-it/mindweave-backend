@@ -25,6 +25,7 @@ from mindweave.core.orm import (
 from mindweave.modules.capture.application.service import handle_process_capture_job
 from mindweave.modules.companion.application.writeback import register_companion_worker_handlers
 from mindweave.modules.data_rights.application.service import build_export_archive
+from mindweave.modules.memory.application.service import MemoryService
 from mindweave.modules.reminders.application.service import scan_and_deliver_due_reminders
 from mindweave.shared.enums import (
     ExportStatus,
@@ -36,6 +37,7 @@ from mindweave.shared.enums import (
 from mindweave.shared.scopes import UserScope
 from mindweave.wiring import wire_container_services
 from mindweave.workers.ports import (
+    TASK_AUTO_INK_PENCIL_DRAFTS,
     TASK_BUILD_EXPORT_ARCHIVE,
     TASK_EXPIRE_VENTING_INBOX,
     TASK_PROCESS_CAPTURE,
@@ -110,6 +112,11 @@ async def _default_expire_venting_inbox(container: AppContainer) -> int:
                 )
             expired_count += 1
     return expired_count
+
+
+async def _default_auto_ink_pencil_drafts(container: AppContainer) -> int:
+    """Default periodic handler turning 48h-old "probably right" pencil drafts into ink (D1)."""
+    return await MemoryService(container=container).auto_ink_due_pencil_drafts()
 
 
 async def _default_purge_soft_deleted(container: AppContainer) -> None:
@@ -247,6 +254,9 @@ def build_default_worker_runner(
     async def _handle_expire_venting(_job: ClaimedJob) -> None:
         await _default_expire_venting_inbox(container)
 
+    async def _handle_auto_ink(_job: ClaimedJob) -> None:
+        await _default_auto_ink_pencil_drafts(container)
+
     async def _handle_purge_deleted(_job: ClaimedJob) -> None:
         await _default_purge_soft_deleted(container)
 
@@ -258,6 +268,7 @@ def build_default_worker_runner(
 
     runner.register_handler(TASK_SCAN_DUE_REMINDERS, _handle_scan_due)
     runner.register_handler(TASK_EXPIRE_VENTING_INBOX, _handle_expire_venting)
+    runner.register_handler(TASK_AUTO_INK_PENCIL_DRAFTS, _handle_auto_ink)
     runner.register_handler(TASK_PURGE_SOFT_DELETED, _handle_purge_deleted)
     runner.register_handler(TASK_PROCESS_CAPTURE, _handle_process_capture)
     runner.register_handler(TASK_BUILD_EXPORT_ARCHIVE, _handle_build_export)

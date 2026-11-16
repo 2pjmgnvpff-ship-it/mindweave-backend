@@ -428,17 +428,29 @@ async def test_v10_voice_ingest_global_splits_new_person_reminder_and_media_stre
         assert "<mark>林溪</mark>" in body["transcriptHtml"]
         assert "<mark>妈妈</mark>" in body["transcriptHtml"]
         assert "<mark>王总</mark>" in body["transcriptHtml"]
-        assert body["pendingCount"] == 2
+        # D1: 妈妈's date is confirmed-in-pencil (no inbox); only 王总's new-person fact pends.
+        assert body["pendingCount"] == 1
         assert body["undoDeadline"] is not None
         assert len(body["splits"]) == 3
+        assert len(body["inboxItemIds"]) == 1
 
         by_name = {s["personName"]: s for s in body["splits"]}
         assert by_name["林溪"]["tier"] == "gold"
         assert by_name["林溪"]["isNewPerson"] is False
         assert by_name["林溪"]["dur"] == "0:08"
+        assert by_name["林溪"]["presentation"] == "ink"
+        assert by_name["林溪"]["glanceHint"] is None
+        assert len(by_name["林溪"]["factIds"]) == 1
+        assert by_name["林溪"]["inboxItemId"] is None
+
+        assert by_name["妈妈"]["presentation"] == "pencil"
+        assert by_name["妈妈"]["glanceHint"] == "11月22日 · 点一下确认日期"
+        assert by_name["妈妈"]["inboxItemId"] is None
 
         assert by_name["王总"]["tier"] == "crystal"
         assert by_name["王总"]["isNewPerson"] is True
+        assert by_name["王总"]["presentation"] == "question"
+        assert by_name["王总"]["inboxItemId"] == body["inboxItemIds"][0]
 
         # Idempotent replay on /v1/voice/ingest returns identical VoiceIngestResponse
         replay = await client.post(
@@ -457,14 +469,27 @@ async def test_v10_voice_ingest_global_splits_new_person_reminder_and_media_stre
         assert media_resp.headers["content-type"].startswith("audio/webm")
         assert media_resp.content == VALID_WEBM_BYTES
 
-        # 林溪 taboo fact is immediately confirmed; 妈妈 date fact is pending
+        # 林溪 taboo fact is immediately confirmed; 妈妈 date fact is confirmed in pencil
+        mom_mats = await client.get(f"/v1/persons/{mom_id}/materials", headers=_auth(token))
+        assert mom_mats.status_code == 200
+        (mom_mat,) = mom_mats.json()["items"]
+        assert mom_mat["presentation"] == "pencil"
+        assert mom_mat["pencilReason"] == "date_glance"
+        assert mom_mat["glanceHint"] == "11月22日 · 点一下确认日期"
+        assert mom_mat["inboxItemId"] is None
+        (glance_fact,) = mom_mat["pencilFacts"]
+        assert glance_fact["status"] == "confirmed"
+        assert glance_fact["needsGlance"] is True
+        assert glance_fact["id"] == by_name["妈妈"]["factIds"][0]
+
         linxi_facts = await client.get(
             f"/v1/persons/{linxi_id}/facts?status=confirmed", headers=_auth(token)
         )
         assert linxi_facts.status_code == 200
         assert [f["content"] for f in linxi_facts.json()["items"]] == ["不能吃香菜"]
 
-    # Verify DB state: provisional person has_photo=False + proposed reminder created for 妈妈
+    # Verify DB state: provisional person has_photo=False + ACTIVE reminder created for 妈妈
+    # (D1: a pencil date still schedules its reminder exactly like any confirmed date).
     async with db_container.db.user_session(scope) as sess:
         wang_id = UUID(by_name["王总"]["personId"])
         wang_row = await sess.get(PersonRow, wang_id)
@@ -475,7 +500,7 @@ async def test_v10_voice_ingest_global_splits_new_person_reminder_and_media_stre
 
         rem_row = await sess.scalar(select(ReminderRow).where(ReminderRow.person_id == mom_id))
         assert rem_row is not None
-        assert rem_row.status == "proposed"
+        assert rem_row.status == "active"
 
 
 # ============================================================================
@@ -722,7 +747,10 @@ async def test_screenshot_right_bubble_filter_ephemeral_deletion_and_exif_strip(
         contents = {f["content"]: f["status"] for f in all_facts}
         assert "严重香菜过敏" not in contents
         assert contents["不吃折耳根"] == "confirmed"
-        assert contents["下周五带去吃怀石料理"] == "pending"
+        # D1: the promise is confirmed but still a pencil draft awaiting a glance.
+        assert contents["下周五带去吃怀石料理"] == "confirmed"
+        promise = next(f for f in all_facts if f["content"] == "下周五带去吃怀石料理")
+        assert promise["needsGlance"] is True
 
         # Case B: Explicit `keepOriginalMedia=true` encrypts EXIF-stripped image
         resp_keep = await client.post(
@@ -837,7 +865,11 @@ async def test_safety_crisis_card_async_sse_and_5s_undo_lifecycle(
         sse_text = sse_resp.text
         assert "event: transcript" in sse_text
         assert "event: splits" in sse_text
-        assert "event: needs_review" in sse_text
+        # D1: a promise is confirmed-in-pencil (reminder active, still undoable), so nothing
+        # needs review; the split carries the pencil presentation + glance hint instead.
+        assert "event: needs_review" not in sse_text
+        assert '"presentation": "pencil"' in sse_text
+        assert "11月21日 · 点一下确认日期" in sse_text
         assert "event: done" in sse_text
 
         # 5c. Undo within 5-second window (advance 3s <= 5s)
@@ -1054,7 +1086,9 @@ async def test_inbox_all_six_resolution_actions_and_72h_venting_expiry(
                     is_lunar=True,
                     lunar_month=8,
                     lunar_day=15,
-                    confidence=0.95,
+                    # D1: a confident date confirms in pencil without an inbox item, so use a
+                    # low-confidence date to exercise the inbox `confirm` -> reminder path.
+                    confidence=0.6,
                 )
             ]
         )
@@ -1363,7 +1397,8 @@ async def test_capture_and_memory_endpoints_enforce_strict_tenant_isolation(
                     title="纪念日",
                     content="纪念日 12月01日",
                     trigger_date="2026-12-01",
-                    confidence=0.95,
+                    # Low confidence so an inbox item exists (D1 confident dates skip the inbox).
+                    confidence=0.6,
                 )
             ]
         )
@@ -1593,7 +1628,9 @@ async def test_redteam_remediations_rt02_rt07_and_p2_1_signed_media(
                     lunar_month=8,
                     lunar_day=15,
                     trigger_date=None,
-                    confidence=0.96,
+                    # Low confidence keeps the reminder `proposed` (D1 confident promises
+                    # confirm in pencil with an already-active reminder).
+                    confidence=0.6,
                 )
             ]
         )

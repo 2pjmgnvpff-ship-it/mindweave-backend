@@ -511,6 +511,11 @@
           },
           "preferences": {
             "$ref": "#/components/schemas/BootstrapPreferencesDTO"
+          },
+          "questionCount": {
+            "default": 0,
+            "title": "Questioncount",
+            "type": "integer"
           }
         },
         "required": [
@@ -657,6 +662,37 @@
             "title": "Dur",
             "type": "string"
           },
+          "factIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Factids",
+            "type": "array"
+          },
+          "glanceHint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glancehint"
+          },
+          "inboxItemId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inboxitemid"
+          },
           "isNewPerson": {
             "default": false,
             "title": "Isnewperson",
@@ -675,6 +711,10 @@
           "personName": {
             "title": "Personname",
             "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/Presentation",
+            "default": "ink"
           },
           "tag": {
             "title": "Tag",
@@ -1955,6 +1995,11 @@
             ],
             "title": "Lunarmonth"
           },
+          "needsGlance": {
+            "default": false,
+            "title": "Needsglance",
+            "type": "boolean"
+          },
           "pendingReason": {
             "anyOf": [
               {
@@ -2598,6 +2643,18 @@
             ],
             "title": "Audiodurationms"
           },
+          "autoInkAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoinkat"
+          },
           "body": {
             "title": "Body",
             "type": "string"
@@ -2630,6 +2687,17 @@
             ],
             "title": "Dur"
           },
+          "glanceHint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glancehint"
+          },
           "happenedOn": {
             "anyOf": [
               {
@@ -2652,6 +2720,18 @@
             "title": "Id",
             "type": "string"
           },
+          "inboxItemId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inboxitemid"
+          },
           "kind": {
             "$ref": "#/components/schemas/RecordKind"
           },
@@ -2665,6 +2745,23 @@
               }
             ],
             "title": "Mediaurl"
+          },
+          "pencilFacts": {
+            "items": {
+              "$ref": "#/components/schemas/FactDto"
+            },
+            "title": "Pencilfacts",
+            "type": "array"
+          },
+          "pencilReason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PencilReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "personId": {
             "anyOf": [
@@ -2682,6 +2779,10 @@
             "default": true,
             "title": "Pinned",
             "type": "boolean"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/Presentation",
+            "default": "ink"
           },
           "reviewState": {
             "$ref": "#/components/schemas/RecordReviewState",
@@ -2829,6 +2930,22 @@
           "reauth"
         ],
         "title": "OtpPurpose",
+        "type": "string"
+      },
+      "PencilReason": {
+        "description": "Why a material is shown as a pencil draft / question note (wire value `pencilReason`).",
+        "enum": [
+          "date_glance",
+          "low_confidence",
+          "speaker_unknown",
+          "polarity_flip",
+          "multi_person",
+          "extraction_failed",
+          "venting",
+          "new_person",
+          "ambiguous_person"
+        ],
+        "title": "PencilReason",
         "type": "string"
       },
       "PendingReason": {
@@ -3524,6 +3641,16 @@
         ],
         "title": "PreferencesResponse",
         "type": "object"
+      },
+      "Presentation": {
+        "description": "D1 journal rendering of a capture result: ink (settled), pencil (draft), question.",
+        "enum": [
+          "ink",
+          "pencil",
+          "question"
+        ],
+        "title": "Presentation",
+        "type": "string"
       },
       "PushPlatform": {
         "enum": [
@@ -4504,6 +4631,14 @@
                 "type": "null"
               }
             ]
+          },
+          "inboxItemIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Inboxitemids",
+            "type": "array"
           },
           "jobId": {
             "format": "uuid",

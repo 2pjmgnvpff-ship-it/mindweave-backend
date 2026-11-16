@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mindweave.core.clock import Clock, SystemClock
 from mindweave.core.db import DatabaseManager
 from mindweave.workers.ports import (
+    TASK_AUTO_INK_PENCIL_DRAFTS,
     TASK_EXPIRE_VENTING_INBOX,
     TASK_PURGE_SOFT_DELETED,
     TASK_SCAN_DUE_REMINDERS,
@@ -40,6 +41,7 @@ class PeriodicTaskSpec:
 DEFAULT_PERIODIC_TASKS: tuple[PeriodicTaskSpec, ...] = (
     PeriodicTaskSpec(task_name=TASK_SCAN_DUE_REMINDERS, interval_seconds=60),
     PeriodicTaskSpec(task_name=TASK_EXPIRE_VENTING_INBOX, interval_seconds=15 * 60),
+    PeriodicTaskSpec(task_name=TASK_AUTO_INK_PENCIL_DRAFTS, interval_seconds=15 * 60),
     PeriodicTaskSpec(task_name=TASK_PURGE_SOFT_DELETED, interval_seconds=24 * 60 * 60),
 )
 

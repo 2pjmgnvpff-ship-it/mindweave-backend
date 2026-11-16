@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import base64
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.crypto import EnvelopeCipher, normalize_alias_for_index
@@ -54,6 +55,11 @@ from mindweave.modules.memory.domain.inbox_policy import (
     validate_inbox_resolution,
 )
 from mindweave.modules.memory.infra.image_sanitizer import validate_and_strip_image_exif
+from mindweave.modules.memory.infra.pencil_views import (
+    fact_row_to_pencil_view,
+    pending_reason_or_none,
+    primary_inbox_id,
+)
 from mindweave.modules.memory.infra.reminders_helper import (
     cancel_reminders_for_facts,
     upsert_reminder_for_fact,
@@ -85,6 +91,7 @@ from mindweave.shared.enums import (
     PendingReason,
     PersonState,
     Polarity,
+    Presentation,
     RecordKind,
     RecordReviewState,
     ReminderStatus,
@@ -92,6 +99,7 @@ from mindweave.shared.enums import (
     Tier,
     TimeStatus,
 )
+from mindweave.shared.pencil import derive_pencil_state, is_auto_ink_eligible
 from mindweave.shared.scopes import UserScope
 
 
@@ -163,6 +171,7 @@ def fact_row_to_dto(
         lunar_is_leap_month=row.lunar_is_leap_month,
         status=FactStatus(row.status),
         pending_reason=PendingReason(row.pending_reason) if row.pending_reason else None,
+        needs_glance=bool(row.needs_glance),
         confidence=row.confidence,
         created_by=CreatedBy(row.created_by),
         valid_at=row.valid_at,
@@ -347,6 +356,7 @@ class MemoryService:
                 )
                 for r in page_rows
             ]
+            items = await self._attach_pencil_states(session, scope=scope, dek=dek, items=items)
             return CursorPage(items=items, next_cursor=next_cursor, has_more=has_more)
 
     async def create_material(
@@ -490,7 +500,7 @@ class MemoryService:
             owner = await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
-            return record_row_to_dto(
+            dto = record_row_to_dto(
                 self.container.cipher,
                 dek,
                 row,
@@ -498,6 +508,101 @@ class MemoryService:
                 now=now,
                 mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
             )
+            (dto,) = await self._attach_pencil_states(session, scope=scope, dek=dek, items=[dto])
+            return dto
+
+    async def _attach_pencil_states(
+        self,
+        session: AsyncSession,
+        *,
+        scope: UserScope,
+        dek: bytes,
+        items: list[MaterialDto],
+    ) -> list[MaterialDto]:
+        """D1: decorate materials with ink/pencil/question state + the ids needed to settle them."""
+        if not items:
+            return items
+        record_ids = [m.id for m in items]
+        inbox_rows = list(
+            (
+                await session.scalars(
+                    select(InboxItemRow)
+                    .where(
+                        InboxItemRow.user_id == scope.user_id,
+                        InboxItemRow.record_id.in_(record_ids),
+                        InboxItemRow.status == InboxItemStatus.OPEN.value,
+                    )
+                    .order_by(InboxItemRow.created_at.asc(), InboxItemRow.id.asc())
+                )
+            ).all()
+        )
+        fact_rows = list(
+            (
+                await session.scalars(
+                    select(FactRow)
+                    .where(
+                        FactRow.user_id == scope.user_id,
+                        FactRow.record_id.in_(record_ids),
+                        FactRow.invalid_at.is_(None),
+                        or_(
+                            FactRow.status == FactStatus.PENDING.value,
+                            and_(
+                                FactRow.status == FactStatus.CONFIRMED.value,
+                                FactRow.needs_glance.is_(True),
+                            ),
+                        ),
+                    )
+                    .order_by(FactRow.created_at.asc(), FactRow.id.asc())
+                )
+            ).all()
+        )
+        inbox_by_record: dict[UUID, list[InboxItemRow]] = defaultdict(list)
+        for ir in inbox_rows:
+            if ir.record_id is not None:
+                inbox_by_record[ir.record_id].append(ir)
+        facts_by_record: dict[UUID, list[FactRow]] = defaultdict(list)
+        for fr in fact_rows:
+            if fr.record_id is not None:
+                facts_by_record[fr.record_id].append(fr)
+
+        out: list[MaterialDto] = []
+        for m in items:
+            m_inbox = inbox_by_record.get(m.id, [])
+            m_facts = facts_by_record.get(m.id, [])
+            kinds: dict[InboxItemKind, UUID] = {}
+            for ir in m_inbox:
+                try:
+                    kinds.setdefault(InboxItemKind(ir.kind), ir.id)
+                except ValueError:
+                    continue
+            state = derive_pencil_state(
+                review_state=m.review_state,
+                open_inbox_kinds=tuple(kinds),
+                facts=[fact_row_to_pencil_view(f) for f in m_facts],
+            )
+            if state.presentation is Presentation.INK:
+                out.append(m)
+                continue
+            primary_id = primary_inbox_id(kinds)
+            auto_ink_at = next(
+                (ir.auto_ink_at for ir in m_inbox if ir.id == primary_id and ir.auto_ink_at),
+                None,
+            )
+            out.append(
+                m.model_copy(
+                    update={
+                        "presentation": state.presentation,
+                        "pencil_reason": state.pencil_reason,
+                        "glance_hint": state.glance_hint,
+                        "inbox_item_id": primary_id,
+                        "auto_ink_at": auto_ink_at,
+                        "pencil_facts": [
+                            fact_row_to_dto(self.container.cipher, dek, f) for f in m_facts
+                        ],
+                    }
+                )
+            )
+        return out
 
     async def patch_material(
         self,
@@ -1011,6 +1116,9 @@ class MemoryService:
                     row.invalid_at = None
                 elif req.status is FactStatus.REJECTED:
                     row.invalid_at = now
+            # D1: any explicit user edit/confirm of a pencil date means the user has looked at
+            # it, so the slip turns to ink (`{"status":"confirmed"}` alone is a valid glance).
+            row.needs_glance = False
 
             row.version += 1
             row.updated_at = now
@@ -1692,6 +1800,133 @@ class MemoryService:
             )
             return resp, None
 
+    async def auto_ink_due_pencil_drafts(self, *, limit: int = 100) -> int:
+        """D1: promote "probably right" pencil drafts to ink once their 48h glance window ends.
+
+        Only open `fact_confirm` items stamped with `auto_ink_at` at capture time qualify
+        (low confidence / speaker unknown / polarity flip). Venting holds and person questions
+        are never stamped, and every item is re-validated under a row lock before promotion.
+        """
+        now = self.container.clock.now()
+        async with self.container.db.system_session() as sys_sess:
+            due = (
+                await sys_sess.execute(
+                    select(InboxItemRow.id, InboxItemRow.user_id)
+                    .where(
+                        InboxItemRow.status == InboxItemStatus.OPEN.value,
+                        InboxItemRow.kind == InboxItemKind.FACT_CONFIRM.value,
+                        InboxItemRow.auto_ink_at.is_not(None),
+                        InboxItemRow.auto_ink_at <= now,
+                    )
+                    .order_by(InboxItemRow.auto_ink_at.asc())
+                    .limit(limit)
+                )
+            ).all()
+
+        promoted = 0
+        for item_id, user_id in due:
+            scope = UserScope(user_id=user_id)
+            async with self.container.db.user_session(scope) as session:
+                if await self._auto_ink_one(session, scope=scope, item_id=item_id, now=now):
+                    promoted += 1
+        return promoted
+
+    async def _auto_ink_one(
+        self,
+        session: AsyncSession,
+        *,
+        scope: UserScope,
+        item_id: UUID,
+        now: datetime,
+    ) -> bool:
+        item = await session.scalar(
+            select(InboxItemRow)
+            .where(
+                InboxItemRow.id == item_id,
+                InboxItemRow.user_id == scope.user_id,
+                InboxItemRow.status == InboxItemStatus.OPEN.value,
+                InboxItemRow.kind == InboxItemKind.FACT_CONFIRM.value,
+                InboxItemRow.auto_ink_at.is_not(None),
+                InboxItemRow.auto_ink_at <= now,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if item is None or item.person_id is None or item.record_id is None:
+            return False
+        person = await session.scalar(
+            select(PersonRow).where(
+                PersonRow.id == item.person_id,
+                PersonRow.user_id == scope.user_id,
+                PersonRow.deleted_at.is_(None),
+            )
+        )
+        record = await session.scalar(
+            select(RecordRow)
+            .where(
+                RecordRow.id == item.record_id,
+                RecordRow.user_id == scope.user_id,
+                RecordRow.deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        facts = (
+            list(
+                (
+                    await session.scalars(
+                        select(FactRow)
+                        .where(
+                            FactRow.user_id == scope.user_id,
+                            FactRow.id.in_(list(item.fact_ids)),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            if item.fact_ids
+            else []
+        )
+        eligible = (
+            person is not None
+            and person.state == PersonState.ACTIVE.value
+            and person.slug != UNASSIGNED_PERSON_SLUG
+            and record is not None
+            and record.review_state == RecordReviewState.NORMAL.value
+            and bool(facts)
+            and all(f.status == FactStatus.PENDING.value and f.invalid_at is None for f in facts)
+            and is_auto_ink_eligible(pending_reason_or_none(f.pending_reason) for f in facts)
+        )
+        if not eligible:
+            # Something changed since capture; leave it for the user and stop re-scanning it.
+            item.auto_ink_at = None
+            await session.flush()
+            return False
+        assert person is not None and record is not None
+
+        dek = await self.container.load_user_dek(session, scope)
+        tz_name = await get_user_timezone(session, scope)
+        await self._confirm_facts_and_reminders(
+            session,
+            scope=scope,
+            dek=dek,
+            facts=facts,
+            target_person_id=person.id,
+            record_id=record.id,
+            override_trigger_date=None,
+            tz_name=tz_name,
+            now=now,
+        )
+        item.status = InboxItemStatus.RESOLVED.value
+        item.resolution_action = InboxResolutionAction.CONFIRM.value
+        item.resolved_at = now
+        await session.flush()
+        await sync_capture_status_after_inbox_resolution(
+            session,
+            scope=scope,
+            capture_id=item.capture_id,
+            now=now,
+        )
+        return True
+
     async def _ensure_normal_record_for_target(
         self,
         session: AsyncSession,
@@ -1783,6 +2018,7 @@ class MemoryService:
                 fact.trigger_date = override_trigger_date
             fact.status = FactStatus.CONFIRMED.value
             fact.pending_reason = None
+            fact.needs_glance = False
             fact.invalid_at = None
             fact.valid_at = now
             fact.updated_at = now

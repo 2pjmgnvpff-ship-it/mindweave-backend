@@ -259,7 +259,7 @@ async def test_periodic_scheduler_deduplicates_cron_buckets_and_graceful_worker_
     scheduler = PeriodicScheduler(db_container.db, clock=manual_clock)
     ids_first, ids_second = await asyncio.gather(scheduler.tick(), scheduler.tick())
     assert ids_first == ids_second
-    assert len(ids_first) == 3
+    assert len(ids_first) == 4
 
     # Advancing 30s within same minute keeps 60s/15m/24h buckets identical
     manual_clock.advance(seconds=30)

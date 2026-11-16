@@ -1419,6 +1419,11 @@ class FakeAdapter:
         "顺便记",
     )
 
+    _KINSHIP_LEAD_RE: str = (
+        r"^(?:我的?)?(妈妈|爸爸|老妈|老爸|老婆|老公|男朋友|女朋友|爷爷|奶奶|外婆|外公|姥姥|姥爷"
+        r"|哥哥|姐姐|弟弟|妹妹|儿子|女儿)(?=[\u4e00-\u9fa5])"
+    )
+
     @classmethod
     def _is_valid_new_person_candidate(cls, cand: str, known_tokens: set[str]) -> bool:
         if not cand or cand in known_tokens or cand in cls._NON_PERSON_EXACT:
@@ -1443,6 +1448,11 @@ class FakeAdapter:
                 cand = m.group(1).strip()
                 if cls._is_valid_new_person_candidate(cand, known_tokens):
                     return cand
+        # Onboarding-style first mention of a close family member / partner by role
+        # ("妈妈最近总说膝盖疼"). Role words are real people in this app, not stopwords.
+        kin = re.match(cls._KINSHIP_LEAD_RE, text.strip())
+        if kin and kin.group(1) not in known_tokens:
+            return kin.group(1)
         return None
 
     @staticmethod

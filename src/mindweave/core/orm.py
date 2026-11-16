@@ -25,7 +25,9 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    false,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -400,6 +402,10 @@ class FactRow(Base):
     lunar_is_leap_month: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
     pending_reason: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    # D1 pencil draft: confirmed date/promise the user should glance at once
+    needs_glance: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_by: Mapped[str] = mapped_column(String(16), nullable=False, default="ai")
     valid_at: Mapped[datetime] = mapped_column(
@@ -419,7 +425,15 @@ class FactRow(Base):
 
 class InboxItemRow(Base):
     __tablename__ = "inbox_items"
-    __table_args__ = (Index("ix_inbox_user_status", "user_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_inbox_user_status", "user_id", "status", "created_at"),
+        Index(
+            "ix_inbox_auto_ink_due",
+            "status",
+            "auto_ink_at",
+            postgresql_where=text("auto_ink_at IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     user_id: Mapped[UUID] = mapped_column(
@@ -445,6 +459,8 @@ class InboxItemRow(Base):
     payload_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     resolution_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # D1 pencil draft: pending item auto-promotes to ink at this instant (never for venting)
+    auto_ink_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

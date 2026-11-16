@@ -80,6 +80,15 @@ from mindweave.modules.capture.infra.repository import (
     load_known_person_profiles,
     revert_capture_graph,
 )
+from mindweave.modules.memory.infra.pencil_views import (
+    fact_row_to_pencil_view as _fact_row_to_pencil_view,
+)
+from mindweave.modules.memory.infra.pencil_views import (
+    pending_reason_or_none as _pending_reason_or_none,
+)
+from mindweave.modules.memory.infra.pencil_views import (
+    primary_inbox_id as _primary_inbox_id,
+)
 from mindweave.modules.memory.infra.reminders_helper import upsert_reminder_for_fact
 from mindweave.modules.memory.infra.repository import (
     apply_bitemporal_supersession_for_fact,
@@ -106,6 +115,7 @@ from mindweave.shared.enums import (
     SourceSpeaker,
     Tier,
 )
+from mindweave.shared.pencil import auto_ink_due_at, derive_pencil_state, is_auto_ink_eligible
 from mindweave.shared.pii import mask_hard_pii
 from mindweave.shared.scopes import UserScope
 from mindweave.workers.ports import TASK_PROCESS_CAPTURE, JobQueuePort
@@ -419,6 +429,7 @@ class CapturePipelineService:
             pending_count=cap_resp.pending_count,
             undo_deadline=cap_resp.undo_deadline,
             crisis_card=cap_resp.crisis_card,
+            inbox_item_ids=cap_resp.inbox_item_ids,
         )
 
     async def ingest_voice_v10(
@@ -1026,21 +1037,8 @@ class CapturePipelineService:
                 session.add(record_row)
                 await session.flush()
 
-                if not is_cross_in_current:
-                    splits.append(
-                        CaptureSplitDto(
-                            person_id=pid,
-                            person_name=p_prof.display_name,
-                            tier=p_prof.tier,
-                            is_new_person=pid in newly_created_person_ids,
-                            material_id=rec_id,
-                            tag=slip_tag,
-                            dur=format_duration_mmss(duration_ms),
-                            body=slip_body,
-                        )
-                    )
-
                 pending_by_inbox_kind: dict[InboxItemKind, list[FactRow]] = defaultdict(list)
+                person_fact_rows: list[FactRow] = []
 
                 for f_item, decision, _ in evaluated_facts:
                     clean_fact_content = strip_forbidden_dev_jargon(f_item.content)
@@ -1075,6 +1073,7 @@ class CapturePipelineService:
                         pending_reason=(
                             decision.pending_reason.value if decision.pending_reason else None
                         ),
+                        needs_glance=decision.needs_glance,
                         confidence=f_item.confidence,
                         created_by=CreatedBy.AI.value,
                         valid_at=now,
@@ -1085,6 +1084,7 @@ class CapturePipelineService:
                     )
                     session.add(fact_row)
                     await session.flush()
+                    person_fact_rows.append(fact_row)
 
                     if decision.is_confirmed:
                         await apply_bitemporal_supersession_for_fact(
@@ -1132,11 +1132,22 @@ class CapturePipelineService:
                 ):
                     pending_by_inbox_kind[InboxItemKind.VENTING_HOLD] = []
 
+                person_inbox_ids: dict[InboxItemKind, UUID] = {}
                 for ikind, p_facts in pending_by_inbox_kind.items():
                     inbox_id = new_id()
                     expires_at = (
                         now + timedelta(hours=self.container.settings.venting_hold_expiry_hours)
                         if ikind is InboxItemKind.VENTING_HOLD
+                        else None
+                    )
+                    # D1: "probably right, just unsure" drafts turn to ink on their own after
+                    # 48h. Venting and person questions never auto-promote.
+                    auto_ink_at = (
+                        auto_ink_due_at(now)
+                        if ikind is InboxItemKind.FACT_CONFIRM
+                        and is_auto_ink_eligible(
+                            _pending_reason_or_none(f.pending_reason) for f in p_facts
+                        )
                         else None
                     )
                     payload_obj = {
@@ -1162,10 +1173,36 @@ class CapturePipelineService:
                             row_id=inbox_id,
                         ),
                         expires_at=expires_at,
+                        auto_ink_at=auto_ink_at,
                         created_at=now,
                     )
                     session.add(inbox_row)
                     inbox_item_ids.append(inbox_id)
+                    person_inbox_ids[ikind] = inbox_id
+
+                if not is_cross_in_current:
+                    pencil_state = derive_pencil_state(
+                        review_state=rec_review_state,
+                        open_inbox_kinds=tuple(person_inbox_ids),
+                        facts=[_fact_row_to_pencil_view(f) for f in person_fact_rows],
+                        is_new_person=pid in newly_created_person_ids,
+                    )
+                    splits.append(
+                        CaptureSplitDto(
+                            person_id=pid,
+                            person_name=p_prof.display_name,
+                            tier=p_prof.tier,
+                            is_new_person=pid in newly_created_person_ids,
+                            material_id=rec_id,
+                            tag=slip_tag,
+                            dur=format_duration_mmss(duration_ms),
+                            body=slip_body,
+                            presentation=pencil_state.presentation,
+                            glance_hint=pencil_state.glance_hint,
+                            fact_ids=[f.id for f in person_fact_rows],
+                            inbox_item_id=_primary_inbox_id(person_inbox_ids),
+                        )
+                    )
 
             # -----------------------------------------------------------------
             # Persist Ambiguous Person Disambiguation Groups (held until resolved!)

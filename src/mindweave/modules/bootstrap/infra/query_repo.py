@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -21,6 +21,7 @@ from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
     CupidLayout,
     Edition,
+    InboxItemKind,
     InboxItemStatus,
     PersonState,
     RecordKind,
@@ -181,6 +182,8 @@ class BootstrapQueryRepository:
         self,
         session: AsyncSession,
         scope: UserScope,
+        *,
+        kinds: Collection[InboxItemKind] | None = None,
     ) -> int:
         stmt = (
             select(func.count())
@@ -190,5 +193,7 @@ class BootstrapQueryRepository:
                 InboxItemRow.status == InboxItemStatus.OPEN.value,
             )
         )
+        if kinds is not None:
+            stmt = stmt.where(InboxItemRow.kind.in_([k.value for k in kinds]))
         count_val = await session.scalar(stmt)
         return int(count_val or 0)

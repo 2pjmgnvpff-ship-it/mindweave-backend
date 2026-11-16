@@ -12,6 +12,16 @@ Multi-person global voice note:
   unresolved pronoun across multiple mentioned people, i.e. `multi_person=True` with
   `scoped_locked=False` and `clause_person_unambiguous` not True) MUST enter `pending`
   with `PendingReason.MULTI_PERSON`.
+
+D1 pencil drafts (roadmap 0.6):
+- Dates and promises (#5) are no longer parked in the inbox. They are CONFIRMED (so the
+  reminder is created exactly as for any confirmed date) but flagged `needs_glance=True`
+  and presented as a pencil draft the user can glance at / fix in place.
+- Because #5 now confirms, it is evaluated AFTER every pending rule: a low-confidence or
+  vented date must still stay pending.
+- `presentation` tells the client how to draw the slip: `ink` (settled), `pencil` (draft
+  still visible on the person's page) or `question` (needs the user to pick/confirm a
+  person).
 """
 
 from __future__ import annotations
@@ -25,6 +35,7 @@ from mindweave.shared.enums import (
     InboxItemKind,
     PendingReason,
     PersonState,
+    Presentation,
     RecordReviewState,
     SourceSpeaker,
     Tier,
@@ -65,6 +76,8 @@ class GateDecision:
     inbox_kind: InboxItemKind | None = None
     undo_window_seconds: int = 0
     undo_deadline: datetime | None = None
+    needs_glance: bool = False
+    presentation: Presentation = Presentation.INK
 
     @property
     def is_confirmed(self) -> bool:
@@ -84,6 +97,8 @@ class GateDecision:
             inbox_kind=self.inbox_kind,
             undo_window_seconds=self.undo_window_seconds,
             undo_deadline=now + timedelta(seconds=self.undo_window_seconds),
+            needs_glance=self.needs_glance,
+            presentation=self.presentation,
         )
 
 
@@ -92,6 +107,7 @@ def _pending(
     *,
     inbox_kind: InboxItemKind = InboxItemKind.FACT_CONFIRM,
     record_review_state: RecordReviewState = RecordReviewState.NORMAL,
+    presentation: Presentation = Presentation.PENCIL,
 ) -> GateDecision:
     return GateDecision(
         status=FactStatus.PENDING,
@@ -100,6 +116,7 @@ def _pending(
         inbox_kind=inbox_kind,
         undo_window_seconds=0,
         undo_deadline=None,
+        presentation=presentation,
     )
 
 
@@ -109,14 +126,18 @@ def decide_gate(
     *,
     now: datetime | None = None,
 ) -> GateDecision:
-    """Evaluate all 8 pending gate conditions deterministically."""
+    """Evaluate all 8 gate conditions deterministically (pending rules first, then #5)."""
     # 1. Extraction or schema validation failed
     if not gate_input.extraction_ok:
         return _pending(PendingReason.EXTRACTION_FAILED, inbox_kind=InboxItemKind.FACT_CONFIRM)
 
     # 2. Newly discovered provisional person requires confirmation
     if gate_input.person_state is PersonState.PROVISIONAL:
-        return _pending(PendingReason.NEW_PERSON, inbox_kind=InboxItemKind.NEW_PERSON_CONFIRM)
+        return _pending(
+            PendingReason.NEW_PERSON,
+            inbox_kind=InboxItemKind.NEW_PERSON_CONFIRM,
+            presentation=Presentation.QUESTION,
+        )
 
     # 3. Ambiguous or unresolved person candidate count != 1
     if gate_input.candidate_count != 1:
@@ -124,6 +145,7 @@ def decide_gate(
             PendingReason.AMBIGUOUS_PERSON,
             inbox_kind=InboxItemKind.PERSON_DISAMBIGUATION,
             record_review_state=RecordReviewState.HELD,
+            presentation=Presentation.QUESTION,
         )
 
     # 4. Multi-person entangled clause when not scoped-locked
@@ -132,11 +154,11 @@ def decide_gate(
         and not gate_input.scoped_locked
         and gate_input.clause_person_unambiguous is not True
     ):
-        return _pending(PendingReason.MULTI_PERSON, inbox_kind=InboxItemKind.FACT_CONFIRM)
-
-    # 5. Dates and promises require reminder date/time confirmation
-    if gate_input.fact_type in (FactType.DATE, FactType.PROMISE):
-        return _pending(PendingReason.DATE_OR_PROMISE, inbox_kind=InboxItemKind.FACT_CONFIRM)
+        return _pending(
+            PendingReason.MULTI_PERSON,
+            inbox_kind=InboxItemKind.FACT_CONFIRM,
+            presentation=Presentation.QUESTION,
+        )
 
     # 6. Angry venting / irony against a `gold` (记爱) partner goes to venting_hold (ADR-005 PRT-01)
     if gate_input.is_venting and gate_input.tier is Tier.GOLD:
@@ -163,6 +185,21 @@ def decide_gate(
         if now is not None and config.undo_window_seconds > 0
         else None
     )
+
+    # 5. Dates and promises: confirmed (reminder created as usual) but drawn in pencil so the
+    #    user can glance at the parsed date and fix it in place (D1, replaces inbox parking).
+    if gate_input.fact_type in (FactType.DATE, FactType.PROMISE):
+        return GateDecision(
+            status=FactStatus.CONFIRMED,
+            pending_reason=None,
+            record_review_state=RecordReviewState.NORMAL,
+            inbox_kind=None,
+            undo_window_seconds=config.undo_window_seconds,
+            undo_deadline=deadline,
+            needs_glance=True,
+            presentation=Presentation.PENCIL,
+        )
+
     return GateDecision(
         status=FactStatus.CONFIRMED,
         pending_reason=None,

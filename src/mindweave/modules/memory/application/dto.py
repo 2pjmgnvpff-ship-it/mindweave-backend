@@ -15,9 +15,11 @@ from mindweave.shared.enums import (
     InboxItemKind,
     InboxItemStatus,
     InboxResolutionAction,
+    PencilReason,
     PendingReason,
     PersonState,
     Polarity,
+    Presentation,
     RecordKind,
     RecordReviewState,
     SourceSpeaker,
@@ -46,6 +48,15 @@ class MaterialDto(CamelModel):
     version: int = 1
     created_at: datetime
     updated_at: datetime
+    # D1 pencil drafts: how the person page draws this slip.
+    presentation: Presentation = Presentation.INK
+    pencil_reason: PencilReason | None = None
+    glance_hint: str | None = None
+    # Settle via `POST /v1/inbox/{inboxItemId}:resolve` (pencil/question) or
+    # `PATCH /v1/facts/{id}` on a `pencilFacts[]` entry (date glance).
+    inbox_item_id: UUID | None = None
+    auto_ink_at: datetime | None = None
+    pencil_facts: list[FactDto] = Field(default_factory=list)
 
 
 class MaterialCreateRequest(CamelModel):
@@ -87,6 +98,7 @@ class FactDto(CamelModel):
     lunar_is_leap_month: bool = False
     status: FactStatus
     pending_reason: PendingReason | None = None
+    needs_glance: bool = False
     confidence: float | None = None
     created_by: CreatedBy = CreatedBy.AI
     valid_at: datetime

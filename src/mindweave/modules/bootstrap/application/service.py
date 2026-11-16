@@ -13,6 +13,7 @@ from mindweave.modules.people.domain.entities import PersonProfile, PhotoSlot
 from mindweave.modules.people.domain.tier_transition import partition_person_ids
 from mindweave.modules.people.infra.repository import PeopleRepository
 from mindweave.shared.enums import CupidLayout, Edition
+from mindweave.shared.pencil import QUESTION_INBOX_KINDS
 from mindweave.shared.scopes import UserScope
 
 
@@ -47,6 +48,7 @@ class WorkspaceBootstrapSnapshot:
     casual_ids: list[UUID]
     people: dict[str, BootstrapPersonAggregate]
     inbox_count: int
+    question_count: int = 0
 
 
 class BootstrapService:
@@ -131,6 +133,9 @@ class BootstrapService:
             )
 
             inbox_count = await self._query_repo.count_open_inbox_items(session, scope)
+            question_count = await self._query_repo.count_open_inbox_items(
+                session, scope, kinds=QUESTION_INBOX_KINDS
+            )
             person_rows = await self._query_repo.list_workspace_person_rows(session, scope)
             if not person_rows:
                 return WorkspaceBootstrapSnapshot(
@@ -139,6 +144,7 @@ class BootstrapService:
                     casual_ids=[],
                     people={},
                     inbox_count=inbox_count,
+                    question_count=question_count,
                 )
 
             rank_entries = [self._people_repo.to_rank_entry(r) for r in person_rows]
@@ -183,4 +189,5 @@ class BootstrapService:
                 casual_ids=partition.casual_ids,
                 people=people_dict,
                 inbox_count=inbox_count,
+                question_count=question_count,
             )

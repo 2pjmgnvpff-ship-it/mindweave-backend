@@ -76,6 +76,8 @@ def _parse_route_mode(raw: object, *, default: RouteMode = RouteMode.GLOBAL) -> 
     s = str(raw).strip()
     if not s:
         return default
+    if s.lower() == "scoped":  # PWA alias for the open person page
+        return RouteMode.CURRENT
     try:
         return RouteMode(s)
     except ValueError as exc:

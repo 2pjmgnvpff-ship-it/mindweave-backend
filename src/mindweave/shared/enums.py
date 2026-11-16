@@ -156,6 +156,28 @@ class PendingReason(StrEnum):
     EXTRACTION_FAILED = "extraction_failed"
 
 
+class Presentation(StrEnum):
+    """D1 journal rendering of a capture result: ink (settled), pencil (draft), question."""
+
+    INK = "ink"
+    PENCIL = "pencil"
+    QUESTION = "question"
+
+
+class PencilReason(StrEnum):
+    """Why a material is shown as a pencil draft / question note (wire value `pencilReason`)."""
+
+    DATE_GLANCE = "date_glance"
+    LOW_CONFIDENCE = "low_confidence"
+    SPEAKER_UNKNOWN = "speaker_unknown"
+    POLARITY_FLIP = "polarity_flip"
+    MULTI_PERSON = "multi_person"
+    EXTRACTION_FAILED = "extraction_failed"
+    VENTING = "venting"
+    NEW_PERSON = "new_person"
+    AMBIGUOUS_PERSON = "ambiguous_person"
+
+
 class InboxItemKind(StrEnum):
     PERSON_DISAMBIGUATION = "person_disambiguation"
     NEW_PERSON_CONFIRM = "new_person_confirm"

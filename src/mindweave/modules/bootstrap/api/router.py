@@ -96,4 +96,5 @@ async def get_workspace_bootstrap(
         casual_ids=[str(pid) for pid in snap.casual_ids],
         people=people_dtos,
         inbox_count=snap.inbox_count,
+        question_count=snap.question_count,
     )

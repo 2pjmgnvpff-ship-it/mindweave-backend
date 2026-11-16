@@ -61,6 +61,7 @@ from mindweave.shared.enums import (
     PendingReason,
     PersonState,
     Polarity,
+    Presentation,
     RecordReviewState,
     RouteMode,
     SourceSpeaker,
@@ -178,20 +179,73 @@ def test_gate_policy_condition_4_multi_person_entangled_vs_clean_clauses() -> No
 
 
 @pytest.mark.parametrize("fact_type", [FactType.DATE, FactType.PROMISE])
-def test_gate_policy_condition_5_date_or_promise_requires_confirmation(
+def test_gate_policy_condition_5_date_or_promise_confirms_as_pencil_glance(
     fact_type: FactType,
 ) -> None:
+    # D1 (roadmap 0.6): dates/promises no longer park in the inbox. They confirm (so the
+    # reminder is created as for any confirmed date) but are drawn in pencil for a glance.
+    now = datetime(2026, 11, 12, 9, 0, 0, tzinfo=UTC)
     dec = decide_gate(
         GateInput(
             fact_type=fact_type,
             confidence=0.99,
             multi_person=True,
             clause_person_unambiguous=True,
-        )
+        ),
+        GateConfig(undo_window_seconds=5),
+        now=now,
     )
+    assert dec.is_confirmed
+    assert dec.pending_reason is None
+    assert dec.inbox_kind is None
+    assert dec.needs_glance is True
+    assert dec.presentation is Presentation.PENCIL
+    assert dec.undo_deadline == now + timedelta(seconds=5)
+    # with_now must keep the glance flag
+    assert dec.with_now(now).needs_glance is True
+
+
+@pytest.mark.parametrize(
+    ("gate_input", "reason"),
+    [
+        (GateInput(fact_type=FactType.DATE, confidence=0.5), PendingReason.LOW_CONFIDENCE),
+        (
+            GateInput(fact_type=FactType.PROMISE, source_speaker=SourceSpeaker.UNKNOWN),
+            PendingReason.SPEAKER_UNKNOWN,
+        ),
+        (GateInput(fact_type=FactType.DATE, polarity_flipped=True), PendingReason.POLARITY_FLIP),
+        (
+            GateInput(fact_type=FactType.DATE, is_venting=True, tier=Tier.GOLD),
+            PendingReason.VENTING,
+        ),
+    ],
+)
+def test_gate_policy_condition_5_never_overrides_pending_rules(
+    gate_input: GateInput, reason: PendingReason
+) -> None:
+    dec = decide_gate(gate_input)
     assert dec.is_pending
-    assert dec.pending_reason is PendingReason.DATE_OR_PROMISE
-    assert dec.inbox_kind is InboxItemKind.FACT_CONFIRM
+    assert dec.pending_reason is reason
+    assert dec.needs_glance is False
+    assert dec.presentation is Presentation.PENCIL
+
+
+def test_gate_policy_presentation_per_rule() -> None:
+    assert decide_gate(GateInput()).presentation is Presentation.INK
+    assert decide_gate(GateInput()).needs_glance is False
+    assert decide_gate(GateInput(extraction_ok=False)).presentation is Presentation.PENCIL
+    assert (
+        decide_gate(GateInput(person_state=PersonState.PROVISIONAL)).presentation
+        is Presentation.QUESTION
+    )
+    assert decide_gate(GateInput(candidate_count=2)).presentation is Presentation.QUESTION
+    assert (
+        decide_gate(GateInput(multi_person=True, clause_person_unambiguous=False)).presentation
+        is Presentation.QUESTION
+    )
+    gold_vent = decide_gate(GateInput(is_venting=True, tier=Tier.GOLD))
+    assert gold_vent.presentation is Presentation.PENCIL
+    assert gold_vent.record_review_state is RecordReviewState.HELD
 
 
 def test_gate_policy_condition_6_venting_holds_gold_only() -> None:

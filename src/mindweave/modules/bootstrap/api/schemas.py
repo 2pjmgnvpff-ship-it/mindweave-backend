@@ -81,3 +81,5 @@ class BootstrapResponse(CamelModel):
     casual_ids: list[str]
     people: dict[str, BootstrapPersonDTO]
     inbox_count: int
+    # D1: open "who is this?" questions (new person / which-one) the journal should surface.
+    question_count: int = 0
