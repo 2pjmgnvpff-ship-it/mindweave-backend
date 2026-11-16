@@ -7,7 +7,7 @@
   },
   "env": {
     "MINDWEAVE_ENVIRONMENT": {
-      "description": "Runtime environment (dev enables the built-in interactive test workbench at /)",
+      "description": "Runtime environment (dev enables the built-in interactive test workbench at /dev/workbench; the PWA is always served at /)",
       "value": "dev",
       "required": false
     },

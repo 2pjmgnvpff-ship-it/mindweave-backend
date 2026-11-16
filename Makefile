@@ -15,8 +15,13 @@ help:
 sync:
 	$(UV) sync --extra dev
 
+DEV_PORT ?= 8000
+
 dev:
-	$(UV) run uvicorn mindweave.main:app --reload --host 127.0.0.1 --port 8000
+	MINDWEAVE_ENVIRONMENT=$${MINDWEAVE_ENVIRONMENT:-dev} \
+	MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE=$${MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE:-true} \
+	MINDWEAVE_EMBED_WORKER_IN_API=$${MINDWEAVE_EMBED_WORKER_IN_API:-true} \
+	$(UV) run uvicorn mindweave.main:app --reload --host 127.0.0.1 --port $(DEV_PORT)
 
 worker:
 	$(UV) run python -m mindweave.workers

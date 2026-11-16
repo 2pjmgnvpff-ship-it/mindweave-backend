@@ -22,6 +22,7 @@ from mindweave.core.dto import CamelModel
 from mindweave.core.errors import AppError, problem_response, register_exception_handlers
 from mindweave.core.ids import new_id
 from mindweave.core.logging import configure_logging, get_logger
+from mindweave.core.web_static import build_product_static_app
 from mindweave.modules.bootstrap.api.router import router as bootstrap_router
 from mindweave.modules.capture.api.router import router as capture_router
 from mindweave.modules.companion.api.router import router as companion_router
@@ -231,8 +232,7 @@ def create_app(
     if resolved_settings.environment in ("dev", "test"):
         workbench_path = Path(__file__).resolve().parent / "tools" / "workbench.html"
 
-        @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-        @app.get("/workbench", response_class=HTMLResponse, include_in_schema=False)
+        @app.get("/dev/workbench", response_class=HTMLResponse, include_in_schema=False)
         async def dev_workbench() -> HTMLResponse:
             return HTMLResponse(content=workbench_path.read_text(encoding="utf-8"))
 
@@ -242,6 +242,17 @@ def create_app(
         # V10 frontend compatibility alias (`/api/v1/...`), omitted from canonical OpenAPI snapshot
         if canonical_prefix != "/api/v1":
             app.include_router(module_router, prefix="/api/v1", include_in_schema=False)
+
+    # The product PWA owns `/`. Mounted LAST so `/healthz`, `/readyz`, `/docs`, `/v1/*`,
+    # `/api/v1/*` and `/dev/*` always win route matching.
+    app.mount(
+        "/",
+        build_product_static_app(
+            web_dir=resolved_settings.web_dist_dir,
+            environment=resolved_settings.environment,
+        ),
+        name="web",
+    )
 
     return app
 

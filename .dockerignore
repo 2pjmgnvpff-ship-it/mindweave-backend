@@ -9,3 +9,6 @@ __pycache__
 .env
 tests
 docs
+web/_v10_reference
+web/tests
+web/node_modules

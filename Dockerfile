@@ -35,7 +35,8 @@ FROM python:3.12-slim-bookworm AS runtime
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    MINDWEAVE_BLOB_STORAGE_DIR="/tmp/mindweave-blobs"
+    MINDWEAVE_BLOB_STORAGE_DIR="/tmp/mindweave-blobs" \
+    MINDWEAVE_WEB_DIST_DIR="/app/web"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends postgresql-15 postgresql-client-15 \
@@ -53,6 +54,8 @@ COPY --from=builder --chown=mindweave:mindweave /app/evals /app/evals
 COPY --from=builder --chown=mindweave:mindweave /app/prompts /app/prompts
 COPY --from=builder --chown=mindweave:mindweave /app/alembic.ini /app/alembic.ini
 COPY --from=builder --chown=mindweave:mindweave /app/migrations /app/migrations
+# Product PWA served same-origin at `/` (`web/_v10_reference` & `web/tests` are excluded via .dockerignore)
+COPY --chown=mindweave:mindweave web /app/web
 COPY --chown=mindweave:mindweave scripts/entrypoint.sh /app/scripts/entrypoint.sh
 RUN chmod +x /app/scripts/entrypoint.sh
 
