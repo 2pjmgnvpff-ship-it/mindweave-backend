@@ -149,3 +149,8 @@
 .qnote { padding: 12px 13px; border-radius: 6px; background: linear-gradient(170deg, #fff6d6 0%, #fbecc0 100%); box-shadow: 0 6px 14px rgba(92, 70, 20, 0.1); }
 .qnote + .qnote { margin-top: 10px; }
 .qnote-text { font-family: var(--font-serif); font-size: 13.5px; line-height: 1.6; color: var(--ink-espresso); }
+
+/* P0 glue: multi-line helper copy + boot retry */
+.onb-sub, .casual-empty, .chat-empty-hint { white-space: pre-line; }
+.mw-boot-veil p { font-size: 14px; color: var(--ink-warm-brown); margin-bottom: 14px; text-align: center; padding: 0 24px; }
+.mw-boot-veil:has(p) { flex-direction: column; }

@@ -1,6 +1,6 @@
 // sw.js — minimal offline shell. Caches the app shell + static assets only.
 // API traffic (/v1, /api, /auth media URLs) is NEVER cached: always straight to the network.
-const CACHE = 'mw-shell-1';
+const CACHE = 'mw-shell-2';
 const SHELL = [
   './',
   './index.html',
@@ -24,6 +24,8 @@ const SHELL = [
   './scripts/icons.js',
   './scripts/voice-logic.js',
   './scripts/offline-queue.js',
+  './scripts/actions.js',
+  './scripts/recorder.js',
   './scripts/api/client.js',
   './scripts/api/sse.js',
   './scripts/api/endpoints.js',
@@ -41,6 +43,7 @@ const SHELL = [
   './scripts/views/settings.js',
   './scripts/views/sheet.js',
   './scripts/views/onboarding.js',
+  './scripts/views/questions.js',
 ];
 
 self.addEventListener('install', (event) => {

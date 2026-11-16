@@ -50,7 +50,9 @@ export const api = {
   // §7 materials, facts, inbox
   materials: (personId, { cursor, limit = 30, includeHeld } = {}) =>
     client.get(`/persons/${encodeURIComponent(personId)}/materials`, { query: { cursor, limit, includeHeld } }),
-  patchFact: (factId, body) => client.patch(`/facts/${encodeURIComponent(factId)}`, body),
+  /** PATCH a fact; the backend requires If-Match with the fact version (contract §7). */
+  patchFact: (factId, body, version) =>
+    client.patch(`/facts/${encodeURIComponent(factId)}`, body, version != null ? { headers: { 'If-Match': `"${version}"` } } : {}),
   inbox: (query = {}) => client.get('/inbox', { query: { status: 'open', ...query } }),
   resolveInbox: (itemId, body) => client.post(`/inbox/${encodeURIComponent(itemId)}:resolve`, body),
 

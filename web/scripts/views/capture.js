@@ -61,10 +61,8 @@ async function queueDraft(draft, pendingId) {
 async function submit(draft, { optimisticText }) {
   const pageId = store.get().view === 'journal' ? store.get().activePersonId : null;
   addPending({ id: draft.id, pageId, text: optimisticText, state: 'drying', kind: draft.kind });
-  if (globalThis.navigator && navigator.onLine === false) {
-    await queueDraft(draft, draft.id);
-    return null;
-  }
+  // Always try the network first: navigator.onLine is unreliable (false negatives behind VPNs,
+  // sandboxes, some Android WebViews). A real network failure still lands in the draft queue.
   try {
     const res = await sendDraft(draft);
     removePending(draft.id);
@@ -146,7 +144,6 @@ export async function undoCapture(captureId, touched = []) {
 }
 
 export async function flushDrafts() {
-  if (globalThis.navigator && navigator.onLine === false) return;
   const result = await draftQueue.flush().catch(() => null);
   if (!result) return;
   for (const { draft, result: res } of result.sent) {

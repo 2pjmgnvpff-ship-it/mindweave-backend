@@ -90,14 +90,14 @@ function glanceControls(m, personId) {
           type: 'button',
           class: 'glance-btn',
           text: '✔ 对的',
-          onClick: () => run(async () => { await api.patchFact(fact.id, { status: 'confirmed' }); inked(personId, m); }, '好，已经落墨'),
+          onClick: () => run(async () => { await api.patchFact(fact.id, { status: 'confirmed' }, fact.version); inked(personId, m); }, '好，已经落墨'),
         }),
         dateInput,
         h('button', {
           type: 'button',
           class: 'glance-btn quiet',
           text: '改成这天',
-          onClick: () => run(async () => { await api.patchFact(fact.id, { triggerDate: dateInput.value }); inked(personId, m); }, `改好了，${formatDateCn(dateInput.value)}`),
+          onClick: () => run(async () => { await api.patchFact(fact.id, { triggerDate: dateInput.value }, fact.version); inked(personId, m); }, `改好了，${formatDateCn(dateInput.value)}`),
         }),
       );
     } else if (m.inboxItemId) {
@@ -114,7 +114,7 @@ function glanceControls(m, personId) {
           class: 'glance-btn',
           text: '✔ 没错',
           onClick: () => run(async () => {
-            for (const f of m.pencilFacts || []) await api.patchFact(f.id, { status: 'confirmed' });
+            for (const f of m.pencilFacts || []) await api.patchFact(f.id, { status: 'confirmed' }, f.version);
             inked(personId, m);
           }, '好，已经落墨'),
         }),
@@ -142,7 +142,8 @@ function questionControls(m, personId, ctx) {
             'aria-label': `是${c.displayName}`,
             onClick: async () => {
               try {
-                await api.resolveInbox(m.inboxItemId, { action: 'assign_person', targetPersonId: c.personId });
+                const action = m.pencilReason === 'new_person' ? 'merge_person' : 'assign_person';
+                await api.resolveInbox(m.inboxItemId, { action, targetPersonId: c.personId });
                 removeMaterial(personId, m.id);
                 actions.reloadMaterials(c.personId);
                 actions.refreshBootstrap();
@@ -157,6 +158,34 @@ function questionControls(m, personId, ctx) {
         ),
       );
     }
+    const after = (text) => {
+      inked(personId, m);
+      actions.refreshBootstrap();
+      actions.reloadMaterials(personId);
+      whisper(text, 2600);
+    };
+    const name = item?.mention || item?.personName || store.get().people[personId]?.nameCn || 'TA';
+    if (m.pencilReason === 'new_person') {
+      // first mention: give TA a page with one of the three arrows
+      for (const [tier, label] of [['gold', '金箭 · 记爱'], ['silver', '银箭 · 记恨'], ['crystal', '水晶箭 · 记繁琐']]) {
+        row.appendChild(
+          h('button', {
+            type: 'button',
+            class: ['glance-btn', tier !== 'gold' && 'quiet'],
+            text: label,
+            onClick: async () => {
+              try {
+                await api.resolveInbox(m.inboxItemId, { action: 'create_person', tier, displayName: name });
+                after(`好，「${name}」有了自己的一页`);
+              } catch (err) {
+                whisper(err.message, 2800);
+              }
+            },
+          }),
+        );
+      }
+      return;
+    }
     row.appendChild(
       h('button', {
         type: 'button',
@@ -164,10 +193,8 @@ function questionControls(m, personId, ctx) {
         text: candidates.length ? '都不是，是新朋友' : '是新朋友',
         onClick: async () => {
           try {
-            await api.resolveInbox(m.inboxItemId, { action: 'confirm' });
-            inked(personId, m);
-            actions.refreshBootstrap();
-            whisper('好，记下这位新朋友了', 2600);
+            await api.resolveInbox(m.inboxItemId, { action: 'create_person', tier: 'crystal', displayName: name });
+            after('好，记下这位新朋友了');
           } catch (err) {
             whisper(err.message, 2800);
           }
