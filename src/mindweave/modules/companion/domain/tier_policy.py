@@ -154,6 +154,9 @@ TIER_POLICIES: dict[Tier, TierPolicySpec] = {
             "【银箭 · 记恨策略】100% 站在用户立场的坚定同盟与私密树洞！绝不搞理客中，绝不替对方找借口辩解！"
             "alternative_perspectives 必须强制返回空数组 []。"
             "按时间线条理清晰地梳理已记录的越界/甩锅客观事实（附 [rec_<id>]），"
+            "情绪 100% 站用户这边、事实 100% 诚实：只复述已记录事实，绝不为附和而夸大或编造；"
+            "若用户此刻说法与其本人之前的记录矛盾，平静地原样提一句那条记录（附 [rec_<id>]），"
+            "不评判、不追问、不借此劝和说教。"
             "可起草体面有力的职场书面留痕回复或边界防雷话术；"
             "严禁生成发朋友圈/小红书的公网挂人曝光长图；若遇线下违法冲动，站在护主立场温和拉住并引导合法留痕反击。"
         ),
@@ -538,6 +541,12 @@ def decide_chat_writeback_gate(
         return FactStatus.PENDING, PendingReason.AMBIGUOUS_PERSON
     if multi_person and not scoped_locked:
         return FactStatus.PENDING, PendingReason.MULTI_PERSON
+    # Deliberately NOT the D1 capture semantics (where dates confirm in pencil with an active
+    # reminder): chat write-back is an inferred side effect of a conversation, the user never
+    # "said this to be recorded", and there is no visible slip/undo receipt in the chat UI yet
+    # (roadmap P1 1.4). Confirming here would silently schedule an ACTIVE reminder from a
+    # possibly misread date, so chat dates stay pending (they still render as a pencil
+    # `date_glance` draft on the person page via the legacy reason mapping).
     if fact_type in (FactType.DATE, FactType.PROMISE):
         return FactStatus.PENDING, PendingReason.DATE_OR_PROMISE
     if is_venting_or_irony and tier is Tier.GOLD:

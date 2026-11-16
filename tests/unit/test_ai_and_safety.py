@@ -75,7 +75,7 @@ def test_prompt_registry_loads_all_versioned_prompts() -> None:
     registry = PromptRegistry()
     expected = {
         "extract_record": "1.1.0",
-        "ask_relationship": "1.1.0",
+        "ask_relationship": "1.2.0",
         "parse_screenshot": "1.0.0",
         "safety_classify": "1.0.0",
         "transcribe_audio": "1.0.0",

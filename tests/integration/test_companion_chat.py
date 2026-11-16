@@ -225,7 +225,7 @@ class DeterministicCompanionGateway:
             alternative_perspectives=["也许对方当下手头正忙，晚一点轻松问一句会更自然。"],
             actionable_suggestions=[f"给{payload.person_name}发一句轻松自然的问候草稿"],
         )
-        return out, "ask_relationship@1.1.0", "fake-chat"
+        return out, "ask_relationship@1.2.0", "fake-chat"
 
     def stream_companion_reply(
         self,
