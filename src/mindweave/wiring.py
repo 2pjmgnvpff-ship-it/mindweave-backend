@@ -42,7 +42,10 @@ def wire_container_services(container: AppContainer) -> AppContainer:
     container.extras["job_queue"] = queue
 
     if "push_provider" not in container.extras and "push" not in container.extras:
-        container.extras["push_provider"] = CompositePushDispatcher()
+        container.extras["push_provider"] = CompositePushDispatcher.from_adapter_kinds(
+            apns=container.settings.push_apns_adapter,
+            web_push=container.settings.push_web_push_adapter,
+        )
     elif "push_provider" not in container.extras and "push" in container.extras:
         container.extras["push_provider"] = container.extras["push"]
 

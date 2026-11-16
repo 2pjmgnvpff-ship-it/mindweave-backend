@@ -296,8 +296,11 @@ async def test_privacy_desensitized_push_copy_and_anti_parasocial_guardrails() -
         )
     )
     r3 = await recorder.send(sample_msg)
-    assert r1.delivered and r1.channel == "ios_apns"
-    assert r2.delivered and r2.channel == "web_push"
+    # 0.7 honest push: log-only adapters never reach a device and must say so.
+    assert not r1.delivered and r1.channel == "log"
+    assert r1.failure_reason == "log_only_adapter"
+    assert not r2.delivered and r2.channel == "log"
+    assert r2.failure_reason == "log_only_adapter"
     assert r3.delivered and len(recorder.deliveries) == 1
 
 

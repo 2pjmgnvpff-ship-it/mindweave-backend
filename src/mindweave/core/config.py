@@ -66,6 +66,14 @@ class Settings(BaseSettings):
     max_audio_duration_sec: int = 120
     max_image_bytes: int = 10 * 1024 * 1024  # 10 MB
 
+    # Product PWA static root served at `/` (repo-root `web/`; Docker image copies it to /app/web)
+    web_dist_dir: Path = Field(default_factory=lambda: Path(__file__).resolve().parents[3] / "web")
+
+    # Push providers. "log" adapters only write a zero-PII log line and report
+    # `delivered=False` honestly; they are forbidden in staging / prod_cn.
+    push_apns_adapter: Literal["log", "disabled"] = "log"
+    push_web_push_adapter: Literal["log", "disabled"] = "log"
+
     # AI Model Gateway
     ai_primary_provider: Literal["fake", "gemini", "dashscope", "ark", "deepseek"] = "fake"
     ai_fallback_provider: Literal["none", "fake", "gemini", "dashscope", "ark", "deepseek"] = "none"
@@ -136,6 +144,15 @@ class Settings(BaseSettings):
                 raise ValueError("prod_cn must not use DEFAULT_DEV_KEK_HEX")
             if self.jwt_secret == DEFAULT_DEV_JWT_SECRET:
                 raise ValueError("prod_cn must not use DEFAULT_DEV_JWT_SECRET")
+        if self.environment in ("staging", "prod_cn") and "log" in (
+            self.push_apns_adapter,
+            self.push_web_push_adapter,
+        ):
+            raise ValueError(
+                "Log-only push adapters never deliver notifications and are forbidden in "
+                "staging and prod_cn; configure a real provider or set "
+                "MINDWEAVE_PUSH_APNS_ADAPTER / MINDWEAVE_PUSH_WEB_PUSH_ADAPTER=disabled"
+            )
         return self
 
 

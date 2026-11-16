@@ -49,45 +49,77 @@ class PushProviderPort(Protocol):
     async def send(self, message: PushMessage) -> PushDeliveryReceipt: ...
 
 
+LOG_ONLY_FAILURE_REASON = "log_only_adapter"
+PUSH_DISABLED_FAILURE_REASON = "push_disabled"
+LOG_CHANNEL = "log"
+
+
 class APNsLogAdapter:
-    """Structured zero-PII APNs log adapter for local/dev/staging until live APNs credentials."""
+    """Zero-PII APNs *log-only* adapter for local dev/test until live APNs credentials exist.
+
+    It never reaches a device, so it honestly reports `delivered=False` on `channel="log"`.
+    Settings forbid this adapter in staging / prod_cn.
+    """
 
     async def send(self, message: PushMessage) -> PushDeliveryReceipt:
         validate_push_copy_safety(message.title, message.body)
         msg_id = f"apns-log-{new_id()}"
         # Never log push_token or any user PII (Invariant I10)!
         logger.info(
-            "push.apns.dispatched",
+            "push.apns.logged_not_sent",
             provider_message_id=msg_id,
             device_id=str(message.device_id),
             reminder_id=str(message.reminder_id),
             lead_day=message.lead_day,
         )
         return PushDeliveryReceipt(
-            delivered=True,
-            channel=PushPlatform.IOS_APNS.value,
+            delivered=False,
+            channel=LOG_CHANNEL,
             provider_message_id=msg_id,
+            failure_reason=LOG_ONLY_FAILURE_REASON,
         )
 
 
 class WebPushLogAdapter:
-    """Structured zero-PII Web Push VAPID log adapter for local/dev/staging."""
+    """Zero-PII Web Push (VAPID) *log-only* adapter for local dev/test; reports `delivered=False`."""
 
     async def send(self, message: PushMessage) -> PushDeliveryReceipt:
         validate_push_copy_safety(message.title, message.body)
         msg_id = f"webpush-log-{new_id()}"
         logger.info(
-            "push.web_push.dispatched",
+            "push.web_push.logged_not_sent",
             provider_message_id=msg_id,
             device_id=str(message.device_id),
             reminder_id=str(message.reminder_id),
             lead_day=message.lead_day,
         )
         return PushDeliveryReceipt(
-            delivered=True,
-            channel=PushPlatform.WEB_PUSH.value,
+            delivered=False,
+            channel=LOG_CHANNEL,
             provider_message_id=msg_id,
+            failure_reason=LOG_ONLY_FAILURE_REASON,
         )
+
+
+class DisabledPushAdapter:
+    """Explicitly disabled channel (e.g. staging without credentials): never sends, never retries."""
+
+    async def send(self, message: PushMessage) -> PushDeliveryReceipt:
+        validate_push_copy_safety(message.title, message.body)
+        return PushDeliveryReceipt(
+            delivered=False,
+            channel="disabled",
+            failure_reason=PUSH_DISABLED_FAILURE_REASON,
+        )
+
+
+def _adapter_for_kind(kind: str, *, log_adapter: PushProviderPort) -> PushProviderPort:
+    """Map a `Settings.push_*_adapter` value onto a concrete adapter instance."""
+    if kind == "disabled":
+        return DisabledPushAdapter()
+    if kind == "log":
+        return log_adapter
+    raise PushDeliveryError(f"Unsupported push adapter kind {kind!r}")
 
 
 class CompositePushDispatcher:
@@ -101,6 +133,13 @@ class CompositePushDispatcher:
     ) -> None:
         self._apns: PushProviderPort = apns or APNsLogAdapter()
         self._web_push: PushProviderPort = web_push or WebPushLogAdapter()
+
+    @classmethod
+    def from_adapter_kinds(cls, *, apns: str, web_push: str) -> CompositePushDispatcher:
+        return cls(
+            apns=_adapter_for_kind(apns, log_adapter=APNsLogAdapter()),
+            web_push=_adapter_for_kind(web_push, log_adapter=WebPushLogAdapter()),
+        )
 
     async def send(self, message: PushMessage) -> PushDeliveryReceipt:
         if message.platform is PushPlatform.IOS_APNS:

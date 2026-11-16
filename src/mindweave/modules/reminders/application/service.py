@@ -40,7 +40,10 @@ from mindweave.modules.reminders.domain.schedule import (
     validate_timezone_name,
 )
 from mindweave.modules.reminders.infra.push import (
+    LOG_ONLY_FAILURE_REASON,
+    PUSH_DISABLED_FAILURE_REASON,
     CompositePushDispatcher,
+    PushDeliveryReceipt,
     PushMessage,
     PushProviderPort,
 )
@@ -100,16 +103,42 @@ class UpdateReminderInput:
 @dataclass(frozen=True, slots=True)
 class ScanDueRemindersResult:
     scanned_count: int
-    delivered_slots: int
-    pushed_messages: int
+    delivered_slots: int  # fire slots where >= 1 provider confirmed real delivery
+    pushed_messages: int  # messages a provider confirmed as delivered (log-only never counts)
     completed_reminders: int
+
+
+DELIVERY_STATUS_DISPATCHING = "dispatching"
+DELIVERY_STATUS_DELIVERED = "delivered"
+DELIVERY_STATUS_NO_DEVICE = "no_device"
+DELIVERY_STATUS_LOGGED = "logged"  # log-only adapter: recorded, NOT delivered
+DELIVERY_STATUS_NOT_SENT = "not_sent"  # channel explicitly disabled
+DELIVERY_STATUS_FAILED = "failed"
+
+
+def summarize_push_receipts(receipts: Sequence[PushDeliveryReceipt]) -> tuple[str, int]:
+    """Derive an honest `(delivery_status, delivered_count)` from provider receipts."""
+    delivered_count = sum(1 for r in receipts if r.delivered)
+    if delivered_count > 0:
+        return DELIVERY_STATUS_DELIVERED, delivered_count
+    if not receipts:
+        return DELIVERY_STATUS_NO_DEVICE, 0
+    reasons = {r.failure_reason for r in receipts}
+    if reasons == {LOG_ONLY_FAILURE_REASON}:
+        return DELIVERY_STATUS_LOGGED, 0
+    if reasons <= {LOG_ONLY_FAILURE_REASON, PUSH_DISABLED_FAILURE_REASON}:
+        return DELIVERY_STATUS_NOT_SENT, 0
+    return DELIVERY_STATUS_FAILED, 0
 
 
 def resolve_push_provider(container: AppContainer) -> PushProviderPort:
     candidate = container.extras.get("push_provider") or container.extras.get("push")
     if candidate is not None:
         return cast(PushProviderPort, candidate)
-    dispatcher = CompositePushDispatcher()
+    dispatcher = CompositePushDispatcher.from_adapter_kinds(
+        apns=container.settings.push_apns_adapter,
+        web_push=container.settings.push_web_push_adapter,
+    )
     container.extras["push_provider"] = dispatcher
     return dispatcher
 
@@ -717,14 +746,17 @@ class ReminderService:
 
             if not targets:
                 channel = "in_app"
-                delivery_status = "no_device"
+                delivery_status = DELIVERY_STATUS_NO_DEVICE
             elif len({t.platform for t in targets}) == 1:
                 channel = targets[0].platform.value
-                delivery_status = "delivered"
+                delivery_status = DELIVERY_STATUS_DISPATCHING
             else:
                 channel = "multi"
-                delivery_status = "delivered"
+                delivery_status = DELIVERY_STATUS_DISPATCHING
 
+            # The fire slot is claimed exactly once (no infinite retries for a slot whose
+            # provider honestly reported "not delivered"); its final status is derived from
+            # the provider receipts below.
             claimed_delivery_id = await self._reminders.claim_delivery_fire_slot(
                 session,
                 scope,
@@ -737,6 +769,7 @@ class ReminderService:
             )
 
             sent_count = 0
+            receipts: list[PushDeliveryReceipt] = []
             if claimed_delivery_id is not None:
                 if targets:
                     copy = build_desensitized_push_copy(
@@ -757,8 +790,20 @@ class ReminderService:
                             scheduled_for=scheduled_for,
                             lead_day=lead_day,
                         )
-                        await self._push_provider.send(msg)
-                        sent_count += 1
+                        receipts.append(await self._push_provider.send(msg))
+                    final_status, sent_count = summarize_push_receipts(receipts)
+                    await self._reminders.update_delivery_status(
+                        session,
+                        scope,
+                        delivery_id=claimed_delivery_id,
+                        status=final_status,
+                    )
+                    if sent_count == 0:
+                        logger.info(
+                            "reminders.slot_not_delivered",
+                            reminder_id=str(row.id),
+                            delivery_status=final_status,
+                        )
                 row.last_fired_at = now
 
             effective_once_date = row.once_date
@@ -796,7 +841,7 @@ class ReminderService:
             row.version += 1
             row.updated_at = now
             await session.flush()
-            return claimed_delivery_id is not None, sent_count, completed
+            return sent_count > 0, sent_count, completed
 
 
 async def scan_and_deliver_due_reminders(

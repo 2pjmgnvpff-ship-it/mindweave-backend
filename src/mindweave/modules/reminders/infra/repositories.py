@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -379,6 +379,24 @@ class ReminderRepository:
             .with_for_update(skip_locked=skip_locked)
         )
         return await session.scalar(stmt)
+
+    async def update_delivery_status(
+        self,
+        session: AsyncSession,
+        scope: UserScope,
+        *,
+        delivery_id: UUID,
+        status: str,
+    ) -> None:
+        """Record the honest final provider outcome for a claimed fire slot."""
+        await session.execute(
+            update(ReminderDeliveryRow)
+            .where(
+                ReminderDeliveryRow.id == delivery_id,
+                ReminderDeliveryRow.user_id == scope.user_id,
+            )
+            .values(status=status)
+        )
 
     async def list_for_user(
         self,
