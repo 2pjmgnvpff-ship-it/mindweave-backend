@@ -201,3 +201,78 @@ export function buildVellumSections(rawFacts, rawReminders) {
     .map((f) => ({ text: f.content || '', recordId: f.recordId || null, pending: f.status === 'pending' }));
   return { dateLines, detailLines };
 }
+
+const TRACE_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}(?:-[0-9a-f]{4}){0,2}(?:-[0-9a-f]{12})?/gi;
+
+function cleanTraceText(raw) {
+  return String(raw ?? '').replace(TRACE_UUID_RE, '').replace(/\s+/g, ' ').trim();
+}
+
+function numericCount(step, pattern) {
+  if (typeof step?.count === 'number' && Number.isFinite(step.count) && step.count >= 0) {
+    return Math.floor(step.count);
+  }
+  const m = pattern.exec(step?.label || '');
+  return m ? Number(m[1]) : null;
+}
+
+/** Sanitize a streaming agent_step payload so zero UUIDs or stray whitespace ever reach the UI. */
+export function sanitizeAgentStep(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = cleanTraceText(raw.label);
+  if (!label) return null;
+  const detail = cleanTraceText(raw.detail);
+  const count = typeof raw.count === 'number' && Number.isFinite(raw.count) && raw.count >= 0 ? Math.floor(raw.count) : null;
+  return {
+    step: raw.step ?? null,
+    phase: String(raw.phase || '').trim().toLowerCase(),
+    label,
+    detail,
+    count,
+  };
+}
+
+/** Build a whisper-quiet Chinese summary line from verified agent_step events. */
+export function summarizeAgentTrace(rawSteps) {
+  const steps = (rawSteps || []).map(sanitizeAgentStep).filter(Boolean);
+  if (!steps.length) return '';
+  let pages = null;
+  let hits = null;
+  let checked = null;
+  for (const s of steps) {
+    const p = s.phase;
+    const isRecall = /(recall|search|retrieve|match|hit|cite|bm25|evidence)/.test(p) || /命中|原话/.test(s.label);
+    const isScan = !isRecall && (/(scan|load|read|material|record|fetch|journal|page)/.test(p) || /翻阅|查阅/.test(s.label));
+    const isCheck = !isRecall && !isScan && (/(fact|memory|reminder|schedule|check|profile)/.test(p) || /核对|细节|日程/.test(s.label));
+    if (isScan) {
+      const n = numericCount(s, /(\d+)\s*页/);
+      if (n !== null) pages = n;
+    } else if (isRecall) {
+      const n = numericCount(s, /(\d+)\s*(?:处|条|页)/);
+      if (n !== null) hits = n;
+    } else if (isCheck) {
+      const n = numericCount(s, /(\d+)\s*(?:条|项)/);
+      if (n !== null) checked = n;
+    }
+  }
+  const parts = [];
+  if (pages !== null && pages > 0) parts.push(`已查阅 ${pages} 页手帐`);
+  else if (pages === 0) parts.push('已翻阅手帐');
+  if (hits !== null && hits > 0) parts.push(`命中 ${hits} 处原话`);
+  else if (checked !== null && checked > 0 && parts.length < 2) parts.push(`核对 ${checked} 项记忆`);
+  if (parts.length) return parts.join(' · ');
+  const tail = steps[steps.length - 1].label.replace(/[…\.。]+$/, '').trim();
+  return tail || `已核对 ${steps.length} 步手帐细节`;
+}
+
+/** Format an action proposal title/body into a serene human-readable preview (no [YYYY-MM-DD] raw logs). */
+export function formatActionPreview(raw) {
+  const cleaned = cleanTraceText(
+    String(raw ?? '')
+      .replace(/\[(\d{4}-\d{2}-\d{2})\]/g, (_, d) => formatDateCn(d) || d)
+      .replace(/\r?\n+\s*(?:[-•·*]\s*)?/g, ' · '),
+  );
+  return cleaned.replace(/(?:\s*·\s*){2,}/g, ' · ').replace(/^·\s*|\s*·$/g, '').trim();
+}
+
+

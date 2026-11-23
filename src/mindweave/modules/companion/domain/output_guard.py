@@ -5,8 +5,10 @@ Pure Python domain module — zero framework, database, or vendor SDK imports.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from mindweave.ai.schemas.contracts import CompanionChatOutput
 from mindweave.shared.enums import Tier
@@ -426,19 +428,229 @@ def sanitize_companion_output(
     return sanitized, combined_report
 
 
+_JSON_SIMPLE_ESCAPES: dict[str, str] = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "b": "\b",
+    "f": "\f",
+}
+
+
 class StreamingReplyExtractor:
-    """Incrementally extracts `<reply>...</reply>` body across chunk splits while capturing tail tags."""
+    """Incrementally extracts `<reply>...</reply>` or fallback JSON `\"reply_text\"` across chunk splits."""
 
     def __init__(self) -> None:
         self._state: str = "detect"
         self._buf: str = ""
         self._tail_buf: str = ""
         self.used_xml_tags: bool = False
+        self.used_json_fallback: bool = False
         self.reply_closed: bool = False
+
+        # Incremental JSON `"reply_text"` scanner state
+        self._json_raw_buf: str = ""
+        self._json_pos: int = 0
+        self._json_depth: int = 0
+        self._json_in_str: bool = False
+        self._json_esc: bool = False
+        self._json_expect_key: bool = False
+        self._json_reading_key: bool = False
+        self._json_key_buf: list[str] = []
+        self._json_await_colon_for_reply: bool = False
+        self._json_await_quote_for_reply: bool = False
+        self._json_unicode_buf: str | None = None
+        self._json_pending_high_surrogate: int | None = None
 
     @property
     def tail_text(self) -> str:
         return self._tail_buf
+
+    def parsed_json_payload(self) -> dict[str, Any] | None:
+        """Parse accumulated JSON fallback payload once the stream completes, if valid JSON."""
+        if not self.used_json_fallback or not self._json_raw_buf:
+            return None
+        candidate = self._json_raw_buf.strip()
+        if candidate.endswith("```"):
+            candidate = candidate[: candidate.rfind("```")].strip()
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            last_brace = candidate.rfind("}")
+            if last_brace == -1:
+                return None
+            try:
+                parsed = json.loads(candidate[: last_brace + 1])
+            except json.JSONDecodeError:
+                return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _enter_json_mode(self, initial_json: str) -> str:
+        self.used_json_fallback = True
+        self._state = "json_seek_key"
+        self._buf = ""
+        self._json_raw_buf = initial_json
+        self._json_pos = 0
+        self._json_depth = 0
+        self._json_in_str = False
+        self._json_esc = False
+        self._json_expect_key = False
+        self._json_reading_key = False
+        self._json_key_buf.clear()
+        self._json_await_colon_for_reply = False
+        self._json_await_quote_for_reply = False
+        self._json_unicode_buf = None
+        self._json_pending_high_surrogate = None
+        return self._drain_json()
+
+    def _drain_json(self) -> str:
+        out: list[str] = []
+        buf = self._json_raw_buf
+        n = len(buf)
+        i = self._json_pos
+
+        while i < n:
+            ch = buf[i]
+            i += 1
+
+            if self._state == "json_tail":
+                # Keep full JSON text in `_json_raw_buf`; never emit trailing fields to reply stream
+                i = n
+                break
+
+            if self._state == "json_seek_key":
+                if self._json_in_str:
+                    if self._json_esc:
+                        if self._json_reading_key:
+                            self._json_key_buf.append(_JSON_SIMPLE_ESCAPES.get(ch, ch))
+                        self._json_esc = False
+                    elif ch == "\\":
+                        self._json_esc = True
+                    elif ch == '"':
+                        self._json_in_str = False
+                        if self._json_reading_key:
+                            key_name = "".join(self._json_key_buf)
+                            self._json_reading_key = False
+                            self._json_key_buf.clear()
+                            if key_name == "reply_text":
+                                self._json_await_colon_for_reply = True
+                    else:
+                        if self._json_reading_key:
+                            self._json_key_buf.append(ch)
+                elif self._json_await_colon_for_reply:
+                    if ch in " \t\r\n":
+                        continue
+                    self._json_await_colon_for_reply = False
+                    if ch == ":":
+                        self._json_await_quote_for_reply = True
+                elif self._json_await_quote_for_reply:
+                    if ch in " \t\r\n":
+                        continue
+                    self._json_await_quote_for_reply = False
+                    if ch == '"':
+                        self._state = "json_reply_str"
+                        self._json_esc = False
+                        self._json_unicode_buf = None
+                        self._json_pending_high_surrogate = None
+                else:
+                    if ch == "{":
+                        self._json_depth += 1
+                        self._json_expect_key = self._json_depth == 1
+                    elif ch == "}":
+                        self._json_depth = max(0, self._json_depth - 1)
+                        self._json_expect_key = False
+                    elif ch == "[":
+                        self._json_depth += 1
+                        self._json_expect_key = False
+                    elif ch == "]":
+                        self._json_depth = max(0, self._json_depth - 1)
+                        self._json_expect_key = False
+                    elif ch == ",":
+                        self._json_expect_key = self._json_depth == 1
+                    elif ch == ":":
+                        self._json_expect_key = False
+                    elif ch == '"':
+                        self._json_in_str = True
+                        self._json_esc = False
+                        if self._json_depth == 1 and self._json_expect_key:
+                            self._json_reading_key = True
+                            self._json_key_buf.clear()
+                            self._json_expect_key = False
+                        else:
+                            self._json_reading_key = False
+                continue
+
+            # self._state == "json_reply_str"
+            if self._json_unicode_buf is not None:
+                self._json_unicode_buf += ch
+                if len(self._json_unicode_buf) == 4:
+                    hex_str = self._json_unicode_buf
+                    self._json_unicode_buf = None
+                    try:
+                        code_unit = int(hex_str, 16)
+                    except ValueError:
+                        if self._json_pending_high_surrogate is not None:
+                            out.append("\ufffd")
+                            self._json_pending_high_surrogate = None
+                        out.append(f"\\u{hex_str}")
+                        continue
+
+                    if 0xD800 <= code_unit <= 0xDBFF:
+                        if self._json_pending_high_surrogate is not None:
+                            out.append("\ufffd")
+                        self._json_pending_high_surrogate = code_unit
+                    elif (
+                        0xDC00 <= code_unit <= 0xDFFF
+                        and self._json_pending_high_surrogate is not None
+                    ):
+                        cp = (
+                            0x10000
+                            + ((self._json_pending_high_surrogate - 0xD800) << 10)
+                            + (code_unit - 0xDC00)
+                        )
+                        self._json_pending_high_surrogate = None
+                        out.append(chr(cp))
+                    else:
+                        if self._json_pending_high_surrogate is not None:
+                            out.append("\ufffd")
+                            self._json_pending_high_surrogate = None
+                        out.append(chr(code_unit))
+                continue
+
+            if self._json_esc:
+                self._json_esc = False
+                if ch == "u":
+                    self._json_unicode_buf = ""
+                else:
+                    if self._json_pending_high_surrogate is not None:
+                        out.append("\ufffd")
+                        self._json_pending_high_surrogate = None
+                    out.append(_JSON_SIMPLE_ESCAPES.get(ch, ch))
+                continue
+
+            if ch == "\\":
+                self._json_esc = True
+                continue
+
+            if ch == '"':
+                if self._json_pending_high_surrogate is not None:
+                    out.append("\ufffd")
+                    self._json_pending_high_surrogate = None
+                self.reply_closed = True
+                self._state = "json_tail"
+                i = n
+                break
+
+            if self._json_pending_high_surrogate is not None:
+                out.append("\ufffd")
+                self._json_pending_high_surrogate = None
+            out.append(ch)
+
+        self._json_pos = i
+        return "".join(out)
 
     def _drain_tagged_body(self) -> str:
         lower_buf = self._buf.lower()
@@ -481,6 +693,10 @@ class StreamingReplyExtractor:
             self._tail_buf += chunk
             return ""
 
+        if self._state in ("json_seek_key", "json_reply_str", "json_tail"):
+            self._json_raw_buf += chunk
+            return self._drain_json()
+
         if self._state == "detect":
             self._buf += chunk
             lstripped = self._buf.lstrip()
@@ -495,6 +711,29 @@ class StreamingReplyExtractor:
                 self._buf = lstripped[7:]
                 return self._drain_tagged_body()
 
+            # Direct JSON object fallback (live provider ignored XML streaming override)
+            if lstripped.startswith("{"):
+                return self._enter_json_mode(lstripped)
+
+            # Markdown-fenced JSON fallback: ```json\n{...} or ```\n{...}
+            if lstripped.startswith("`"):
+                if len(lstripped) < 3 and all(c == "`" for c in lstripped):
+                    return ""
+                if lstripped.startswith("```"):
+                    nl_idx = lstripped.find("\n")
+                    if nl_idx == -1:
+                        header = lstripped[3:].strip().lower()
+                        if len(header) <= 4 and "json".startswith(header):
+                            return ""
+                    else:
+                        header = lstripped[3:nl_idx].strip().lower()
+                        if header in ("", "json"):
+                            after_fence = lstripped[nl_idx + 1 :].lstrip()
+                            if not after_fence:
+                                return ""
+                            if after_fence.startswith("{"):
+                                return self._enter_json_mode(after_fence)
+
             self._state = "plain"
             emitted = self._buf
             self._buf = ""
@@ -505,6 +744,9 @@ class StreamingReplyExtractor:
         return self._drain_tagged_body()
 
     def finalize(self) -> str:
+        if self._state in ("json_seek_key", "json_reply_str", "json_tail"):
+            self.reply_closed = True
+            return ""
         if self._state == "detect":
             rem = self._buf
             self._buf = ""

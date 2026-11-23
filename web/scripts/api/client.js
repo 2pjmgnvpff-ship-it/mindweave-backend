@@ -5,6 +5,8 @@
 // TODO(P1 hardening): tokens live in localStorage for P0. Move the refresh token to an
 // httpOnly SameSite cookie (or a service-worker-held secret) and keep the access token in memory.
 
+import { getApiBase } from '../native-bridge.js';
+
 const TOKEN_KEY = 'mw.auth';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -77,13 +79,60 @@ function memoryStore() {
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
 }
 
+function sanitizeMultipartToken(value) {
+  return String(value ?? '').replace(/[\r\n"]/g, '_');
+}
+
+/**
+ * Serialize FormData into an RFC 7578 multipart/form-data Uint8Array.
+ * Works around WebKit Bug #188240 where WKURLSchemeHandler strips FormData bodies.
+ */
+export async function serializeFormData(form) {
+  const boundary = `----MWFormBoundary${uuid().replace(/-/g, '')}`;
+  const enc = new TextEncoder();
+  const crlf = enc.encode('\r\n');
+  const chunks = [];
+  for (const [rawName, val] of form.entries()) {
+    const name = sanitizeMultipartToken(rawName);
+    if (typeof Blob !== 'undefined' && val instanceof Blob) {
+      const fname = sanitizeMultipartToken(val.name || 'upload.bin');
+      const mime = sanitizeMultipartToken(val.type || 'application/octet-stream');
+      chunks.push(
+        enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"; filename="${fname}"\r\nContent-Type: ${mime}\r\n\r\n`),
+        new Uint8Array(await val.arrayBuffer()),
+        crlf,
+      );
+    } else {
+      chunks.push(
+        enc.encode(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n`),
+        enc.encode(String(val ?? '')),
+        crlf,
+      );
+    }
+  }
+  chunks.push(enc.encode(`--${boundary}--\r\n`));
+  const total = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    bytes.set(c, offset);
+    offset += c.byteLength;
+  }
+  return { bytes, contentType: `multipart/form-data; boundary=${boundary}` };
+}
+
 /**
  * @param {{fetchImpl?: typeof fetch, storage?: Storage, base?: string, onAuthLost?: () => void}} opts
  */
 export function createClient(opts = {}) {
   const fetchImpl = opts.fetchImpl || ((...a) => globalThis.fetch(...a));
   const storage = opts.storage || globalThis.localStorage || memoryStore();
-  const base = opts.base ?? '/v1';
+  const explicitBase = opts.base;
+  const resolveBase = () => {
+    if (explicitBase !== undefined) return explicitBase;
+    const origin = getApiBase();
+    return origin ? `${origin}/v1` : '/v1';
+  };
   let onAuthLost = opts.onAuthLost || (() => {});
   let refreshing = null;
 
@@ -105,7 +154,7 @@ export function createClient(opts = {}) {
         const tokens = getTokens();
         if (!tokens?.refreshToken) return false;
         try {
-          const res = await fetchImpl(`${base}/auth/refresh`, {
+          const res = await fetchImpl(`${resolveBase()}/auth/refresh`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify({ refreshToken: tokens.refreshToken }),
@@ -127,7 +176,7 @@ export function createClient(opts = {}) {
   }
 
   function buildUrl(path, query) {
-    let url = path.startsWith('http') ? path : `${base}${path}`;
+    let url = /^https?:\/\//i.test(path) ? path : `${resolveBase()}${path}`;
     if (query) {
       const qs = Object.entries(query)
         .filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -162,12 +211,21 @@ export function createClient(opts = {}) {
     const auth = o.auth !== false;
     const idemKey = o.idem === false ? null : typeof o.idem === 'string' ? o.idem : MUTATING.has(m) ? uuid() : null;
     const url = buildUrl(path, o.query);
+    const rawForm = o.form || (typeof FormData !== 'undefined' && o.body instanceof FormData ? o.body : null);
+    let serializedForm = null;
+    if (rawForm && globalThis.location?.protocol === 'mindweave:' && typeof FormData !== 'undefined' && rawForm instanceof FormData) {
+      serializedForm = await serializeFormData(rawForm);
+    }
 
     const attempt = async () => {
       const headers = { Accept: o.raw ? 'text/event-stream, application/json' : 'application/json', ...(o.headers || {}) };
       let body;
-      if (o.form) body = o.form;
-      else if (o.body !== undefined) {
+      if (serializedForm) {
+        headers['Content-Type'] = serializedForm.contentType;
+        body = serializedForm.bytes;
+      } else if (rawForm) {
+        body = rawForm;
+      } else if (o.body !== undefined) {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify(o.body);
       }

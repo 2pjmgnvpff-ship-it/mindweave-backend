@@ -425,7 +425,13 @@ class ReminderRepository:
 
         stmt = (
             select(ReminderRow)
-            .outerjoin(PersonRow, PersonRow.id == ReminderRow.person_id)
+            .outerjoin(
+                PersonRow,
+                and_(
+                    PersonRow.id == ReminderRow.person_id,
+                    PersonRow.user_id == scope.user_id,
+                ),
+            )
             .where(
                 ReminderRow.user_id == scope.user_id,
                 or_(

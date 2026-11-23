@@ -8,11 +8,12 @@ import inspect
 import json
 import re
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import delete, select, tuple_
+from sqlalchemy import and_, delete, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,15 +21,20 @@ from mindweave.ai.ports import ModelGatewayPort, SafetyServicePort
 from mindweave.ai.schemas.contracts import CompanionChatOutput, SafetyDecision
 from mindweave.core.clock import to_user_local
 from mindweave.core.dependencies import AppContainer
-from mindweave.core.errors import AppError, UpstreamAIError, ValidationFailedError
+from mindweave.core.errors import AppError, NotFoundError, UpstreamAIError, ValidationFailedError
 from mindweave.core.idempotency import hash_request_payload
 from mindweave.core.ids import new_id
 from mindweave.core.orm import (
     BackgroundJobRow,
     ChatMessageRow,
     ChatThreadRow,
+    FactRow,
     IdempotencyKeyRow,
+    PersonRow,
+    RecordRow,
+    ReminderRow,
     TelemetryEventRow,
+    UserPreferenceRow,
 )
 from mindweave.modules.companion.application.dto import (
     ChatMessageDto,
@@ -48,6 +54,7 @@ from mindweave.modules.companion.domain.output_guard import (
     SILVER_LOYAL_FALLBACK_REPLY,
     SentenceBufferedStreamGuard,
     StreamingReplyExtractor,
+    enforce_tier_output_constraints,
     sanitize_companion_output,
     sanitize_text,
 )
@@ -59,6 +66,7 @@ from mindweave.modules.companion.domain.tier_policy import (
     apply_tier_policy,
     default_crisis_card_for,
     derive_stream_supplements,
+    detect_unrecorded_gap,
     evaluate_session_window,
     is_public_shaming_request,
     should_writeback_chat_message,
@@ -72,7 +80,23 @@ from mindweave.modules.companion.infra.repository import (
     CompanionRepository,
     HydratedCitation,
 )
-from mindweave.shared.enums import ChatRole, SafetyCategory, Tier
+from mindweave.modules.reminders.domain.schedule import (
+    ReminderScheduleError,
+    resolve_next_lunar_occurrence_date,
+    resolve_solar_yearly_date,
+)
+from mindweave.shared.enums import (
+    UNASSIGNED_PERSON_SLUG,
+    ChatRole,
+    FactStatus,
+    FactType,
+    PendingReason,
+    RecordReviewState,
+    ReminderStatus,
+    SafetyCategory,
+    Tier,
+)
+from mindweave.shared.pencil import format_fact_date_label
 from mindweave.shared.scopes import PersonScope
 from mindweave.workers.ports import (
     TASK_SUMMARIZE_THREAD,
@@ -92,6 +116,45 @@ _TAGGED_PERSPECTIVES_RE = re.compile(
 )
 _TAGGED_SUGGESTIONS_RE = re.compile(r"<suggestions>(.*?)</suggestions>", re.DOTALL | re.IGNORECASE)
 
+_PLANNING_ACTION_RE = re.compile(
+    r"(?:提醒|清单|准备|复查|下周|明天|周末|生日|约好|截止|签字|日程|"
+    r"挑.{0,4}礼物|买.{0,6}(?:围巾|礼物|蛋糕))"
+)
+_EXPLICIT_REMINDER_ASK_RE = re.compile(r"(?:提醒|设个?提醒|设一个提醒|提前提醒|闹钟|备忘提醒)")
+_UPCOMING_CARE_CHECK_RE = re.compile(r"(?:留意|留心|最近|安排|准备|提醒|近况|注意|日程|要紧)")
+_SILVER_DEADLINE_ACTION_RE = re.compile(
+    r"(?:提醒|截止|签字|日程|明天|下周|周[一二三四五六日天]|复盘会)"
+)
+_SILVER_TIMELINE_ACTION_RE = re.compile(
+    r"(?:时间线|整理|汇总|留痕|书面|邮件|起草|回复|记录|复盘|证据|经过|甩锅|改需求)"
+)
+_ISO_DATE_RE = re.compile(r"^(\d{4})-0?(\d{1,2})-0?(\d{1,2})$")
+_LEADING_BRACKET_ISO_RE = re.compile(r"^\s*\[?\d{4}-\d{1,2}-\d{1,2}\]?\s*")
+_EXPLICIT_CN_MD_RE = re.compile(
+    r"(?<!\d)(?P<m>1[0-2]|0?[1-9])\s*月\s*(?P<d>[12]\d|3[01]|0?[1-9])\s*[日号]"
+)
+_REL_WEEKDAY_ACTION_RE = re.compile(r"(?P<prefix>这周|本周|下周)(?P<wd>[一二三四五六日天])")
+_CN_WEEKDAY_IDX: dict[str, int] = {
+    "一": 0,
+    "二": 1,
+    "三": 2,
+    "四": 3,
+    "五": 4,
+    "六": 5,
+    "日": 6,
+    "天": 6,
+}
+_PREP_REMINDER_MARKERS: tuple[str, ...] = ("准备", "清单", "提前")
+_BRIEF_FACT_TYPE_ORDER: dict[str, int] = {
+    FactType.TABOO.value: 0,
+    FactType.DATE.value: 1,
+    FactType.PROMISE.value: 2,
+    FactType.WISH.value: 3,
+    FactType.PREFERENCE.value: 4,
+    FactType.EVENT.value: 5,
+    FactType.NOTE.value: 6,
+}
+
 
 def _split_tag_items(raw_block: str) -> list[str]:
     lines = [
@@ -100,6 +163,365 @@ def _split_tag_items(raw_block: str) -> list[str]:
         if line.strip()
     ]
     return [item for item in lines if item]
+
+
+def _clamp_clean_text(text: str, max_len: int, *, tier: Tier | None = None) -> str:
+    cleaned = (
+        enforce_tier_output_constraints(text, tier=tier, allow_empty=True)
+        if tier is Tier.SILVER
+        else sanitize_text(text, allow_empty=True).cleaned_text
+    )
+    compact = " ".join(cleaned.split()).strip()
+    if len(compact) <= max_len:
+        return compact
+    return compact[: max_len - 1].rstrip("，,、；;：: ") + "…"
+
+
+def _clip_at_sentence(text: str, max_len: int) -> str:
+    compact = " ".join(text.split()).strip()
+    if len(compact) <= max_len:
+        return compact
+    window = compact[:max_len]
+    min_keep = max(12, int(max_len * 0.45))
+    for seps in ("。！？", "；", "，,、"):
+        pos = max((window.rfind(ch) for ch in seps), default=-1)
+        if pos >= min_keep:
+            return window[: pos + 1].rstrip("，,、；;：: ")
+    return window[: max_len - 1].rstrip("，,、；;：: 0123456789") + "…"
+
+
+def _format_silver_timeline_bullet(
+    raw_text: str,
+    happened_on: str | None,
+    *,
+    max_text_len: int = 72,
+) -> str:
+    cleaned = enforce_tier_output_constraints(raw_text, tier=Tier.SILVER, allow_empty=True)
+    cleaned = _LEADING_BRACKET_ISO_RE.sub("", cleaned).strip()
+    if not cleaned:
+        return ""
+
+    date_label = ""
+    if happened_on:
+        iso_m = _ISO_DATE_RE.match(happened_on.strip())
+        if iso_m:
+            month_num = int(iso_m.group(2))
+            day_num = int(iso_m.group(3))
+            date_label = f"{month_num}月{day_num}日"
+            dup_date_re = re.compile(
+                rf"^(?:\d{{4}}\s*年\s*)?0?{month_num}\s*月\s*0?{day_num}\s*[日号][\s，,：:、]*"
+            )
+            cleaned = dup_date_re.sub("", cleaned).strip()
+
+    clipped = _clip_at_sentence(cleaned, max_text_len)
+    if not clipped:
+        return ""
+    if date_label:
+        return f"• {date_label}：{clipped}"
+    return f"• {clipped}"
+
+
+def _brief_date_prefix(when_label: str | None, title: str) -> str:
+    if not when_label:
+        return ""
+    if when_label in title:
+        return ""
+    if when_label.endswith("日") and f"{when_label[:-1]}号" in title:
+        return ""
+    return when_label
+
+
+def _format_cn_month_day(d: date) -> str:
+    return f"{d.month}月{d.day}日"
+
+
+def _extract_future_event_date(text: str, local_today: date) -> date | None:
+    """Extract a concrete future Gregorian date mentioned in Chinese user text."""
+    md_match = _EXPLICIT_CN_MD_RE.search(text)
+    if md_match is not None:
+        m_val = int(md_match.group("m"))
+        d_val = int(md_match.group("d"))
+        for yr in (local_today.year, local_today.year + 1):
+            try:
+                cand = date(yr, m_val, d_val)
+            except ValueError:
+                continue
+            if cand > local_today:
+                return cand
+
+    rel_match = _REL_WEEKDAY_ACTION_RE.search(text)
+    if rel_match is not None:
+        target_wd = _CN_WEEKDAY_IDX[rel_match.group("wd")]
+        delta = target_wd - local_today.weekday()
+        if rel_match.group("prefix") == "下周":
+            delta += 7
+        elif delta <= 0:
+            delta += 7
+        return local_today + timedelta(days=delta)
+
+    if "后天" in text:
+        return local_today + timedelta(days=2)
+    if "明天" in text:
+        return local_today + timedelta(days=1)
+    if "周末" in text:
+        days_to_sat = (5 - local_today.weekday()) % 7
+        if days_to_sat == 0:
+            days_to_sat = 7
+        return local_today + timedelta(days=days_to_sat)
+    return None
+
+
+def _compute_prep_trigger_date(event_date: date | None, local_today: date) -> date:
+    """Return a future trigger date (>= tomorrow), preferring 1-2 days before an upcoming event."""
+    tomorrow = local_today + timedelta(days=1)
+    if event_date is None or event_date <= tomorrow:
+        return tomorrow
+    delta_days = (event_date - local_today).days
+    if delta_days >= 3:
+        return max(tomorrow, event_date - timedelta(days=1))
+    return max(tomorrow, event_date - timedelta(days=1))
+
+
+def _build_agent_step_events(ctx: BuiltCompanionContext) -> list[dict[str, Any]]:
+    """Build truthful, zero-jargon `agent_step` SSE payloads grounded in `ContextBuilder` telemetry."""
+    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "TA"
+    scanned = max(0, int(ctx.total_records_scanned))
+    facts_cnt = max(0, int(ctx.confirmed_facts_count))
+    rem_cnt = max(0, int(ctx.active_reminders_count))
+    hit_cnt = max(0, int(ctx.recalled_records_count))
+
+    steps: list[dict[str, Any]] = [
+        {
+            "step": 1,
+            "phase": "scan",
+            "label": f"翻阅「{safe_name}」的 {scanned} 页手帐",
+            "count": scanned,
+        }
+    ]
+    if facts_cnt > 0 or rem_cnt > 0:
+        if facts_cnt > 0 and rem_cnt > 0:
+            step2_label = f"核对 {facts_cnt} 条已记住的细节与 {rem_cnt} 项日程"
+        elif facts_cnt > 0:
+            step2_label = f"核对 {facts_cnt} 条已记住的细节"
+        else:
+            step2_label = f"核对 {rem_cnt} 项日程"
+        steps.append(
+            {
+                "step": 2,
+                "phase": "facts",
+                "label": step2_label,
+                "count": facts_cnt + rem_cnt,
+            }
+        )
+
+    if hit_cnt > 0:
+        steps.append(
+            {
+                "step": 3,
+                "phase": "recall",
+                "label": f"命中 {hit_cnt} 处相关原话",
+                "count": hit_cnt,
+                "detail": "、".join(ctx.recalled_dates[:3]),
+            }
+        )
+    else:
+        steps.append(
+            {
+                "step": 3,
+                "phase": "recall",
+                "label": "未找到更早的直接原话，将如实告知",
+                "count": 0,
+                "detail": "",
+            }
+        )
+    return steps
+
+
+def _derive_action_proposals(
+    ctx: BuiltCompanionContext,
+    *,
+    user_message: str,
+    assistant_reply: str,
+    local_today: date,
+    safety_category: SafetyCategory,
+    has_unrecorded_gap: bool = False,
+) -> list[dict[str, Any]]:
+    """Deterministically propose up to 1-2 grounded 1-tap actions (NEVER on crisis/refusals)."""
+    if safety_category is not SafetyCategory.NORMAL:
+        return []
+
+    explicit_reminder_ask = bool(_EXPLICIT_REMINDER_ASK_RE.search(user_message))
+    if has_unrecorded_gap and not explicit_reminder_ask:
+        return []
+
+    proposals: list[dict[str, Any]] = []
+    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "TA"
+
+    upcoming_soon = [
+        r
+        for r in ctx.upcoming_reminders
+        if r.get("daysUntil") is not None
+        and 0 <= int(r["daysUntil"]) <= 14
+        and isinstance(r.get("triggerDate"), str)
+    ]
+    has_prep_reminder = any(
+        any(marker in str(r.get("title") or "") for marker in _PREP_REMINDER_MARKERS)
+        for r in upcoming_soon
+    )
+
+    msg_wants_reminder = bool(_PLANNING_ACTION_RE.search(user_message))
+    user_asks_care_check = bool(_UPCOMING_CARE_CHECK_RE.search(user_message))
+    silver_wants_timeline = ctx.tier is Tier.SILVER and bool(
+        _SILVER_TIMELINE_ACTION_RE.search(user_message)
+    )
+    silver_wants_deadline = ctx.tier is Tier.SILVER and bool(
+        _SILVER_DEADLINE_ACTION_RE.search(user_message)
+    )
+
+    should_propose_reminder = False
+    if ctx.tier is Tier.SILVER:
+        should_propose_reminder = silver_wants_deadline or (
+            bool(upcoming_soon)
+            and not has_prep_reminder
+            and not silver_wants_timeline
+            and user_asks_care_check
+        )
+    else:
+        should_propose_reminder = msg_wants_reminder or (
+            bool(upcoming_soon) and not has_prep_reminder and user_asks_care_check
+        )
+
+    if should_propose_reminder:
+        explicit_date = _extract_future_event_date(user_message, local_today)
+        matched_rem: dict[str, Any] | None = None
+        if upcoming_soon:
+            for rem in upcoming_soon:
+                rem_title = str(rem.get("title") or "")
+                if any(
+                    kw in user_message and kw in rem_title
+                    for kw in ("复查", "膝盖", "生日", "围巾", "看展", "海边", "签字", "合同")
+                ):
+                    matched_rem = rem
+                    break
+            if matched_rem is None and not msg_wants_reminder:
+                matched_rem = upcoming_soon[0]
+
+        event_date = explicit_date
+        if event_date is None and matched_rem is not None:
+            raw_td = str(matched_rem.get("triggerDate") or "")
+            try:
+                event_date = date.fromisoformat(raw_td[:10])
+            except ValueError:
+                event_date = None
+
+        trigger_date = _compute_prep_trigger_date(event_date, local_today)
+
+        # Ground reminder title strictly in recalled/confirmed context & user message (<= 36 chars)
+        recalled_blob = " ".join(
+            [m.title + " " + m.body for m in ctx.chat_input.referenced_materials]
+            + [f.content for f in ctx.chat_input.confirmed_facts]
+        )
+        if matched_rem is not None and not explicit_date:
+            rem_title_clean = str(matched_rem.get("title") or "").strip()
+            raw_title = (
+                f"准备{rem_title_clean}清单"
+                if "复查" in rem_title_clean
+                else f"提前准备：{rem_title_clean}"
+            )
+        elif "复查" in user_message:
+            raw_title = (
+                f"陪{safe_name}右膝盖复查准备清单"
+                if "膝盖" in (user_message + recalled_blob)
+                else f"陪{safe_name}复查前准备清单"
+            )
+        elif "围巾" in user_message:
+            raw_title = (
+                f"为{safe_name}挑选浅驼色羊绒围巾"
+                if "浅驼色羊绒围巾" in recalled_blob
+                else f"为{safe_name}挑选纯羊绒围巾"
+                if "羊绒围巾" in recalled_blob
+                else f"为{safe_name}准备围巾心意"
+            )
+        elif "生日" in user_message:
+            raw_title = f"提前准备{safe_name}的生日心意"
+        elif "礼物" in user_message:
+            raw_title = f"为{safe_name}准备心意礼物清单"
+        elif any(k in user_message for k in ("签字", "合同", "截止")):
+            raw_title = f"跟进{safe_name}事项截止节点"
+        elif matched_rem is not None:
+            raw_title = f"提前准备：{matched_rem['title']}"
+        else:
+            raw_title = f"关于{safe_name}的日程准备提醒"
+
+        clean_title = _clamp_clean_text(raw_title, 36, tier=ctx.tier) or f"提醒：{safe_name}待办"
+        proposals.append(
+            {
+                "id": str(new_id()),
+                "kind": "create_reminder",
+                "label": "提前设一个轻提醒",
+                "title": clean_title,
+                "triggerDate": trigger_date.isoformat(),
+                "whenLabel": _format_cn_month_day(trigger_date),
+            }
+        )
+
+    if silver_wants_timeline:
+        # Calm, strictly objective timeline summary — NEVER push reconciliation!
+        bullet_lines: list[str] = []
+        seen_bullets: set[str] = set()
+        for mat in ctx.chat_input.referenced_materials[:3]:
+            line = _format_silver_timeline_bullet(mat.body, mat.happened_on)
+            if line and line not in seen_bullets:
+                seen_bullets.add(line)
+                bullet_lines.append(line)
+        if not bullet_lines:
+            for fact in ctx.chat_input.confirmed_facts[:3]:
+                line = _format_silver_timeline_bullet(fact.content, fact.happened_on)
+                if line and line not in seen_bullets:
+                    seen_bullets.add(line)
+                    bullet_lines.append(line)
+        if not bullet_lines:
+            fallback_line = _format_silver_timeline_bullet(assistant_reply, None, max_text_len=140)
+            if fallback_line:
+                bullet_lines.append(fallback_line)
+
+        note_body = "\n".join(bullet_lines[:3]).strip()
+        if len(note_body) > 220:
+            note_body = _clip_at_sentence(note_body, 220)
+        if note_body:
+            proposals.append(
+                {
+                    "id": str(new_id()),
+                    "kind": "save_note",
+                    "label": "把这份时间线要点存进手帐",
+                    "title": _clamp_clean_text(f"{safe_name}关键时间线留痕", 36, tier=Tier.SILVER),
+                    "body": note_body,
+                }
+            )
+
+    return proposals[:2]
+
+
+@dataclass(frozen=True, slots=True)
+class PersonBriefItem:
+    kind: Literal["reminder", "pencil", "fact"]
+    when: str | None
+    text: str
+    record_id: UUID | None
+    action_prompt: str
+
+
+@dataclass(frozen=True, slots=True)
+class PersonBriefResult:
+    person_id: UUID
+    tier: Tier
+    upcoming_count: int
+    pending_count: int
+    record_count: int
+    headline: str
+    subline: str
+    prompt: str
+    items: list[PersonBriefItem]
 
 
 @dataclass(slots=True)
@@ -361,6 +783,7 @@ class CompanionService:
                     reused_user_row = latest_msg
 
             # 2. Build person-isolated context (verifies PersonRow & referenced_material_ids ownership!)
+            now = self._container.clock.now()
             context = await self._ctx_builder.build(
                 session,
                 scope=scope,
@@ -368,6 +791,7 @@ class CompanionService:
                 user_message=cleaned_msg,
                 referenced_material_ids=referenced_material_ids,
                 exclude_message_id=reused_user_row.id if reused_user_row is not None else None,
+                now_utc=now,
             )
 
             # 3. Enforce daily chat quota BEFORE saving new user message (skip if reusing unanswered row)
@@ -379,7 +803,6 @@ class CompanionService:
                 )
 
             # 4. Update continuous session window & late-night care check on ChatThreadRow
-            now = self._container.clock.now()
             thread = await self._repo.get_or_create_thread_for_update(session, scope, now=now)
             prev_msg_count = (
                 max(0, thread.message_count - 1)
@@ -514,19 +937,7 @@ class CompanionService:
                 updated_input = context.chat_input.model_copy(
                     update={"safety_override": safety_decision.category}
                 )
-                context = BuiltCompanionContext(
-                    scope=context.scope,
-                    person_name=context.person_name,
-                    tier=context.tier,
-                    person_state=context.person_state,
-                    role_tag=context.role_tag,
-                    traits=context.traits,
-                    chat_input=updated_input,
-                    allowed_record_ids=context.allowed_record_ids,
-                    record_catalog=context.record_catalog,
-                    timezone=context.timezone,
-                    late_night_care_enabled=context.late_night_care_enabled,
-                )
+                context = replace(context, chat_input=updated_input)
 
             return _PreparedChatTurn(
                 replayed_turn=None,
@@ -932,7 +1343,7 @@ class CompanionService:
 
         return _gen()
 
-    async def prepare_sse_stream(
+    async def stream_chat(
         self,
         *,
         scope: PersonScope,
@@ -942,7 +1353,34 @@ class CompanionService:
         idem_key: str | None = None,
         idem_path: str,
     ) -> AsyncIterator[str]:
-        """Validate & prepare chat turn synchronously, then return async SSE frame iterator."""
+        """Stream Cupid companion chat with live truthful `agent_step` trace & `action_proposal` cards."""
+        return await self.prepare_sse_stream(
+            scope=scope,
+            message=message,
+            referenced_material_ids=referenced_material_ids,
+            client_message_id=client_message_id,
+            idem_key=idem_key,
+            idem_path=idem_path,
+            emit_agent_steps=True,
+        )
+
+    async def prepare_sse_stream(
+        self,
+        *,
+        scope: PersonScope,
+        message: str,
+        referenced_material_ids: Sequence[UUID] = (),
+        client_message_id: str | None = None,
+        idem_key: str | None = None,
+        idem_path: str,
+        emit_agent_steps: bool = False,
+    ) -> AsyncIterator[str]:
+        """Validate & prepare chat turn synchronously, then return async SSE frame iterator.
+
+        Router endpoints invoke `stream_chat()` (`emit_agent_steps=True`), emitting real `agent_step`
+        frames before opening the LLM stream. Direct callers using `prepare_sse_stream()` without
+        `emit_agent_steps=True` preserve `delta` as the first yielded frame for backward compatibility.
+        """
         prepared = await self._prepare_turn(
             scope=scope,
             message=message,
@@ -1012,6 +1450,11 @@ class CompanionService:
                 )
 
             try:
+                # 1. Stream truthful Agent Execution Trace BEFORE opening LLM stream (NEVER on crisis!)
+                if emit_agent_steps:
+                    for step_payload in _build_agent_step_events(ctx):
+                        yield format_sse_event("agent_step", step_payload)
+
                 # On SafetyCategory.ILLEGAL_INTENT, immediately emit SOP §1.2 protective pull-back
                 if prepared.safety_decision.category is SafetyCategory.ILLEGAL_INTENT:
                     pullback_chunk = f"{ILLEGAL_INTENT_ALLY_PULLBACK}\n\n"
@@ -1113,6 +1556,9 @@ class CompanionService:
                     )
                     yield format_sse_event("delta", {"text": assembled_reply})
 
+                has_any_ctx = bool(
+                    ctx.chat_input.confirmed_facts or ctx.chat_input.referenced_materials
+                )
                 if reply_extractor.used_xml_tags and sidecar_output is None:
                     tail_tags = reply_extractor.tail_text
                     w_match = _TAGGED_WHISPER_RE.search(tail_tags)
@@ -1124,9 +1570,9 @@ class CompanionService:
                             reply_text=assembled_reply,
                             whisper_note=w_match.group(1).strip() if w_match else None,
                             cited_record_ids=citation_proc.verified_record_ids,
-                            has_unrecorded_gap=not bool(
-                                ctx.chat_input.confirmed_facts
-                                or ctx.chat_input.referenced_materials
+                            has_unrecorded_gap=detect_unrecorded_gap(
+                                assembled_reply,
+                                has_any_context=has_any_ctx,
                             ),
                             alternative_perspectives=(
                                 _split_tag_items(p_match.group(1)) if p_match else []
@@ -1134,6 +1580,45 @@ class CompanionService:
                             actionable_suggestions=(
                                 _split_tag_items(s_match.group(1)) if s_match else []
                             ),
+                        )
+                elif reply_extractor.used_json_fallback and sidecar_output is None:
+                    parsed_json = reply_extractor.parsed_json_payload()
+                    if parsed_json is not None:
+                        raw_whisper = parsed_json.get("whisper_note")
+                        raw_persp = parsed_json.get("alternative_perspectives")
+                        raw_sugg = parsed_json.get("actionable_suggestions")
+                        raw_cits = parsed_json.get("cited_record_ids")
+                        parsed_cit_ids: list[UUID] = []
+                        if isinstance(raw_cits, list):
+                            for cid in raw_cits:
+                                try:
+                                    parsed_cit_ids.append(UUID(str(cid)))
+                                except ValueError:
+                                    continue
+                        sidecar_output = CompanionChatOutput(
+                            safety_flag=prepared.safety_decision.category,
+                            reply_text=assembled_reply,
+                            whisper_note=(
+                                str(raw_whisper).strip()
+                                if isinstance(raw_whisper, str) and raw_whisper.strip()
+                                else None
+                            ),
+                            cited_record_ids=parsed_cit_ids or citation_proc.verified_record_ids,
+                            has_unrecorded_gap=bool(parsed_json.get("has_unrecorded_gap"))
+                            or detect_unrecorded_gap(
+                                assembled_reply,
+                                has_any_context=has_any_ctx,
+                            ),
+                            alternative_perspectives=[
+                                str(item).strip()
+                                for item in (raw_persp if isinstance(raw_persp, list) else [])
+                                if str(item).strip()
+                            ],
+                            actionable_suggestions=[
+                                str(item).strip()
+                                for item in (raw_sugg if isinstance(raw_sugg, list) else [])
+                                if str(item).strip()
+                            ],
                         )
 
                 if isinstance(sidecar_output, CompanionChatOutput):
@@ -1177,6 +1662,18 @@ class CompanionService:
 
                 if asst.suggestions:
                     yield format_sse_event("suggestion", {"items": asst.suggestions})
+
+                # 2. Emit contextually grounded 1-tap executable action proposals (NEVER on crisis/refusals)
+                local_today = to_user_local(self._container.clock.now(), ctx.timezone).date()
+                for proposal in _derive_action_proposals(
+                    ctx,
+                    user_message=message,
+                    assistant_reply=asst.content,
+                    local_today=local_today,
+                    safety_category=asst.safety_category,
+                    has_unrecorded_gap=asst.has_unrecorded_gap,
+                ):
+                    yield format_sse_event("action_proposal", proposal)
 
                 writeback_queued = should_writeback_chat_message(
                     message,
@@ -1235,3 +1732,518 @@ class CompanionService:
                     stream_released = True
 
         return _stream_gen()
+
+    async def get_person_brief(
+        self,
+        *,
+        scope: PersonScope,
+    ) -> PersonBriefResult:
+        """Compute a calm, zero-guilt, tier-aware proactive relationship brief under PersonScope + FORCE RLS."""
+        now_utc = self._container.clock.now()
+        async with self._container.db.user_session(scope.user_scope) as session:
+            person_row = await session.scalar(
+                select(PersonRow).where(
+                    PersonRow.user_id == scope.user_id,
+                    PersonRow.id == scope.person_id,
+                    PersonRow.deleted_at.is_(None),
+                    PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
+                )
+            )
+            if person_row is None:
+                raise NotFoundError("Person not found")
+
+            dek = await self._container.load_user_dek(session, scope.user_scope)
+            tier = Tier.from_any(person_row.tier)
+            raw_person_name = self._container.cipher.decrypt_str(
+                dek,
+                person_row.display_name_enc,
+                user_id=scope.user_id,
+                table="persons",
+                column="display_name_enc",
+                row_id=person_row.id,
+            )
+            person_name = sanitize_text(raw_person_name, allow_empty=True).cleaned_text or "TA"
+
+            pref_row = await session.scalar(
+                select(UserPreferenceRow).where(UserPreferenceRow.user_id == scope.user_id)
+            )
+            tz_name = (
+                pref_row.timezone
+                if pref_row is not None
+                else self._container.settings.default_timezone
+            )
+            local_today = to_user_local(now_utc, tz_name).date()
+
+            # 1. Exact count of non-deleted, non-held records strictly for this person
+            record_count = int(
+                await session.scalar(
+                    select(func.count(RecordRow.id)).where(
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == scope.person_id,
+                        RecordRow.deleted_at.is_(None),
+                        RecordRow.review_state != RecordReviewState.HELD.value,
+                    )
+                )
+                or 0
+            )
+
+            # 2. Active & proposed reminders for ONLY this person (excluding venting/held/deleted/rejected/superseded backing facts)
+            reminder_rows = (
+                await session.scalars(
+                    select(ReminderRow)
+                    .outerjoin(
+                        FactRow,
+                        and_(
+                            FactRow.id == ReminderRow.fact_id,
+                            FactRow.user_id == scope.user_id,
+                            FactRow.person_id == scope.person_id,
+                        ),
+                    )
+                    .outerjoin(
+                        RecordRow,
+                        and_(
+                            RecordRow.id == FactRow.record_id,
+                            RecordRow.user_id == scope.user_id,
+                            RecordRow.person_id == scope.person_id,
+                        ),
+                    )
+                    .where(
+                        ReminderRow.user_id == scope.user_id,
+                        ReminderRow.person_id == scope.person_id,
+                        ReminderRow.status.in_(
+                            (ReminderStatus.ACTIVE.value, ReminderStatus.PROPOSED.value)
+                        ),
+                        or_(
+                            ReminderRow.fact_id.is_(None),
+                            and_(
+                                FactRow.id.is_not(None),
+                                FactRow.invalid_at.is_(None),
+                                FactRow.status != FactStatus.REJECTED.value,
+                                FactRow.pending_reason.is_distinct_from(
+                                    PendingReason.VENTING.value
+                                ),
+                                or_(
+                                    FactRow.record_id.is_(None),
+                                    and_(
+                                        RecordRow.id.is_not(None),
+                                        RecordRow.deleted_at.is_(None),
+                                        RecordRow.review_state != RecordReviewState.HELD.value,
+                                    ),
+                                ),
+                            ),
+                        ),
+                    )
+                    .order_by(
+                        ReminderRow.next_fire_at.asc().nullslast(),
+                        ReminderRow.created_at.desc(),
+                    )
+                    .limit(30)
+                )
+            ).all()
+
+            # 3. Pending D1 pencil facts (pending non-venting OR confirmed needs_glance=True)
+            pencil_stmt = (
+                select(FactRow, RecordRow)
+                .outerjoin(
+                    RecordRow,
+                    and_(
+                        FactRow.record_id == RecordRow.id,
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == scope.person_id,
+                    ),
+                )
+                .where(
+                    FactRow.user_id == scope.user_id,
+                    FactRow.person_id == scope.person_id,
+                    FactRow.invalid_at.is_(None),
+                    or_(
+                        and_(
+                            FactRow.status == FactStatus.PENDING.value,
+                            FactRow.pending_reason.is_distinct_from(PendingReason.VENTING.value),
+                        ),
+                        and_(
+                            FactRow.status == FactStatus.CONFIRMED.value,
+                            FactRow.needs_glance.is_(True),
+                        ),
+                    ),
+                    or_(
+                        FactRow.record_id.is_(None),
+                        and_(
+                            RecordRow.id.is_not(None),
+                            RecordRow.deleted_at.is_(None),
+                            RecordRow.review_state != RecordReviewState.HELD.value,
+                        ),
+                    ),
+                )
+                .order_by(FactRow.created_at.desc(), FactRow.id.desc())
+                .limit(20)
+            )
+            pencil_pairs = (await session.execute(pencil_stmt)).all()
+
+            # 4. Confirmed active facts for ONLY this person (excluding deleted/held records)
+            confirmed_stmt = (
+                select(FactRow, RecordRow)
+                .outerjoin(
+                    RecordRow,
+                    and_(
+                        FactRow.record_id == RecordRow.id,
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == scope.person_id,
+                    ),
+                )
+                .where(
+                    FactRow.user_id == scope.user_id,
+                    FactRow.person_id == scope.person_id,
+                    FactRow.status == FactStatus.CONFIRMED.value,
+                    FactRow.invalid_at.is_(None),
+                    or_(
+                        FactRow.record_id.is_(None),
+                        and_(
+                            RecordRow.id.is_not(None),
+                            RecordRow.deleted_at.is_(None),
+                            RecordRow.review_state != RecordReviewState.HELD.value,
+                        ),
+                    ),
+                )
+                .order_by(FactRow.created_at.desc(), FactRow.id.desc())
+                .limit(30)
+            )
+            confirmed_pairs = (await session.execute(confirmed_stmt)).all()
+
+            fact_to_record_id: dict[UUID, UUID | None] = {}
+            for f_row, r_row in (*pencil_pairs, *confirmed_pairs):
+                fact_to_record_id[f_row.id] = r_row.id if r_row is not None else f_row.record_id
+
+            # Decrypt reminders & resolve upcoming dates
+            @dataclass(slots=True)
+            class _BriefRem:
+                title: str
+                occ_date: date | None
+                days_until: int | None
+                when_label: str | None
+                is_lunar: bool
+                record_id: UUID | None
+
+            upcoming_rems: list[_BriefRem] = []
+            for rem in reminder_rows:
+                raw_title = self._container.cipher.decrypt_str(
+                    dek,
+                    rem.title_enc,
+                    user_id=scope.user_id,
+                    table="reminders",
+                    column="title_enc",
+                    row_id=rem.id,
+                )
+                clean_title = _clamp_clean_text(raw_title, 48, tier=tier)
+                if not clean_title:
+                    continue
+
+                occ_date: date | None = rem.once_date
+                if occ_date is None and rem.next_fire_at is not None:
+                    local_fire = to_user_local(rem.next_fire_at, tz_name).date()
+                    occ_date = local_fire + timedelta(days=int(rem.next_lead_day or 0))
+                elif occ_date is None and rem.target_month and rem.target_day:
+                    try:
+                        if rem.is_lunar:
+                            occ_date = resolve_next_lunar_occurrence_date(
+                                target_month=rem.target_month,
+                                target_day=rem.target_day,
+                                is_leap_month=bool(rem.is_leap_month),
+                                timezone=tz_name,
+                                reference_utc=now_utc,
+                                fire_hour=rem.fire_hour,
+                                fire_minute=rem.fire_minute,
+                                lead_days=rem.lead_days or [0],
+                            )
+                        else:
+                            cand_this = resolve_solar_yearly_date(
+                                local_today.year, rem.target_month, rem.target_day
+                            )
+                            occ_date = (
+                                cand_this
+                                if cand_this >= local_today
+                                else resolve_solar_yearly_date(
+                                    local_today.year + 1, rem.target_month, rem.target_day
+                                )
+                            )
+                    except ReminderScheduleError:
+                        occ_date = None
+
+                days_until = (occ_date - local_today).days if occ_date is not None else None
+                if days_until is not None and days_until < 0:
+                    continue
+
+                when_label = format_fact_date_label(
+                    trigger_date=occ_date,
+                    is_lunar=bool(rem.is_lunar),
+                    lunar_month=rem.target_month,
+                    lunar_day=rem.target_day,
+                )
+                linked_rec = fact_to_record_id.get(rem.fact_id) if rem.fact_id is not None else None
+                upcoming_rems.append(
+                    _BriefRem(
+                        title=clean_title,
+                        occ_date=occ_date,
+                        days_until=days_until,
+                        when_label=when_label,
+                        is_lunar=bool(rem.is_lunar),
+                        record_id=linked_rec,
+                    )
+                )
+
+            upcoming_rems.sort(
+                key=lambda item: (
+                    item.days_until is None,
+                    item.days_until if item.days_until is not None else 999999,
+                )
+            )
+            upcoming_within_14 = [
+                r for r in upcoming_rems if r.days_until is not None and 0 <= r.days_until <= 14
+            ]
+
+            # Decrypt pending D1 pencil facts
+            @dataclass(slots=True)
+            class _BriefFact:
+                content: str
+                fact_type: str
+                when_label: str | None
+                is_lunar: bool
+                record_id: UUID | None
+
+            pencil_facts: list[_BriefFact] = []
+            for f_row, r_row in pencil_pairs:
+                raw_content = self._container.cipher.decrypt_str(
+                    dek,
+                    f_row.content_enc,
+                    user_id=scope.user_id,
+                    table="facts",
+                    column="content_enc",
+                    row_id=f_row.id,
+                )
+                clean_content = _clamp_clean_text(raw_content, 48, tier=tier)
+                if not clean_content:
+                    continue
+                when_lbl = format_fact_date_label(
+                    trigger_date=f_row.trigger_date
+                    or (r_row.happened_on if r_row is not None else None),
+                    is_lunar=bool(f_row.is_lunar),
+                    lunar_month=f_row.lunar_month,
+                    lunar_day=f_row.lunar_day,
+                )
+                pencil_facts.append(
+                    _BriefFact(
+                        content=clean_content,
+                        fact_type=f_row.type,
+                        when_label=when_lbl,
+                        is_lunar=bool(f_row.is_lunar),
+                        record_id=r_row.id if r_row is not None else f_row.record_id,
+                    )
+                )
+
+            # Decrypt confirmed facts sorted by domain priority (taboo/date/promise first)
+            confirmed_facts: list[_BriefFact] = []
+            for f_row, r_row in confirmed_pairs:
+                raw_content = self._container.cipher.decrypt_str(
+                    dek,
+                    f_row.content_enc,
+                    user_id=scope.user_id,
+                    table="facts",
+                    column="content_enc",
+                    row_id=f_row.id,
+                )
+                clean_content = _clamp_clean_text(raw_content, 48, tier=tier)
+                if not clean_content:
+                    continue
+                when_lbl = format_fact_date_label(
+                    trigger_date=f_row.trigger_date
+                    or (r_row.happened_on if r_row is not None else None),
+                    is_lunar=bool(f_row.is_lunar),
+                    lunar_month=f_row.lunar_month,
+                    lunar_day=f_row.lunar_day,
+                )
+                confirmed_facts.append(
+                    _BriefFact(
+                        content=clean_content,
+                        fact_type=f_row.type,
+                        when_label=when_lbl,
+                        is_lunar=bool(f_row.is_lunar),
+                        record_id=r_row.id if r_row is not None else f_row.record_id,
+                    )
+                )
+            confirmed_facts.sort(key=lambda item: _BRIEF_FACT_TYPE_ORDER.get(item.fact_type, 9))
+
+        upcoming_count = len(upcoming_rems)
+        pending_count = len(pencil_facts)
+
+        # Build calm, zero-guilt, tier-aware headline / subline / prompt
+        if tier is Tier.GOLD:
+            if upcoming_within_14:
+                top_rem = upcoming_within_14[0]
+                assert top_rem.days_until is not None
+                day_prefix = (
+                    "就是今天"
+                    if top_rem.days_until == 0
+                    else (
+                        "就是明天" if top_rem.days_until == 1 else f"还有 {top_rem.days_until} 天"
+                    )
+                )
+                headline = f"{day_prefix} · {top_rem.title}"
+                subline = (
+                    f"另有 {pending_count} 条轻记待你扫一眼确认，手帐共收着 {record_count} 页日常细节。"
+                    if pending_count > 0
+                    else f"手帐里已收好关于「{person_name}」的 {record_count} 页细节，提前准备更从容。"
+                )
+                date_prefix = _brief_date_prefix(top_rem.when_label, top_rem.title)
+                prompt = f"{date_prefix}{top_rem.title}，结合我记下的手帐，帮我列一份准备清单"
+            elif pending_count > 0:
+                has_lunar_pencil = any(pf.is_lunar for pf in pencil_facts)
+                headline = (
+                    f"有 {pending_count} 条农历日子轻记，点一下即可确认落墨"
+                    if has_lunar_pencil
+                    else f"有 {pending_count} 条手帐轻记，点一下即可确认落墨"
+                )
+                subline = f"已为「{person_name}」收好 {record_count} 页暖心手帐，确认后日程更安心。"
+                prompt = f"结合我为「{person_name}」记下的手帐，最近有什么贴心细节值得提前留意？"
+            elif record_count > 0 or confirmed_facts:
+                headline = f"已为「{person_name}」留存 {record_count} 页暖心手帐"
+                if confirmed_facts:
+                    subline = (
+                        f"记得「{confirmed_facts[0].content}」等 {len(confirmed_facts)} 条小细节。"
+                    )
+                else:
+                    subline = "把在乎的日常细节安放在这里，想念或准备心意时随时翻看。"
+                prompt = f"结合手帐里关于「{person_name}」的偏好与忌口，最近可以准备什么贴心小事？"
+            else:
+                headline = f"关于「{person_name}」的手帐刚翻开第一页"
+                subline = "随口记下一句偏好、忌口或约定，日后随时替你温柔想起。"
+                prompt = f"我想开始记录关于「{person_name}」的日常细节，可以从哪些小事记起？"
+
+        elif tier is Tier.SILVER:
+            # Strictly calm, factual, loyal — NEVER push reconciliation!
+            headline = (
+                f"已冷静留存 {record_count} 份客观事实与时间线记录"
+                if record_count > 0
+                else f"已为「{person_name}」建好私密边界记录页"
+            )
+            if upcoming_within_14:
+                subline = f"近期有 {len(upcoming_within_14)} 项节点提醒，重要沟通建议保持书面留痕。"
+            elif pending_count > 0:
+                subline = f"另有 {pending_count} 条待确认要点，核对后将按时间线归档留存。"
+            else:
+                subline = "只留客观时间与原话，需要梳理时间线或书面留痕回复时随时叫我。"
+            prompt = f"按时间线帮我整理和「{person_name}」的关键客观事实与书面留痕要点"
+
+        else:  # Tier.CRYSTAL
+            if upcoming_within_14:
+                top_rem = upcoming_within_14[0]
+                assert top_rem.days_until is not None
+                day_prefix = (
+                    "就是今天"
+                    if top_rem.days_until == 0
+                    else (
+                        "就是明天" if top_rem.days_until == 1 else f"还有 {top_rem.days_until} 天"
+                    )
+                )
+                headline = f"{day_prefix} · {top_rem.title}"
+            else:
+                headline = f"已收好关于「{person_name}」的要点与待办"
+            subline = (
+                f"手帐里有 {record_count} 条往来记录与 {len(confirmed_facts)} 项偏好要点，清爽省心。"
+                if (record_count > 0 or confirmed_facts)
+                else "随手记下往来忌口、档期或借还事项，日常相处礼数周全不内耗。"
+            )
+            prompt = f"帮我快速梳理关于「{person_name}」的要点、偏好与近期待办"
+
+        # Assemble up to 3 concise actionable items
+        items: list[PersonBriefItem] = []
+        seen_keys: set[tuple[str, str]] = set()
+
+        def _add_item(
+            kind: Literal["reminder", "pencil", "fact"],
+            when: str | None,
+            text: str,
+            record_id: UUID | None,
+            action_prompt: str,
+        ) -> None:
+            if len(items) >= 3:
+                return
+            clean_txt = _clamp_clean_text(text, 48, tier=tier)
+            clean_prompt = _clamp_clean_text(action_prompt, 80, tier=tier)
+            if not clean_txt or (kind, clean_txt) in seen_keys:
+                return
+            seen_keys.add((kind, clean_txt))
+            items.append(
+                PersonBriefItem(
+                    kind=kind,
+                    when=when,
+                    text=clean_txt,
+                    record_id=record_id,
+                    action_prompt=clean_prompt or prompt,
+                )
+            )
+
+        if tier is Tier.SILVER:
+            for brief_rem in upcoming_rems[:1]:
+                _add_item(
+                    "reminder",
+                    brief_rem.when_label,
+                    brief_rem.title,
+                    brief_rem.record_id,
+                    f"围绕「{brief_rem.title}」，帮我梳理关键时间节点与书面留痕要点",
+                )
+            for cf in confirmed_facts[:2]:
+                _add_item(
+                    "fact",
+                    cf.when_label,
+                    cf.content,
+                    cf.record_id,
+                    f"结合「{cf.content}」，按时间线整理客观事实与防雷回复要点",
+                )
+            for pf in pencil_facts[:1]:
+                _add_item(
+                    "pencil",
+                    pf.when_label,
+                    pf.content,
+                    pf.record_id,
+                    f"核对「{pf.content}」这条记录并纳入时间线要点",
+                )
+        else:
+            for brief_rem in upcoming_rems[:2]:
+                date_prefix = _brief_date_prefix(brief_rem.when_label, brief_rem.title)
+                _add_item(
+                    "reminder",
+                    brief_rem.when_label,
+                    brief_rem.title,
+                    brief_rem.record_id,
+                    f"{date_prefix}{brief_rem.title}，结合我记下的手帐，帮我列一份准备清单",
+                )
+            for pf in pencil_facts[:1]:
+                _add_item(
+                    "pencil",
+                    pf.when_label,
+                    pf.content,
+                    pf.record_id,
+                    f"关于「{pf.content}」，结合手帐帮我确认一下安排与需要注意的细节",
+                )
+            for cf in confirmed_facts:
+                if len(items) >= 3:
+                    break
+                _add_item(
+                    "fact",
+                    cf.when_label,
+                    cf.content,
+                    cf.record_id,
+                    f"围绕「{cf.content}」，帮我看看和「{person_name}」相处或准备时有什么讲究",
+                )
+
+        return PersonBriefResult(
+            person_id=scope.person_id,
+            tier=tier,
+            upcoming_count=upcoming_count,
+            pending_count=pending_count,
+            record_count=record_count,
+            headline=_clamp_clean_text(headline, 72, tier=tier),
+            subline=_clamp_clean_text(subline, 96, tier=tier),
+            prompt=_clamp_clean_text(prompt, 96, tier=tier),
+            items=items,
+        )

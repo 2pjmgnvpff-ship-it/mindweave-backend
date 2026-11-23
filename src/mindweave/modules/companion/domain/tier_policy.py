@@ -275,6 +275,22 @@ def apply_tier_policy(
     )
 
 
+UNRECORDED_GAP_MARKERS: tuple[str, ...] = (
+    "还没有记录",
+    "尚未记录",
+    "没有提到过",
+    "手帐里还没有",
+    "暂时没有记",
+    "还没有记下",
+    "还没有对应的详细记录",
+)
+
+
+def detect_unrecorded_gap(cleaned_reply: str, *, has_any_context: bool) -> bool:
+    """Return True when the assistant reply acknowledges missing records or no context exists."""
+    return (not has_any_context) or any(m in cleaned_reply for m in UNRECORDED_GAP_MARKERS)
+
+
 def derive_stream_supplements(
     chat_input: CompanionChatInput,
     *,
@@ -284,8 +300,7 @@ def derive_stream_supplements(
 ) -> CompanionChatOutput:
     """Build a complete `CompanionChatOutput` after streaming `reply_text` chunks."""
     has_any_context = bool(chat_input.confirmed_facts or chat_input.referenced_materials)
-    gap_markers = ("还没有记录", "尚未记录", "没有提到过", "手帐里还没有", "暂时没有记")
-    has_gap = (not has_any_context) or any(m in cleaned_reply for m in gap_markers)
+    has_gap = detect_unrecorded_gap(cleaned_reply, has_any_context=has_any_context)
 
     tier = chat_input.tier
     if tier is Tier.GOLD:
@@ -298,15 +313,33 @@ def derive_stream_supplements(
             )
             else []
         )
-        suggestions = [f"结合关于{chat_input.person_name}的记录，用轻松自然的口吻开启话题"]
+        suggestions = (
+            []
+            if has_gap or safety_category is not SafetyCategory.NORMAL
+            else [
+                f"「{chat_input.person_name}，最近降温了记得多照顾自己呀，有空咱们一起吃顿饭慢慢聊～」"
+            ]
+        )
     elif tier is Tier.SILVER:
         whisper = "把每一次越界事实冷静记清，就是保护自己最硬的底气。"
         perspectives = []
-        suggestions = ["按时间线留存客观沟通记录，必要时采用书面邮件确认边界"]
+        suggestions = (
+            []
+            if has_gap or safety_category is not SafetyCategory.NORMAL
+            else [
+                "「关于本次事项与时间节点，烦请回复邮件书面确认最新安排，方便双方按记录对齐，谢谢。」"
+            ]
+        )
     else:
         whisper = "礼数周全、边界清晰，日常往来就能既得体又省心。"
         perspectives = []
-        suggestions = [f"对照{chat_input.person_name}的偏好与档期要点，发送简明扼要的确认消息"]
+        suggestions = (
+            []
+            if has_gap or safety_category is not SafetyCategory.NORMAL
+            else [
+                f"「{chat_input.person_name}您好，跟您确认一下接下来的时间与事项细节，方便的话烦请文字回复确认，谢谢！」"
+            ]
+        )
 
     base = CompanionChatOutput(
         safety_flag=safety_category,
@@ -462,17 +495,29 @@ _DECLARATIVE_FACT_CUE_RE = re.compile(
     r"(?:喜欢|爱吃|爱喝|偏爱|最爱|讨厌|不吃|不能吃|忌口|过敏|雷区|生日|纪念日|"
     r"答应|约定|约好|承诺|打算|想要|想买|想去|想看|心愿|借了|借给|还给|还了|送了|"
     r"改到|定在|每周|下周|周末|下个月|昨天|今天|刚才|刚跟|上次|提到|跟我说|"
-    r"记一下|顺便记|备忘|甩锅|推活|抢功|迟到|放鸽子)"
+    r"记一下|顺便记|帮我记进手帐|记进手帐|备忘|甩锅|推活|抢功|迟到|放鸽子|"
+    r"发邮件|加需求|改需求)"
+)
+
+_EXPLICIT_RECORDING_CUE_RE = re.compile(r"(?:记一下|顺便记|帮我记进手帐|记进手帐)")
+
+_ASSISTANT_REQUEST_RE = re.compile(
+    r"(?:帮我|替我|请帮|给我|列一份|准备清单|设个?提醒|设一个提醒|提前提醒|提醒我|"
+    r"整理|梳理|理清|理理|挑份|起草|写一封|写一段|起草一段|生成一段|"
+    r"哪些|有什么|留意|注意|守好边界|结合.{0,12}手帐|查一下|翻一下|看看|"
+    r"核对.+时间线)"
 )
 
 _QUESTION_OR_DRAFT_CMD_RE = re.compile(
     r"(?:什么|怎么|如何|哪天|哪个|哪里|在哪|多少|几号|为什么|是不是|有没有|能不能|"
-    r"可不可以|好不好|吗|呢|帮我写|帮我起草|帮我想|帮我拟|帮我润色|帮我改|帮我回|"
-    r"给我写|给我出个|写一段|起草一段|生成一段|查一下|翻一下|看看)"
+    r"可不可以|好不好|吗|呢|帮我|替我|请帮|给我|列一份|准备清单|设个?提醒|设一个提醒|"
+    r"提前提醒|提醒我|整理|梳理|理清|理理|挑份|起草|写一封|写一段|起草一段|生成一段|"
+    r"哪些|有什么|留意|注意|守好边界|结合.{0,12}手帐|查一下|翻一下|看看|"
+    r"核对.+时间线)"
 )
 
 _EXPLICIT_NOTE_REPORT_RE = re.compile(
-    r"(?:记一下|顺便记|备忘|刚跟我说|昨天跟我说|今天跟我说|上次提到)"
+    r"(?:记一下|顺便记|帮我记进手帐|记进手帐|备忘|刚跟我说|昨天跟我说|今天跟我说|上次提到)"
 )
 
 _TRIVIAL_ACK_RE = re.compile(
@@ -501,6 +546,10 @@ def should_writeback_chat_message(
     if is_public_shaming_request(stripped):
         return False
 
+    has_explicit_recording_cue = bool(_EXPLICIT_RECORDING_CUE_RE.search(stripped))
+    if _ASSISTANT_REQUEST_RE.search(stripped) and not has_explicit_recording_cue:
+        return False
+
     # Split preserving sentence-ending question marks on clauses
     raw_clauses = [
         c.strip() for c in re.split(r"(?<=[。！？!?；;\n])|[，,]", stripped) if c.strip()
@@ -511,7 +560,7 @@ def should_writeback_chat_message(
         is_q_or_cmd = clause.endswith(("?", "？")) or bool(_QUESTION_OR_DRAFT_CMD_RE.search(clause))
         if is_q_or_cmd:
             continue
-        if _DECLARATIVE_FACT_CUE_RE.search(clause) or len(clause) >= 8:
+        if _DECLARATIVE_FACT_CUE_RE.search(clause):
             return True
 
     return False

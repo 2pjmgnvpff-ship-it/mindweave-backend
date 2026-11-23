@@ -1,6 +1,6 @@
 // journal-items.js — pure tactile scrapbook slips (big serif text + tiny date only),
 // D1 pencil drafts (dashed graphite + dotted date), question sticky notes,
-// optimistic drying-ink slips, and tap-to-open iOS Peek Focus Overlay.
+// optimistic drying-ink slips, and accessible grabber-drag iOS Peek Focus Overlay.
 import { h, clear, svg, $ } from '../dom.js';
 import { materialDecor, monogramOf, sealStyle } from '../decor.js';
 import { formatDateCn, formatDateFullCn, todayIso, highlightParts } from '../format.js';
@@ -9,6 +9,8 @@ import { api } from '../api/endpoints.js';
 import { store, patchMaterial, removeMaterial } from '../store.js';
 import { whisper } from './toast.js';
 import { actions } from '../actions.js';
+import { haptic, setAudioSession, prefersReducedMotion } from '../native-bridge.js';
+import { attachSwipeDismiss } from '../gestures.js';
 
 const PENCIL_COPY = {
   date_glance: '这个日期对吗？',
@@ -20,9 +22,23 @@ const PENCIL_COPY = {
   new_person: '这是新朋友吗？',
   ambiguous_person: '这是哪一位？',
 };
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 let playing = null;
 let activePeek = null;
+
+function syncPeekOverlayState() {
+  const hasAny = Boolean(
+    activePeek ||
+    $('#sheetLayer')?.classList.contains('is-open') ||
+    $('#chat')?.classList.contains('is-active'),
+  );
+  $('#app')?.classList.toggle('has-overlay', hasAny);
+  for (const id of ['journalCanvas', 'dock']) {
+    const el = $(`#${id}`);
+    if (el) el.inert = hasAny;
+  }
+}
 
 function voiceCharm(m) {
   const playable = Boolean(m.hasMedia && m.mediaUrl);
@@ -37,6 +53,7 @@ function voiceCharm(m) {
   if (playable) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+      haptic('light');
       if (playing && playing.btn === btn) return playing.audio.pause();
       if (playing) playing.audio.pause();
       const audio = new Audio(m.mediaUrl);
@@ -44,14 +61,15 @@ function voiceCharm(m) {
       btn.classList.add('is-playing');
       const done = () => {
         btn.classList.remove('is-playing');
-        if (playing && playing.btn === btn) playing = null;
+        if (playing && playing.btn === btn) {
+          playing = null;
+          setAudioSession('deactivate');
+        }
       };
       audio.addEventListener('pause', done);
       audio.addEventListener('ended', done);
-      audio.play().catch(() => {
-        done();
-        whisper('这段语音暂时放不出来', 2400);
-      });
+      setAudioSession('playAndRecord');
+      audio.play().catch(() => { done(); whisper('这段语音暂时放不出来', 2400); });
     });
   }
   return btn;
@@ -79,11 +97,13 @@ async function confirmPencilMaterial(personId, m, customDate) {
     const changed = Boolean(customDate && customDate !== fact.triggerDate);
     await api.patchFact(fact.id, changed ? { triggerDate: customDate, status: 'confirmed' } : { status: 'confirmed' }, fact.version);
     inked(personId, m);
+    haptic('success');
     return changed ? `改好了，${formatDateCn(customDate)}` : '好，已经落墨';
   }
   if (m.inboxItemId) {
     await api.resolveInbox(m.inboxItemId, customDate ? { action: 'confirm', triggerDate: customDate } : { action: 'confirm' });
     inked(personId, m);
+    haptic('success');
     return '好，已经落墨';
   }
   for (const f of m.pencilFacts || []) {
@@ -93,7 +113,35 @@ async function confirmPencilMaterial(personId, m, customDate) {
     await api.patchFact(f.id, body, f.version);
   }
   inked(personId, m);
+  haptic('success');
   return '好，已经落墨';
+}
+
+/** Localized Chinese serif date picker pill backed by native date input overlay. */
+function chineseDatePill(initialIso, ariaLabel = '确认日期') {
+  const val = initialIso || todayIso();
+  const labelEl = h('span', { class: 'peek-date-label', text: formatDateFullCn(val) || formatDateCn(val) || val });
+  const input = h('input', { type: 'date', class: 'peek-date-native', value: val, 'aria-label': ariaLabel });
+  input.addEventListener('change', () => {
+    const v = input.value || val;
+    labelEl.textContent = formatDateFullCn(v) || formatDateCn(v) || v;
+    haptic('selection');
+  });
+  const pill = h(
+    'div',
+    {
+      class: 'peek-date-pill',
+      onClick: () => {
+        if (typeof input.showPicker === 'function') {
+          try { input.showPicker(); } catch { /* native overlay handles click */ }
+        }
+      },
+    },
+    labelEl,
+    h('span', { class: 'peek-date-caret', 'aria-hidden': 'true', text: '▾' }),
+    input,
+  );
+  return { el: pill, input };
 }
 
 /** Understated dotted-underline date/glance button on pencil drafts (zero badge chrome). */
@@ -110,38 +158,32 @@ function pencilFooter(m, personId, date) {
     text: label,
   });
   const run = async (fn, okText) => {
-    try {
-      whisper((await fn()) || okText, 2200);
-    } catch (err) {
-      whisper(err.message, 2800);
-    }
+    try { whisper((await fn()) || okText, 2200); }
+    catch (err) { haptic('warning'); whisper(err.message, 2800); }
   };
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
+    haptic('light');
     const existing = wrap.querySelector('.glance-actions');
-    if (existing) {
-      existing.remove();
-      chip.setAttribute('aria-expanded', 'false');
-      return;
-    }
+    if (existing) { existing.remove(); chip.setAttribute('aria-expanded', 'false'); return; }
     chip.setAttribute('aria-expanded', 'true');
     const row = h('div', { class: 'glance-actions', onClick: (ev) => ev.stopPropagation() });
     if (reason === 'date_glance' && fact) {
-      const dateInput = h('input', { type: 'date', class: 'glance-date', value: fact.triggerDate || todayIso(), 'aria-label': '改成哪一天' });
+      const picker = chineseDatePill(fact.triggerDate || todayIso(), '改成哪一天');
       row.append(
         h('button', { type: 'button', class: 'glance-btn', text: '确认落墨', onClick: () => run(() => confirmPencilMaterial(personId, m, null), '好，已经落墨') }),
-        dateInput,
-        h('button', { type: 'button', class: 'glance-btn quiet', text: '改成这天', onClick: () => run(() => confirmPencilMaterial(personId, m, dateInput.value), '改好了') }),
+        picker.el,
+        h('button', { type: 'button', class: 'glance-btn quiet', text: '改成这天', onClick: () => run(() => confirmPencilMaterial(personId, m, picker.input.value), '改好了') }),
       );
     } else if (m.inboxItemId) {
-      const res = (body, after, msg) => run(async () => { await api.resolveInbox(m.inboxItemId, body); after(); return msg; });
+      const res = (body, after, msg, hk = 'success') => run(async () => { await api.resolveInbox(m.inboxItemId, body); haptic(hk); after(); return msg; });
       row.append(
         h('button', { type: 'button', class: 'glance-btn', text: '确认落墨', onClick: () => res({ action: 'confirm' }, () => inked(personId, m), '好，已经落墨') }),
-        h('button', { type: 'button', class: 'glance-btn quiet', text: '只当随手记', onClick: () => res({ action: 'keep_as_note' }, () => inked(personId, m), '留作一张随手记') }),
-        h('button', { type: 'button', class: 'glance-btn quiet', text: '划掉', onClick: () => res({ action: 'discard' }, () => removeMaterial(personId, m.id), '划掉了') }),
+        h('button', { type: 'button', class: 'glance-btn quiet', text: '只当随手记', onClick: () => res({ action: 'keep_as_note' }, () => inked(personId, m), '留作一张随手记', 'light') }),
+        h('button', { type: 'button', class: 'glance-btn quiet', text: '划掉', onClick: () => res({ action: 'discard' }, () => removeMaterial(personId, m.id), '划掉了', 'warning') }),
       );
     } else {
-      row.append(h('button', { type: 'button', class: 'glance-btn', text: '确认落墨', onClick: () => run(() => confirmPencilMaterial(personId, m, null), '好，已经落墨') }));
+      row.appendChild(h('button', { type: 'button', class: 'glance-btn', text: '确认落墨', onClick: () => run(() => confirmPencilMaterial(personId, m, null), '好，已经落墨') }));
     }
     wrap.appendChild(row);
   });
@@ -156,45 +198,22 @@ function questionControls(m, personId, ctx) {
     clear(row);
     const candidates = (item?.candidatePersons || []).filter((c) => c.personId !== personId).slice(0, 3);
     for (const c of candidates) {
-      row.appendChild(
-        h(
-          'button',
-          {
-            type: 'button',
-            class: 'candidate-btn',
-            'aria-label': `是${c.displayName}`,
-            onClick: async () => {
-              try {
-                const action = m.pencilReason === 'new_person' ? 'merge_person' : 'assign_person';
-                await api.resolveInbox(m.inboxItemId, { action, targetPersonId: c.personId });
-                removeMaterial(personId, m.id);
-                actions.reloadMaterials(c.personId);
-                actions.refreshBootstrap();
-                whisper(`好，记到「${c.displayName}」那页了`, 2600);
-              } catch (err) {
-                whisper(err.message, 2800);
-              }
-            },
-          },
-          h('span', { class: ['mono-seal', c.tier === 'silver' && 'is-cloaked'], style: c.tier === 'silver' ? {} : sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }),
-          h('span', { text: c.displayName }),
-        ),
-      );
+      row.appendChild(h('button', {
+        type: 'button', class: 'candidate-btn', 'aria-label': `是${c.displayName}`,
+        onClick: async () => {
+          try {
+            await api.resolveInbox(m.inboxItemId, { action: m.pencilReason === 'new_person' ? 'merge_person' : 'assign_person', targetPersonId: c.personId });
+            haptic('success'); removeMaterial(personId, m.id); actions.reloadMaterials(c.personId); actions.refreshBootstrap(); whisper(`好，记到「${c.displayName}」那页了`, 2600);
+          } catch (err) { haptic('warning'); whisper(err.message, 2800); }
+        },
+      }, h('span', { class: ['mono-seal', c.tier === 'silver' && 'is-cloaked'], style: c.tier === 'silver' ? {} : sealStyle({ id: c.personId, tier: c.tier }), text: c.monogram || monogramOf({ nameCn: c.displayName }) }), h('span', { text: c.displayName })));
     }
-    const after = (text) => {
-      inked(personId, m);
-      actions.refreshBootstrap();
-      actions.reloadMaterials(personId);
-      whisper(text, 2600);
-    };
     const name = item?.mention || item?.personName || store.get().people[personId]?.nameCn || 'TA';
     const create = async (tier, okMsg) => {
       try {
         await api.resolveInbox(m.inboxItemId, { action: 'create_person', tier, displayName: name });
-        after(okMsg);
-      } catch (err) {
-        whisper(err.message, 2800);
-      }
+        haptic('success'); inked(personId, m); actions.refreshBootstrap(); actions.reloadMaterials(personId); whisper(okMsg, 2600);
+      } catch (err) { haptic('warning'); whisper(err.message, 2800); }
     };
     if (m.pencilReason === 'new_person') {
       for (const [tier, label] of [['gold', '金箭 · 记爱'], ['silver', '银箭 · 记恨'], ['crystal', '水晶箭 · 记繁琐']]) {
@@ -209,15 +228,18 @@ function questionControls(m, personId, ctx) {
 }
 
 /* ---------------- iOS Peek Focus Overlay ---------------- */
-export function closePeek() {
+export function closePeek({ silentHaptic = false } = {}) {
   if (!activePeek) return;
-  const { layer, keyHandler, restore, rafId } = activePeek;
+  const { layer, keyHandler, cleanupDrag, restore, rafId } = activePeek;
   activePeek = null;
   if (rafId) cancelAnimationFrame(rafId);
+  cleanupDrag?.();
+  if (!silentHaptic) haptic('light');
   layer.classList.remove('is-open');
   document.removeEventListener('keydown', keyHandler);
+  syncPeekOverlayState();
   setTimeout(() => { if (!activePeek) clear(layer); }, 280);
-  if (restore && typeof restore.focus === 'function') restore.focus({ preventScroll: true });
+  if (restore && typeof restore.focus === 'function' && restore.isConnected) restore.focus({ preventScroll: true });
 }
 
 export function openPeekOverlay(materialId, person) {
@@ -225,8 +247,9 @@ export function openPeekOverlay(materialId, person) {
   const fresh = () => store.get().materials[person?.id]?.items.find((x) => x.id === materialId) || null;
   const m = fresh();
   if (!layer || !person || !m) return;
-  if (activePeek) closePeek();
+  if (activePeek) closePeek({ silentHaptic: true });
   clear(layer);
+  haptic('light');
 
   const tier = person.tier || 'crystal';
   const isPencil = m.presentation === 'pencil';
@@ -236,9 +259,11 @@ export function openPeekOverlay(materialId, person) {
   let deleteArmed = false;
 
   const bodyHost = h('div', { class: 'peek-body-host' }, h('p', { class: 'peek-body', text: m.body || m.snippet || '' }));
+  const grabberHit = h('div', { class: 'peek-grabber-hit', 'aria-hidden': 'true' }, h('div', { class: 'peek-grabber' }));
   const card = h(
     'div',
-    { class: ['peek-card', isPencil && 'is-pencil'], role: 'dialog', 'aria-modal': 'true', 'aria-label': '细看这一页手帐' },
+    { class: ['peek-card', isPencil && 'is-pencil'], role: 'dialog', 'aria-modal': 'true', tabindex: '-1', 'aria-label': '细看这一页手帐' },
+    grabberHit,
     m.pinned ? h('span', { class: 'brass-pin is-peek', 'aria-hidden': 'true' }) : null,
     showPhoto ? h('div', { class: 'peek-photo-wrap' }, h('img', { src: m.mediaUrl, alt: '照片' })) : null,
     m.type === 'voice' ? h('div', { class: 'peek-voice-row' }, voiceCharm(m)) : null,
@@ -248,24 +273,19 @@ export function openPeekOverlay(materialId, person) {
 
   if (isPencil) {
     const fact = primaryPencilFact(m);
-    const dateInput = h('input', { type: 'date', class: 'peek-date-input', value: fact?.triggerDate || m.happenedOn || todayIso(), 'aria-label': '确认日期' });
+    const picker = fact ? chineseDatePill(fact.triggerDate || m.happenedOn || todayIso(), '确认日期') : null;
     const confirmBtn = h('button', {
-      type: 'button',
-      class: 'peek-confirm-btn',
-      text: '确认并落墨',
+      type: 'button', class: 'peek-confirm-btn', text: '确认并落墨',
       onClick: async () => {
         confirmBtn.disabled = true;
         try {
-          const msg = await confirmPencilMaterial(person.id, fresh() || m, fact ? dateInput.value : null);
-          closePeek();
+          const msg = await confirmPencilMaterial(person.id, fresh() || m, picker ? picker.input.value : null);
+          closePeek({ silentHaptic: true });
           whisper(msg, 2200);
-        } catch (err) {
-          confirmBtn.disabled = false;
-          whisper(err.message, 2800);
-        }
+        } catch (err) { confirmBtn.disabled = false; haptic('warning'); whisper(err.message, 2800); }
       },
     });
-    card.appendChild(h('div', { class: 'peek-pencil-bar' }, fact ? dateInput : null, confirmBtn));
+    card.appendChild(h('div', { class: 'peek-pencil-bar' }, picker?.el, confirmBtn));
   }
 
   const exitEdit = () => {
@@ -278,12 +298,11 @@ export function openPeekOverlay(materialId, person) {
   const enterEdit = () => {
     if (editing) return exitEdit();
     editing = true;
+    haptic('light');
     const cur = fresh() || m;
     const ta = h('textarea', { class: 'peek-edit-area', rows: '4', maxlength: '10000', value: cur.body || cur.snippet || '', 'aria-label': '修改记录文字' });
     const saveBtn = h('button', {
-      type: 'button',
-      class: 'peek-confirm-btn',
-      text: '保存修改',
+      type: 'button', class: 'peek-confirm-btn', text: '保存修改',
       onClick: async () => {
         const nextText = ta.value.trim();
         if (!nextText) return whisper('写点什么再保存吧', 2000);
@@ -292,12 +311,8 @@ export function openPeekOverlay(materialId, person) {
           const latest = fresh() || cur;
           const updated = await api.patchMaterial(latest.id, { body: nextText, snippet: nextText.slice(0, 60) }, latest.version);
           patchMaterial(person.id, latest.id, updated || { body: nextText, snippet: nextText.slice(0, 60) });
-          exitEdit();
-          whisper('改好了', 2000);
-        } catch (err) {
-          saveBtn.disabled = false;
-          whisper(err.message, 2800);
-        }
+          haptic('success'); exitEdit(); whisper('改好了', 2000);
+        } catch (err) { saveBtn.disabled = false; haptic('warning'); whisper(err.message, 2800); }
       },
     });
     clear(bodyHost);
@@ -306,9 +321,7 @@ export function openPeekOverlay(materialId, person) {
   };
 
   const pinBtn = h('button', {
-    type: 'button',
-    class: 'peek-pill-btn',
-    text: m.pinned ? '取下铜钉' : '钉在前面',
+    type: 'button', class: 'peek-pill-btn', text: m.pinned ? '取下铜钉' : '钉在前面',
     onClick: async () => {
       pinBtn.disabled = true;
       try {
@@ -316,39 +329,20 @@ export function openPeekOverlay(materialId, person) {
         const nextPinned = !latest.pinned;
         const updated = await api.patchMaterial(latest.id, { pinned: nextPinned }, latest.version);
         patchMaterial(person.id, latest.id, updated || { pinned: nextPinned });
-        closePeek();
-        whisper(nextPinned ? '已钉在前面' : '已取下铜钉', 2000);
-      } catch (err) {
-        pinBtn.disabled = false;
-        whisper(err.message, 2800);
-      }
+        haptic('medium'); closePeek({ silentHaptic: true }); whisper(nextPinned ? '已钉在前面' : '已取下铜钉', 2000);
+      } catch (err) { pinBtn.disabled = false; haptic('warning'); whisper(err.message, 2800); }
     },
   });
 
   const deleteBtn = h('button', {
-    type: 'button',
-    class: 'peek-pill-btn is-danger',
-    text: '撕掉',
+    type: 'button', class: 'peek-pill-btn is-danger', text: '撕掉',
     onClick: async () => {
-      if (!deleteArmed) {
-        deleteArmed = true;
-        deleteBtn.textContent = '再点撕掉';
-        deleteBtn.classList.add('is-armed');
-        return;
-      }
+      if (!deleteArmed) { deleteArmed = true; haptic('warning'); deleteBtn.textContent = '再点撕掉'; deleteBtn.classList.add('is-armed'); return; }
       deleteBtn.disabled = true;
       try {
         await api.deleteMaterial(m.id);
-        removeMaterial(person.id, m.id);
-        closePeek();
-        whisper('已轻轻撕下这一页', 2200);
-      } catch (err) {
-        deleteBtn.disabled = false;
-        deleteArmed = false;
-        deleteBtn.textContent = '撕掉';
-        deleteBtn.classList.remove('is-armed');
-        whisper(err.message, 2800);
-      }
+        haptic('warning'); removeMaterial(person.id, m.id); closePeek({ silentHaptic: true }); whisper('已轻轻撕下这一页', 2200);
+      } catch (err) { deleteBtn.disabled = false; deleteArmed = false; deleteBtn.textContent = '撕掉'; deleteBtn.classList.remove('is-armed'); whisper(err.message, 2800); }
     },
   });
 
@@ -356,18 +350,40 @@ export function openPeekOverlay(materialId, person) {
     'div',
     { class: 'peek-action-pill', role: 'toolbar', 'aria-label': '手帐操作' },
     pinBtn,
-    h('button', { type: 'button', class: 'peek-pill-btn', text: '问丘比特', onClick: () => { closePeek(); actions.openChat(person.id, { materialId: m.id }); } }),
+    h('button', { type: 'button', class: 'peek-pill-btn', text: '问丘比特', onClick: () => { haptic('light'); closePeek({ silentHaptic: true }); actions.openChat(person.id, { materialId: m.id }); } }),
     h('button', { type: 'button', class: 'peek-pill-btn', text: '改字', onClick: enterEdit }),
     deleteBtn,
   );
+  const scrim = h('div', { class: 'peek-scrim', onClick: () => closePeek() });
   const stage = h('div', { class: 'peek-stage', onClick: (e) => { if (e.target === stage) closePeek(); } }, card, pill);
-  layer.append(h('div', { class: 'peek-scrim', onClick: () => closePeek() }), stage);
+  layer.append(scrim, stage);
 
-  const keyHandler = (e) => { if (e.key === 'Escape') (editing ? exitEdit() : closePeek()); };
+  const cleanupDrag = attachSwipeDismiss({
+    container: card,
+    scrim,
+    scaleOnDrag: true,
+    headerOnly: true,
+    canStart: (e) => !editing && Boolean(e.target?.closest?.('.peek-grabber-hit, .peek-grabber')),
+    onDismiss: () => closePeek({ silentHaptic: true }),
+  });
+  const keyHandler = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); (editing ? exitEdit() : closePeek()); return; }
+    if (e.key !== 'Tab') return;
+    const nodes = Array.from(stage.querySelectorAll(FOCUSABLE)).filter((n) => n.offsetParent !== null);
+    if (!nodes.length) { e.preventDefault(); card.focus({ preventScroll: true }); return; }
+    const first = nodes[0], last = nodes[nodes.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !stage.contains(document.activeElement))) { e.preventDefault(); last.focus({ preventScroll: true }); }
+    else if (!e.shiftKey && (document.activeElement === last || !stage.contains(document.activeElement))) { e.preventDefault(); first.focus({ preventScroll: true }); }
+  };
   document.addEventListener('keydown', keyHandler);
-  const entry = { layer, keyHandler, restore: document.activeElement, rafId: 0 };
+  const entry = { layer, keyHandler, cleanupDrag, restore: document.activeElement, rafId: 0 };
   activePeek = entry;
-  entry.rafId = requestAnimationFrame(() => { if (activePeek === entry) layer.classList.add('is-open'); });
+  syncPeekOverlayState();
+  entry.rafId = requestAnimationFrame(() => {
+    if (activePeek !== entry) return;
+    layer.classList.add('is-open');
+    setTimeout(() => { if (activePeek === entry) (card.querySelector('button') || card).focus({ preventScroll: true }); }, 90);
+  });
 }
 
 /* ---------------- Resting Scrapbook Slip Renderer ---------------- */
@@ -387,6 +403,7 @@ export function renderMaterial(m, person, ctx = {}) {
     class: ['mat-card', ctx.layout && `is-${ctx.layout}`, side && `is-${side}`, isPencil && 'is-pencil', m.pinned && !isQuestion && 'is-pinned'],
     dataset: { materialId: m.id, side },
     style: { '--rot': `${rot}deg` },
+    role: isQuestion ? null : 'button',
     tabindex: isQuestion ? null : '0',
     'aria-label': `${body.slice(0, 40)}${date ? `，${date}` : ''}`,
   });
@@ -396,48 +413,18 @@ export function renderMaterial(m, person, ctx = {}) {
   const dateEl = isPencil ? pencilFooter(m, person?.id, date) : date ? h('p', { class: 'mat-sign', text: date }) : null;
   let shell;
   if (isQuestion) {
-    shell = h(
-      'div',
-      { class: 'mat-shell mat-question' },
-      h('span', { class: 'question-badge', 'aria-hidden': 'true', text: '?' }),
-      h('p', { class: 'question-ask', text: PENCIL_COPY[m.pencilReason] || '这是在说谁？' }),
-      renderHighlightedBody(body, ctx.query),
-      questionControls(m, person?.id, ctx),
-    );
+    shell = h('div', { class: 'mat-shell mat-question' }, h('span', { class: 'question-badge', 'aria-hidden': 'true', text: '?' }), h('p', { class: 'question-ask', text: PENCIL_COPY[m.pencilReason] || '这是在说谁？' }), renderHighlightedBody(body, ctx.query), questionControls(m, person?.id, ctx));
   } else if (showPhoto) {
-    shell = h(
-      'figure',
-      { class: 'mat-shell mat-photo' },
-      pinEl || h('span', { class: 'photo-brass-clip', 'aria-hidden': 'true' }, svg(BRASS_CLIP_SVG)),
-      h('div', { class: 'photo-slip-frame' }, h('img', { src: m.mediaUrl, alt: '手帐照片', loading: 'lazy', decoding: 'async' })),
-      h('figcaption', { class: 'photo-slip-meta' }, body ? renderHighlightedBody(body, ctx.query) : null, dateEl),
-    );
+    shell = h('figure', { class: 'mat-shell mat-photo' }, pinEl || h('span', { class: 'photo-brass-clip', 'aria-hidden': 'true' }, svg(BRASS_CLIP_SVG)), h('div', { class: 'photo-slip-frame' }, h('img', { src: m.mediaUrl, alt: '手帐照片', loading: 'lazy', decoding: 'async' })), h('figcaption', { class: 'photo-slip-meta' }, body ? renderHighlightedBody(body, ctx.query) : null, dateEl));
   } else if (m.type === 'voice') {
-    shell = h(
-      'div',
-      { class: 'mat-shell mat-voice' },
-      pinEl,
-      renderHighlightedBody(body, ctx.query),
-      h('div', { class: 'voice-slip-foot' }, voiceCharm(m), isPencil ? pencilFooter(m, person?.id, date) : date ? h('span', { class: 'mat-sign', text: date }) : null),
-    );
+    shell = h('div', { class: 'mat-shell mat-voice' }, pinEl, renderHighlightedBody(body, ctx.query), h('div', { class: 'voice-slip-foot' }, voiceCharm(m), isPencil ? pencilFooter(m, person?.id, date) : date ? h('span', { class: 'mat-sign', text: date }) : null));
   } else {
-    shell = h(
-      'div',
-      { class: 'mat-shell mat-note' },
-      pinEl || h('span', { class: 'mat-washi', 'aria-hidden': 'true', style: { background: d.tapeColor, '--tape-x': `${d.tapeShift}px` } }),
-      renderHighlightedBody(body, ctx.query),
-      dateEl,
-    );
+    shell = h('div', { class: 'mat-shell mat-note' }, pinEl || h('span', { class: 'mat-washi', 'aria-hidden': 'true', style: { background: d.tapeColor, '--tape-x': `${d.tapeShift}px` } }), renderHighlightedBody(body, ctx.query), dateEl);
   }
 
   if (!isQuestion) {
     card.addEventListener('click', (e) => { if (!e.target.closest('button, input, textarea, a')) openPeekOverlay(m.id, person); });
-    card.addEventListener('keydown', (e) => {
-      if (e.target === card && (e.key === 'Enter' || e.key === ' ')) {
-        e.preventDefault();
-        openPeekOverlay(m.id, person);
-      }
-    });
+    card.addEventListener('keydown', (e) => { if (e.target === card && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPeekOverlay(m.id, person); } });
   }
   card.appendChild(shell);
   return card;
@@ -464,8 +451,7 @@ export function flashMaterial(materialId) {
   if (scroll && scroll.contains(el)) {
     const r = el.getBoundingClientRect();
     const sr = scroll.getBoundingClientRect();
-    const target = r.top - sr.top + scroll.scrollTop - Math.max(88, (sr.height - r.height) / 2);
-    scroll.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    scroll.scrollTo({ top: Math.max(0, r.top - sr.top + scroll.scrollTop - Math.max(88, (sr.height - r.height) / 2)), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   }
   el.classList.remove('is-settled', 'is-flash');
   void el.offsetWidth;

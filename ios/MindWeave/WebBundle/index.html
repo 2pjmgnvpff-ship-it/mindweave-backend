@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7efe3">
+  <meta name="description" content="心络 · 把在意的人，轻轻记在手帐里">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="心络">
+  <title>心络</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./assets/icon.svg">
+  <link rel="stylesheet" href="./styles/base.css">
+  <link rel="stylesheet" href="./styles/journal.css">
+  <link rel="stylesheet" href="./styles/dock.css">
+  <link rel="stylesheet" href="./styles/chat.css">
+  <link rel="stylesheet" href="./styles/sheets.css">
+</head>
+<body>
+  <div class="mw-stage">
+    <main class="mw-viewport" id="app" data-journal-edition="cotton" data-view-mode="person-journal" data-arrow-tier="gold">
+      <div class="mw-boot-veil" id="bootVeil" aria-hidden="true">心络</div>
+
+      <!-- sign-in (email code) -->
+      <section class="splash-screen" id="authScreen" aria-label="登录心络" hidden></section>
+
+      <!-- first-time ritual -->
+      <section class="onboarding-stage" id="onboarding" aria-label="初次见面" hidden></section>
+
+      <!-- the scrapbook -->
+      <div class="journal-atelier-canvas" id="journalCanvas">
+        <div class="paper-luminous-bloom" aria-hidden="true"></div>
+        <div class="paper-fiber-layer" aria-hidden="true"></div>
+        <div class="paper-sunlight-dapple" aria-hidden="true"></div>
+        <div class="paper-margin-rule" aria-hidden="true"></div>
+        <div class="tn-elastic-band" aria-hidden="true"><span class="tn-tin-clasp"></span></div>
+
+        <div class="hobo-date-masthead" aria-hidden="true">
+          <span class="hobo-big-num" id="hoboDay"></span>
+          <span class="hobo-date-col">
+            <span class="hobo-month-wk" id="hoboMonthWk"></span>
+            <span class="hobo-quote-line" id="hoboQuote"></span>
+          </span>
+        </div>
+
+        <div class="journal-top-left-bar">
+          <button type="button" class="quiet-gear-btn" id="settingsBtn" aria-label="设置"></button>
+          <button type="button" class="back-to-casual-pill" id="backToCasual" aria-label="回到记繁琐名册" hidden>‹ 记繁琐</button>
+          <div class="journal-folio-whisper" id="folioBar">
+            <span id="folioDate" hidden></span>
+            <button type="button" class="folio-subject-btn" id="folioSubjectBtn" aria-label="翻开人物手帐衬纸">
+              <span class="folio-subject" id="folioSubject"></span>
+            </button>
+            <button type="button" class="folio-month-btn" id="folioMonthBtn" aria-label="翻到指定月份" hidden>
+              <span id="folioMonthLabel"></span>
+              <span class="folio-month-caret" aria-hidden="true">▾</span>
+            </button>
+            <button type="button" class="quiet-search-btn" id="searchToggleBtn" aria-label="搜索这一页" hidden></button>
+          </div>
+        </div>
+
+        <div class="spotlight-bar" id="spotlightBar" hidden>
+          <span class="spotlight-icon" id="spotlightIcon" aria-hidden="true"></span>
+          <input type="search" class="spotlight-input" id="spotlightInput" placeholder="在手帐里找一句…" autocomplete="off" aria-label="搜索这一页手帐">
+          <span class="spotlight-count" id="spotlightCount" hidden></span>
+          <button type="button" class="spotlight-close" id="spotlightClose" aria-label="关闭搜索"></button>
+        </div>
+
+        <div class="top-right-arrow-pin-anchor" id="arrowAnchor"></div>
+
+        <div class="journal-scroll" id="journalScroll" role="region" aria-label="手帐页"></div>
+        <nav class="paper-edge-tabs" id="paperEdgeTabs" aria-label="月份索引" hidden></nav>
+        <section class="casual-relationships-hub" id="casualHub" aria-label="记繁琐名册"></section>
+        <button type="button" class="question-entry" id="questionEntry" hidden></button>
+      </div>
+
+      <!-- split-arc voice stage -->
+      <div class="voice-hold-stage" id="voiceStage" aria-hidden="true" data-voice-zone="current">
+        <div class="voice-hold-scrim"></div>
+        <div class="voice-minimal-wave-pill" id="voicePill">
+          <span class="voice-minimal-dot"></span>
+          <span class="voice-silk-canvas-wrap"><canvas id="voiceCanvas" width="284" height="64"></canvas></span>
+          <span class="voice-minimal-timer" id="voiceTimer">0:00</span>
+        </div>
+        <svg class="voice-split-arc-svg" viewBox="0 0 384 838" fill="none" aria-hidden="true">
+          <path class="voice-inner-whisper-arc" d="M 52.2 715.2 A 78 78 0 0 1 124.8 787.8"/>
+          <path class="voice-split-arc-seg seg-up" d="M 56.3 659.3 A 134 134 0 0 1 129.5 687.4"/>
+          <path class="voice-split-arc-seg seg-right" d="M 149.6 706.9 A 134 134 0 0 1 180.3 779.0"/>
+        </svg>
+        <span class="voice-arc-label label-up">自动分析</span>
+        <span class="voice-arc-label label-right" id="voiceLabelRight">默认此人</span>
+        <span class="voice-drag-finger-puck" id="voicePuck"></span>
+        <span class="voice-orb-ripples"><span class="orb-ripple r1"></span><span class="orb-ripple r2"></span></span>
+      </div>
+      <p class="sr-only" id="voiceLive" role="status" aria-live="polite"></p>
+
+      <div class="fly-layer" id="flyLayer" aria-hidden="true"></div>
+
+      <div class="hold-hint" id="holdHint" role="status">
+        <span>按住说话</span>
+        <button type="button" class="hold-hint-type" id="holdHintType">打字记一句</button>
+      </div>
+
+      <nav class="mw-tri-dock" id="dock" aria-label="主操作">
+        <button type="button" class="dock-circle-btn voice-orb" id="voiceOrb" aria-label="按住说话，松开收进手帐">
+          <span class="voice-orb-core-glow"></span>
+        </button>
+        <div class="dock-center-capsule" id="capsule" role="group" aria-label="切换人物"></div>
+        <button type="button" class="dock-circle-btn ai-orb" id="aiOrb" aria-label="和丘比特聊聊">
+          <span class="ai-orb-aura"></span>
+        </button>
+      </nav>
+
+      <div class="splash-morph-actor" id="morphActor" aria-hidden="true">
+        <div class="morph-full-photo"></div>
+        <div class="morph-capsule-glass"></div>
+      </div>
+
+      <section class="ai-chat-fullscreen" id="chat" role="dialog" aria-modal="true" aria-label="和丘比特聊聊" hidden></section>
+
+      <div class="mw-peek-layer" id="peekLayer"></div>
+      <div class="mw-sheet-layer" id="sheetLayer"></div>
+      <div class="mw-toast-host" id="toastHost" role="status" aria-live="polite"></div>
+    </main>
+  </div>
+  <script type="module" src="./scripts/main.js"></script>
+</body>
+</html>

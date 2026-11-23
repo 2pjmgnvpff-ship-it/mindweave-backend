@@ -6,6 +6,7 @@ import { monogramOf, sealStyle } from '../decor.js';
 import { DIRECTORY_SVG, SPARK_SVG } from '../icons.js';
 import { TIER_LABEL } from '../format.js';
 import { actions } from '../actions.js';
+import { initNativeBridge, haptic } from '../native-bridge.js';
 
 const MAX_CORE = 6;
 let expanded = false;
@@ -125,9 +126,10 @@ function render(s) {
   capsule.classList.toggle('is-pure-landscape', empty);
   capsule.classList.toggle('is-expanded', expanded);
   const { wrap, count } = expandedItems(s);
-  capsule.style.setProperty('--expanded-capsule-w', `${Math.max(150, count * 48 + 16)}px`);
+  capsule.style.setProperty('--expanded-capsule-w', `${Math.max(156, count * 50 + 18)}px`);
+  const track = h('div', { class: 'capsule-expanded-track' }, wrap);
   scrubTipEl = h('span', { class: 'capsule-scrub-tip', 'aria-hidden': 'true' });
-  capsule.append(h('div', { class: 'capsule-landscape-bg', 'aria-hidden': 'true' }), h('div', { class: 'capsule-glass-sheen', 'aria-hidden': 'true' }), collapsed(s), wrap, scrubTipEl);
+  capsule.append(h('div', { class: 'capsule-landscape-bg', 'aria-hidden': 'true' }), h('div', { class: 'capsule-glass-sheen', 'aria-hidden': 'true' }), collapsed(s), track, scrubTipEl);
   capsule.setAttribute('aria-label', s.view === 'directory' ? '正在看记繁琐名册，点一下切换人物' : active ? `正在看「${active.nameCn}」，点一下切换人物` : '切换人物');
 }
 
@@ -138,6 +140,7 @@ function setExpanded(on) {
   capsule.setAttribute('aria-expanded', String(on));
   render(store.get());
   if (on) {
+    haptic('selection');
     document.addEventListener('pointerdown', outside, true);
     $('#capsule .capsule-obj-avatar.is-selected')?.focus({ preventScroll: true });
   } else {
@@ -152,6 +155,7 @@ function outside(e) {
 
 function choose(el) {
   if (!el) return;
+  haptic('selection');
   setExpanded(false);
   if (el.dataset.directory) actions.openDirectory();
   else if (el.dataset.personId) actions.openPerson(el.dataset.personId);
@@ -163,6 +167,7 @@ function itemAt(x, y) {
 }
 
 export function initDock() {
+  initNativeBridge();
   const capsule = $('#capsule');
   capsule.tabIndex = 0;
   capsule.setAttribute('role', 'group');
@@ -187,13 +192,7 @@ export function initDock() {
     if (target !== scrub.lastTarget) {
       scrub.lastTarget = target;
       updateScrubTip(capsule, target);
-      if (target && scrub.moved) {
-        try {
-          navigator.vibrate?.(5);
-        } catch {
-          /* ignore */
-        }
-      }
+      if (target && scrub.moved) haptic('selection');
     }
   });
   capsule.addEventListener('pointerup', (e) => {
@@ -223,7 +222,10 @@ export function initDock() {
   });
   const aiOrb = $('#aiOrb');
   aiOrb.append(svg(SPARK_SVG, 'ai-orb-spark-icon'));
-  aiOrb.addEventListener('click', () => actions.openChat(store.get().view === 'journal' ? store.get().activePersonId : null));
+  aiOrb.addEventListener('click', () => {
+    haptic('light');
+    actions.openChat(store.get().view === 'journal' ? store.get().activePersonId : null);
+  });
   store.subscribe(render);
   render(store.get());
 }

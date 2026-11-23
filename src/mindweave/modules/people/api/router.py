@@ -37,7 +37,7 @@ from mindweave.modules.people.application.service import (
     TierTransitionOutcome,
 )
 from mindweave.modules.people.domain.entities import PersonAlias, PersonProfile, PhotoSlot
-from mindweave.shared.enums import AliasKind
+from mindweave.shared.enums import AliasKind, Tier
 from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["people"])
@@ -46,6 +46,7 @@ _STREAM_CHUNK_BYTES = 64 * 1024
 
 
 def _profile_to_dto(service: PeopleService, scope: UserScope, profile: PersonProfile) -> PersonDTO:
+    is_silver = profile.tier is Tier.SILVER
     return PersonDTO(
         id=profile.id,
         slug=profile.slug,
@@ -57,18 +58,24 @@ def _profile_to_dto(service: PeopleService, scope: UserScope, profile: PersonPro
         tier=profile.tier,
         rank=profile.rank,
         state=profile.state,
-        has_photo=profile.has_photo,
+        has_photo=False if is_silver else profile.has_photo,
         short_memo=profile.short_memo,
         traits=profile.traits,
         visual_tokens=profile.visual_tokens,
-        avatar_url=service.photo_url(
-            scope, profile.id, PhotoSlot.AVATAR, profile.avatar_object_key
+        avatar_url=(
+            None
+            if is_silver
+            else service.photo_url(scope, profile.id, PhotoSlot.AVATAR, profile.avatar_object_key)
         ),
-        main_photo_url=service.photo_url(
-            scope, profile.id, PhotoSlot.MAIN, profile.main_photo_object_key
+        main_photo_url=(
+            None
+            if is_silver
+            else service.photo_url(scope, profile.id, PhotoSlot.MAIN, profile.main_photo_object_key)
         ),
-        sub_photo_url=service.photo_url(
-            scope, profile.id, PhotoSlot.SUB, profile.sub_photo_object_key
+        sub_photo_url=(
+            None
+            if is_silver
+            else service.photo_url(scope, profile.id, PhotoSlot.SUB, profile.sub_photo_object_key)
         ),
         version=profile.version,
         archived_at=profile.archived_at,
@@ -85,6 +92,15 @@ def _person_dto_from_body(
 ) -> PersonDTO:
     """Validate cached/serialized `PersonDTO` and freshly re-sign non-null media URLs on replay."""
     dto = PersonDTO.model_validate(dict(raw_body))
+    if dto.tier is Tier.SILVER:
+        return dto.model_copy(
+            update={
+                "has_photo": False,
+                "avatar_url": None,
+                "main_photo_url": None,
+                "sub_photo_url": None,
+            }
+        )
     prefix = container.settings.api_prefix.rstrip("/")
     now = container.clock.now()
     updates: dict[str, str] = {}

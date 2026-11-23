@@ -21,6 +21,10 @@ from mindweave.modules.companion.api.dto import (
     SendChatMessageRequest,
     StreamChatRequest,
 )
+from mindweave.modules.companion.api.schemas import (
+    BriefItemSchema,
+    PersonBriefResponse,
+)
 from mindweave.modules.companion.application.service import CompanionService
 from mindweave.shared.scopes import UserScope
 
@@ -87,7 +91,7 @@ async def send_person_chat_message(
     svc = CompanionService(container)
 
     if _should_stream(stream, accept):
-        sse_iter = await svc.prepare_sse_stream(
+        sse_iter = await svc.stream_chat(
             scope=person_scope,
             message=body.message,
             referenced_material_ids=body.referenced_material_ids,
@@ -125,7 +129,7 @@ async def stream_person_chat_v10(
 ) -> StreamingResponse:
     pid = parse_uuid_param(person_id, field_name="personId")
     svc = CompanionService(container)
-    sse_iter = await svc.prepare_sse_stream(
+    sse_iter = await svc.stream_chat(
         scope=scope.person(pid),
         message=body.message,
         referenced_material_ids=body.referenced_material_ids,
@@ -159,3 +163,62 @@ async def clear_person_chat_messages(
         idem_key=idem_key,
         idem_path=str(request.url.path),
     )
+
+
+async def _get_person_brief_impl(
+    person_id: str,
+    scope: UserScope,
+    container: AppContainer,
+) -> PersonBriefResponse:
+    pid = parse_uuid_param(person_id, field_name="personId")
+    svc = CompanionService(container)
+    brief = await svc.get_person_brief(scope=scope.person(pid))
+    return PersonBriefResponse(
+        person_id=brief.person_id,
+        tier=brief.tier,
+        upcoming_count=brief.upcoming_count,
+        pending_count=brief.pending_count,
+        record_count=brief.record_count,
+        headline=brief.headline,
+        subline=brief.subline,
+        prompt=brief.prompt,
+        items=[
+            BriefItemSchema(
+                kind=item.kind,
+                when=item.when,
+                text=item.text,
+                record_id=item.record_id,
+                action_prompt=item.action_prompt,
+            )
+            for item in brief.items
+        ],
+    )
+
+
+@router.get(
+    "/people/{person_id}/brief",
+    response_model=PersonBriefResponse,
+    response_model_by_alias=True,
+    summary="Get calm proactive relationship care brief for a person",
+)
+async def get_person_brief_people(
+    person_id: str,
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> PersonBriefResponse:
+    return await _get_person_brief_impl(person_id, scope, container)
+
+
+@router.get(
+    "/persons/{person_id}/brief",
+    response_model=PersonBriefResponse,
+    response_model_by_alias=True,
+    summary="Get calm proactive relationship care brief for a person (persons alias)",
+    include_in_schema=False,
+)
+async def get_person_brief_persons(
+    person_id: str,
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> PersonBriefResponse:
+    return await _get_person_brief_impl(person_id, scope, container)

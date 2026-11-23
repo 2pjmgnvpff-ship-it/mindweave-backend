@@ -1,0 +1,282 @@
+name: Build iOS IPA (MindWeave)
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Optional default backend URL baked into Info.plist (e.g. https://your-service.run.app)"
+        required: false
+        type: string
+        default: ""
+      marketing_version:
+        description: "Optional CFBundleShortVersionString override (default 1.0.0)"
+        required: false
+        type: string
+        default: ""
+  push:
+    branches: ["main", "develop"]
+    paths:
+      - "web/**"
+      - "ios/**"
+      - "scripts/sync_ios_web_bundle.sh"
+      - ".github/workflows/build-ios-ipa.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "ios/**"
+      - "scripts/sync_ios_web_bundle.sh"
+      - ".github/workflows/build-ios-ipa.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build arm64 MindWeave.ipa (Xcode 16)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16 toolchain
+        run: |
+          set -euo pipefail
+          XCODE_16_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          if [[ -n "${XCODE_16_APP}" && -d "${XCODE_16_APP}" ]]; then
+            sudo xcode-select -s "${XCODE_16_APP}/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Validate project.yml and opaque AppIcon asset
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml || python3 -m pip install --quiet pyyaml
+          python3 -c "import yaml; yaml.safe_load(open('ios/project.yml'))"
+          sips -g hasAlpha ios/MindWeave/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png | grep -q "hasAlpha: no"
+
+      - name: Sync web frontend into iOS WebBundle
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/sync_ios_web_bundle.sh
+          ./scripts/sync_ios_web_bundle.sh
+
+      - name: Apply optional build-time Info.plist overrides
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url }}
+        run: |
+          set -euo pipefail
+          PLIST_PATH="ios/MindWeave/Resources/Info.plist"
+          if [[ -n "${API_BASE_URL}" ]]; then
+            if [[ ! "${API_BASE_URL}" =~ ^https?://[^[:space:]\'\"]+$ ]]; then
+              echo "error: api_base_url must be a valid http:// or https:// URL" >&2
+              exit 1
+            fi
+            /usr/libexec/PlistBuddy -c "Set :MWDefaultAPIBaseURL ${API_BASE_URL}" "${PLIST_PATH}"
+            echo "Baked MWDefaultAPIBaseURL=${API_BASE_URL} into ${PLIST_PATH}"
+          fi
+          plutil -lint "${PLIST_PATH}"
+
+      - name: Install XcodeGen and generate MindWeave.xcodeproj
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+          (cd ios && xcodegen generate)
+          xcodebuild -project ios/MindWeave.xcodeproj -list
+
+      - name: Detect code signing secrets
+        id: signing
+        env:
+          HAS_P12: ${{ secrets.IOS_P12_BASE64 != '' }}
+          HAS_PROFILE: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 != '' }}
+        run: |
+          if [[ "${HAS_P12}" == "true" && "${HAS_PROFILE}" == "true" ]]; then
+            echo "signed=true" >> "${GITHUB_OUTPUT}"
+            echo "Code signing secrets detected: building signed distribution .ipa"
+          else
+            echo "signed=false" >> "${GITHUB_OUTPUT}"
+            echo "No signing secrets provided: building unsigned Release arm64 .ipa for sideloading"
+          fi
+
+      - name: Import signing certificate and build signed IPA
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          IOS_EXPORT_METHOD: ${{ secrets.IOS_EXPORT_METHOD }}
+          MARKETING_VERSION_OVERRIDE: ${{ inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="${RUNNER_TEMP}/mindweave-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="${RUNNER_TEMP}/dist_cert.p12"
+          PROFILE_PATH="${RUNNER_TEMP}/profile.mobileprovision"
+          PROFILE_PLIST="${RUNNER_TEMP}/profile.plist"
+
+          printf '%s' "${IOS_P12_BASE64}" | base64 --decode > "${CERT_PATH}"
+          printf '%s' "${IOS_PROVISION_PROFILE_BASE64}" | base64 --decode > "${PROFILE_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" \
+            -P "${IOS_P12_PASSWORD}" \
+            -A -t cert -f pkcs12 \
+            -k "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          SIGNING_IDENTITY="$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk -F'"' 'NR==1 {print $2}')"
+          if [[ -z "${SIGNING_IDENTITY}" ]]; then
+            echo "error: no valid codesigning identity found in imported .p12 certificate" >&2
+            exit 1
+          fi
+
+          security cms -D -i "${PROFILE_PATH}" > "${PROFILE_PLIST}"
+          PROFILE_UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "${PROFILE_PLIST}")"
+          PROFILE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "${PROFILE_PLIST}")"
+          TEAM_ID="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "${PROFILE_PLIST}")"
+          printf '%s' "${PROFILE_UUID}" > "${RUNNER_TEMP}/profile_uuid.txt"
+
+          # Install provisioning profile into both legacy and Xcode 16 UserData directories.
+          LEGACY_PROFILES_DIR="${HOME}/Library/MobileDevice/Provisioning Profiles"
+          XCODE16_PROFILES_DIR="${HOME}/Library/Developer/Xcode/UserData/Provisioning Profiles"
+          mkdir -p "${LEGACY_PROFILES_DIR}" "${XCODE16_PROFILES_DIR}"
+          cp "${PROFILE_PATH}" "${LEGACY_PROFILES_DIR}/${PROFILE_UUID}.mobileprovision"
+          cp "${PROFILE_PATH}" "${XCODE16_PROFILES_DIR}/${PROFILE_UUID}.mobileprovision"
+
+          EXPORT_METHOD="${IOS_EXPORT_METHOD:-}"
+          if [[ -z "${EXPORT_METHOD}" ]]; then
+            if /usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices' "${PROFILE_PLIST}" >/dev/null 2>&1; then
+              EXPORT_METHOD="ad-hoc"
+            else
+              EXPORT_METHOD="app-store-connect"
+            fi
+          fi
+
+          MARKETING_VERSION_VALUE="${MARKETING_VERSION_OVERRIDE:-1.0.0}"
+
+          mkdir -p ios/build
+          xcodebuild \
+            -project ios/MindWeave.xcodeproj \
+            -scheme MindWeave \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/ios/build/MindWeave.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="${SIGNING_IDENTITY}" \
+            DEVELOPMENT_TEAM="${TEAM_ID}" \
+            PROVISIONING_PROFILE_SPECIFIER="${PROFILE_UUID}" \
+            MARKETING_VERSION="${MARKETING_VERSION_VALUE}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" \
+            archive
+
+          EXPORT_PLIST="$PWD/ios/build/ExportOptions.plist"
+          rm -f "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :method string ${EXPORT_METHOD}" "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :signingCertificate string ${SIGNING_IDENTITY}" "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :teamID string ${TEAM_ID}" "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "${EXPORT_PLIST}"
+          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:app.mindweave.ios string ${PROFILE_UUID}" "${EXPORT_PLIST}"
+          plutil -lint "${EXPORT_PLIST}"
+
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$PWD/ios/build/MindWeave.xcarchive" \
+            -exportOptionsPlist "${EXPORT_PLIST}" \
+            -exportPath "$PWD/ios/build/export"
+
+          EXPORTED_IPA="$(find ios/build/export -maxdepth 1 -name '*.ipa' | head -n 1)"
+          if [[ -z "${EXPORTED_IPA}" || ! -f "${EXPORTED_IPA}" ]]; then
+            echo "error: xcodebuild -exportArchive did not produce an .ipa file" >&2
+            exit 1
+          fi
+          cp "${EXPORTED_IPA}" ios/build/MindWeave.ipa
+
+      - name: Build unsigned Release arm64 app and package MindWeave.ipa
+        if: steps.signing.outputs.signed != 'true'
+        env:
+          MARKETING_VERSION_OVERRIDE: ${{ inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          MARKETING_VERSION_VALUE="${MARKETING_VERSION_OVERRIDE:-1.0.0}"
+
+          mkdir -p ios/build/Release-iphoneos
+          xcodebuild \
+            -project ios/MindWeave.xcodeproj \
+            -scheme MindWeave \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CONFIGURATION_BUILD_DIR="$PWD/ios/build/Release-iphoneos" \
+            MARKETING_VERSION="${MARKETING_VERSION_VALUE}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" \
+            build
+
+          rm -rf ios/build/Payload ios/build/MindWeave.ipa
+          mkdir -p ios/build/Payload
+          cp -R ios/build/Release-iphoneos/MindWeave.app ios/build/Payload/MindWeave.app
+          (cd ios/build && zip -r -y MindWeave.ipa Payload)
+
+      - name: Verify arm64 Mach-O binary, WebBundle, AppIcon, and IPA contents
+        run: |
+          set -euo pipefail
+          IPA_PATH="ios/build/MindWeave.ipa"
+          VERIFY_DIR="ios/build/verify_ipa"
+
+          test -f "${IPA_PATH}"
+          rm -rf "${VERIFY_DIR}"
+          mkdir -p "${VERIFY_DIR}"
+          unzip -q "${IPA_PATH}" -d "${VERIFY_DIR}"
+
+          APP_DIR="${VERIFY_DIR}/Payload/MindWeave.app"
+          test -d "${APP_DIR}"
+          test -f "${APP_DIR}/MindWeave"
+          test -f "${APP_DIR}/Info.plist"
+          test -f "${APP_DIR}/Assets.car"
+          test -f "${APP_DIR}/WebBundle/index.html"
+          test -f "${APP_DIR}/WebBundle/scripts/main.js"
+          test ! -d "${APP_DIR}/WebBundle/tests"
+
+          BINARY_INFO="$(file "${APP_DIR}/MindWeave")"
+          echo "Binary: ${BINARY_INFO}"
+          echo "${BINARY_INFO}" | grep -q "Mach-O 64-bit executable arm64"
+
+          plutil -lint "${APP_DIR}/Info.plist"
+          echo "--- IPA Archive Listing ---"
+          unzip -l "${IPA_PATH}"
+          ls -lh "${IPA_PATH}"
+
+      - name: Clean up temporary signing keychain and profiles
+        if: always() && steps.signing.outputs.signed == 'true'
+        run: |
+          security delete-keychain "${RUNNER_TEMP}/mindweave-signing.keychain-db" || true
+          if [[ -f "${RUNNER_TEMP}/profile_uuid.txt" ]]; then
+            PROFILE_UUID="$(cat "${RUNNER_TEMP}/profile_uuid.txt")"
+            rm -f "${HOME}/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+            rm -f "${HOME}/Library/Developer/Xcode/UserData/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+          fi
+          rm -f "${RUNNER_TEMP}/dist_cert.p12" "${RUNNER_TEMP}/profile.mobileprovision" "${RUNNER_TEMP}/profile.plist" "${RUNNER_TEMP}/profile_uuid.txt"
+
+      - name: Upload MindWeave.ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MindWeave-iOS-IPA
+          path: ios/build/MindWeave.ipa
+          retention-days: 30
+          if-no-files-found: error

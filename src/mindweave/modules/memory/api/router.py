@@ -20,7 +20,7 @@ from mindweave.core.dependencies import (
     require_idempotency_key,
 )
 from mindweave.core.dto import CursorPage
-from mindweave.core.errors import ValidationFailedError
+from mindweave.core.errors import PayloadTooLargeError, ValidationFailedError
 from mindweave.modules.memory.application.dto import (
     FactCreateRequest,
     FactDto,
@@ -73,6 +73,8 @@ def _parse_bool_flag(raw: object, *, default: bool = False) -> bool:
 
 async def _parse_material_create_request(
     request: Request,
+    *,
+    max_image_bytes: int,
 ) -> tuple[MaterialCreateRequest, bytes | None]:
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data") or content_type.startswith(
@@ -81,10 +83,16 @@ async def _parse_material_create_request(
         form = await request.form()
         _reject_null_bytes_in_form(form)
         photo_bytes: bytes | None = None
+        max_image_read = max_image_bytes + 1
         for field_name in ("photo", "image", "file"):
             upload = form.get(field_name)
             if isinstance(upload, UploadFile):
-                photo_bytes = await upload.read()
+                data = await upload.read(max_image_read)
+                if len(data) > max_image_bytes:
+                    raise PayloadTooLargeError(
+                        f"Image file size exceeds maximum allowed ({max_image_bytes} bytes)"
+                    )
+                photo_bytes = data
                 break
 
         raw_id = form.get("id")
@@ -175,7 +183,10 @@ async def create_person_material(
     container: AppContainer = Depends(get_container),
 ) -> Response:
     pid = parse_uuid_param(person_id, field_name="person_id")
-    req_dto, photo_bytes = await _parse_material_create_request(request)
+    req_dto, photo_bytes = await _parse_material_create_request(
+        request,
+        max_image_bytes=container.settings.max_image_bytes,
+    )
     svc = MemoryService(container)
     created, hit = await svc.create_material(
         scope=scope,

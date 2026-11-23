@@ -528,6 +528,59 @@
         "title": "BootstrapResponse",
         "type": "object"
       },
+      "BriefItemSchema": {
+        "additionalProperties": false,
+        "description": "Single actionable highlight surfaced in a person's proactive care brief.",
+        "properties": {
+          "actionPrompt": {
+            "title": "Actionprompt",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "reminder",
+              "pencil",
+              "fact"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "recordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordid"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "when": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When"
+          }
+        },
+        "required": [
+          "kind",
+          "text",
+          "actionPrompt"
+        ],
+        "title": "BriefItemSchema",
+        "type": "object"
+      },
       "CaptureResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1101,6 +1154,136 @@
           }
         },
         "title": "CreateExportRequest",
+        "type": "object"
+      },
+      "CreatePersonReminderRequest": {
+        "additionalProperties": false,
+        "description": "Request payload for `POST /v1/people/{person_id}/reminders` (accepts `triggerDate` or `onceDate`).",
+        "properties": {
+          "factId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Factid"
+          },
+          "fireHour": {
+            "default": 9,
+            "maximum": 23.0,
+            "minimum": 0.0,
+            "title": "Firehour",
+            "type": "integer"
+          },
+          "fireMinute": {
+            "default": 0,
+            "maximum": 59.0,
+            "minimum": 0.0,
+            "title": "Fireminute",
+            "type": "integer"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "isLeapMonth": {
+            "default": false,
+            "title": "Isleapmonth",
+            "type": "boolean"
+          },
+          "isLunar": {
+            "default": false,
+            "title": "Islunar",
+            "type": "boolean"
+          },
+          "leadDays": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Leaddays",
+            "type": "array"
+          },
+          "onceDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oncedate"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/ReminderRule",
+            "default": "once"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReminderStatus",
+            "default": "active"
+          },
+          "targetDay": {
+            "anyOf": [
+              {
+                "maximum": 31.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetday"
+          },
+          "targetMonth": {
+            "anyOf": [
+              {
+                "maximum": 12.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetmonth"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "title": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "CreatePersonReminderRequest",
         "type": "object"
       },
       "CreateReminderRequest": {
@@ -3042,6 +3225,67 @@
         "title": "PersonAliasListResponse",
         "type": "object"
       },
+      "PersonBriefResponse": {
+        "additionalProperties": false,
+        "description": "Calm, zero-guilt, tier-aware proactive relationship brief for a single person.",
+        "properties": {
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BriefItemSchema"
+            },
+            "maxItems": 3,
+            "title": "Items",
+            "type": "array"
+          },
+          "pendingCount": {
+            "minimum": 0.0,
+            "title": "Pendingcount",
+            "type": "integer"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "recordCount": {
+            "minimum": 0.0,
+            "title": "Recordcount",
+            "type": "integer"
+          },
+          "subline": {
+            "title": "Subline",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "upcomingCount": {
+            "minimum": 0.0,
+            "title": "Upcomingcount",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "personId",
+          "tier",
+          "upcomingCount",
+          "pendingCount",
+          "recordCount",
+          "headline",
+          "subline",
+          "prompt"
+        ],
+        "title": "PersonBriefResponse",
+        "type": "object"
+      },
       "PersonCreateRequest": {
         "additionalProperties": false,
         "description": "Request body for `POST /persons`.",
@@ -4683,6 +4927,42 @@
           "transcriptHtml"
         ],
         "title": "VoiceIngestResponse",
+        "type": "object"
+      },
+      "VoiceTranscribeResponse": {
+        "additionalProperties": false,
+        "description": "Pure conversational ASR response (zero `CaptureRow`, `RecordRow`, or `FactRow` mutations).",
+        "properties": {
+          "corrected": {
+            "title": "Corrected",
+            "type": "string"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durationms"
+          },
+          "rawTranscript": {
+            "default": "",
+            "title": "Rawtranscript",
+            "type": "string"
+          },
+          "transcript": {
+            "title": "Transcript",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transcript",
+          "corrected"
+        ],
+        "title": "VoiceTranscribeResponse",
         "type": "object"
       }
     },
@@ -6727,6 +7007,126 @@
         "summary": "Upload My Wallpaper",
         "tags": [
           "preferences"
+        ]
+      }
+    },
+    "/v1/people/{person_id}/brief": {
+      "get": {
+        "operationId": "get_person_brief_people_v1_people__person_id__brief_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "title": "Person Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonBriefResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get calm proactive relationship care brief for a person",
+        "tags": [
+          "companion"
+        ]
+      }
+    },
+    "/v1/people/{person_id}/reminders": {
+      "post": {
+        "operationId": "create_person_reminder_people_v1_people__person_id__reminders_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "title": "Person Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePersonReminderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReminderResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create an encrypted reminder strictly scoped to a person",
+        "tags": [
+          "reminders"
         ]
       }
     },
@@ -8818,6 +9218,32 @@
           }
         ],
         "summary": "Ingest Voice",
+        "tags": [
+          "capture"
+        ]
+      }
+    },
+    "/v1/voice/transcribe": {
+      "post": {
+        "operationId": "transcribe_voice_v1_voice_transcribe_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceTranscribeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Transcribe conversational voice audio without creating records or facts",
         "tags": [
           "capture"
         ]

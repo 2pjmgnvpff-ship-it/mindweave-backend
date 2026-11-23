@@ -13,7 +13,7 @@ from mindweave.modules.bootstrap.api.schemas import (
 )
 from mindweave.modules.bootstrap.application.service import BootstrapService
 from mindweave.modules.bootstrap.domain.formatting import resolve_visual_token_colors
-from mindweave.shared.enums import RecordKind
+from mindweave.shared.enums import RecordKind, Tier
 from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["bootstrap"])
@@ -35,7 +35,11 @@ async def get_workspace_bootstrap(
     people_dtos: dict[str, BootstrapPersonDTO] = {}
     for key, agg in snap.people.items():
         p = agg.profile
+        is_silver = p.tier is Tier.SILVER
         colors = resolve_visual_token_colors(p.tier, p.visual_tokens)
+        avatar_url = None if is_silver else agg.avatar_url
+        main_photo_url = None if is_silver else agg.main_photo_url
+        sub_photo_url = None if is_silver else agg.sub_photo_url
         people_dtos[key] = BootstrapPersonDTO(
             id=str(p.id),
             name_cn=p.name_cn,
@@ -45,7 +49,7 @@ async def get_workspace_bootstrap(
             cupid_title=p.cupid_title,
             tier=p.tier,
             state=p.state,
-            has_photo=p.has_photo,
+            has_photo=False if is_silver else p.has_photo,
             short_memo=p.short_memo,
             traits=p.traits,
             visual_tokens=p.visual_tokens,
@@ -53,12 +57,12 @@ async def get_workspace_bootstrap(
             seal_color=colors.seal_color,
             tape_color=colors.tape_color,
             tab_color=colors.tab_color,
-            avatar=agg.avatar_url,
-            main_photo=agg.main_photo_url,
-            sub_photo=agg.sub_photo_url,
-            avatar_url=agg.avatar_url,
-            main_photo_url=agg.main_photo_url,
-            sub_photo_url=agg.sub_photo_url,
+            avatar=avatar_url,
+            main_photo=main_photo_url,
+            sub_photo=sub_photo_url,
+            avatar_url=avatar_url,
+            main_photo_url=main_photo_url,
+            sub_photo_url=sub_photo_url,
             materials=[
                 BootstrapMaterialPreviewDTO(
                     id=mat.id,
@@ -69,8 +73,10 @@ async def get_workspace_bootstrap(
                     dur=mat.dur,
                     stamp_code=mat.stamp_code,
                     happened_on=mat.happened_on,
-                    media_url=media_url,
-                    thumb=media_url if mat.kind is RecordKind.PHOTO else None,
+                    media_url=None if (is_silver and mat.kind is RecordKind.PHOTO) else media_url,
+                    thumb=(
+                        None if is_silver else (media_url if mat.kind is RecordKind.PHOTO else None)
+                    ),
                 )
                 for mat, media_url in agg.materials
             ],

@@ -1,10 +1,11 @@
-// settings.js — the personal settings sheet (gear, top-left): paper texture, export, sign out.
-// Paper textures live only here (the old director panel is gone). Default 暖棉水彩.
+// settings.js — personal settings sheet (gear, top-left): paper texture, native server config, export, sign out.
+// Paper textures live only here (default 暖棉水彩 cotton).
 import { h } from '../dom.js';
 import { api } from '../api/endpoints.js';
 import { store, EDITIONS } from '../store.js';
 import { openSheet, closeSheet } from './sheet.js';
 import { whisper } from './toast.js';
+import { haptic, isNativeIos, getConfiguredServerUrl, openServerConfig, sharePayload } from '../native-bridge.js';
 
 export const EDITION_LABEL = {
   cotton: '暖棉水彩',
@@ -43,6 +44,29 @@ export function initialEdition(prefs) {
   return prefs?.preferredEdition || prefs?.edition || local || 'cotton';
 }
 
+function buildNativeServerSection() {
+  if (!isNativeIos() && globalThis.location?.protocol !== 'mindweave:') return null;
+  const currentUrl = getConfiguredServerUrl() || '默认（应用内代理）';
+  return h(
+    'div',
+    { class: 'sheet-section' },
+    h('p', { class: 'sheet-section-title', text: '连接' }),
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'sheet-row-btn',
+        onClick: () => {
+          haptic('light');
+          openServerConfig();
+        },
+      },
+      h('span', { text: '连接服务器' }),
+      h('small', { text: currentUrl }),
+    ),
+  );
+}
+
 export function openSettings({ onSignOut } = {}) {
   const current = store.get().edition;
   const cards = EDITIONS.map((e) =>
@@ -54,6 +78,7 @@ export function openSettings({ onSignOut } = {}) {
         role: 'radio',
         'aria-checked': String(e === current),
         onClick: (ev) => {
+          haptic('selection');
           applyEdition(e, { persist: true });
           for (const c of ev.currentTarget.parentElement.children) {
             const on = c === ev.currentTarget;
@@ -93,6 +118,7 @@ export function openSettings({ onSignOut } = {}) {
     title: '我的设置',
     body: [
       h('div', { class: 'sheet-section' }, h('p', { class: 'sheet-section-title', text: '纸张' }), h('div', { class: 'edition-grid', role: 'radiogroup', 'aria-label': '纸张' }, ...cards)),
+      buildNativeServerSection(),
       h(
         'div',
         { class: 'sheet-section' },
@@ -103,10 +129,21 @@ export function openSettings({ onSignOut } = {}) {
             type: 'button',
             class: 'sheet-row-btn',
             onClick: async () => {
+              haptic('light');
               try {
-                await api.requestExport();
+                const res = await api.requestExport();
+                haptic('success');
+                const shareText = res?.downloadUrl || res?.summary || '';
+                if (isNativeIos() && res?.downloadUrl) {
+                  await sharePayload({ title: '心络手帐导出', url: res.downloadUrl, text: '心络手帐导出链接' });
+                } else if (isNativeIos() && shareText) {
+                  await sharePayload({ title: '心络手帐导出', text: shareText, filename: 'mindweave-export.txt' });
+                } else if (isNativeIos()) {
+                  await sharePayload({ title: '心络手帐导出', text: '心络手帐正在云端打包，完成后即可下载。' });
+                }
                 whisper('已开始打包，整理好后会通知你下载', 3200);
               } catch (err) {
+                haptic('warning');
                 whisper(err.message, 3000);
               }
             },
@@ -120,7 +157,8 @@ export function openSettings({ onSignOut } = {}) {
             type: 'button',
             class: 'sheet-row-btn is-danger',
             onClick: async () => {
-              closeSheet();
+              haptic('warning');
+              closeSheet({ silentHaptic: true });
               await api.logout();
               onSignOut?.();
             },

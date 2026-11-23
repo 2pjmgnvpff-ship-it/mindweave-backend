@@ -13,6 +13,7 @@ import { CAMERA_SVG } from '../icons.js';
 import { showToast, whisper } from './toast.js';
 import { openSheet, closeSheet } from './sheet.js';
 import { actions } from '../actions.js';
+import { haptic } from '../native-bridge.js';
 
 const OFFLINE_COPY = '已存入本地草稿，联网后自动补传';
 
@@ -82,16 +83,19 @@ async function submit(draft, { optimisticText }) {
 }
 
 export function submitVoice({ blob, route }) {
+  haptic('light');
   const draft = { id: uuid(), idemKey: uuid(), kind: 'voice', blob, routeMode: route.routeMode, activePersonId: route.activePersonId || null };
   return submit(draft, { optimisticText: '正在把这段话誊进手帐…' });
 }
 
 export function submitText({ text, route }) {
+  haptic('light');
   const draft = { id: uuid(), idemKey: uuid(), kind: 'text', text, routeMode: route.routeMode, activePersonId: route.activePersonId || null };
   return submit(draft, { optimisticText: text });
 }
 
 export async function submitImage({ file, text = '', route }) {
+  haptic('light');
   const id = uuid();
   const pageId = store.get().view === 'journal' ? store.get().activePersonId : null;
   addPending({ id, pageId, text: text || '正在细看这张截图…', state: 'drying', kind: 'image' });
@@ -112,6 +116,7 @@ export async function submitImage({ file, text = '', route }) {
 }
 
 export async function submitPhotoMaterial({ personId, file, caption = '' }) {
+  haptic('light');
   const id = uuid();
   addPending({ id, pageId: personId, text: caption || '正在把照片贴进手帐…', state: 'drying', kind: 'photo' });
   try {
@@ -172,6 +177,7 @@ export function handleCaptureResult(res, { captureId, quiet = false } = {}) {
 }
 
 export async function undoCapture(captureId, touched = []) {
+  haptic('warning');
   try {
     await api.undoCapture(captureId);
     whisper('已撤回，这句话没有留下', 2600);

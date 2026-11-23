@@ -342,7 +342,20 @@ class FakeAdapter:
         await self._check_faults(request)
         ctx = request.structured_context or {}
         reply_out = self._handle_companion_reply(ctx)
-        full_text = reply_out.reply_text
+        payload_dict = ctx.get("payload") or {}
+        tier_val = Tier.from_any(payload_dict.get("tier") or Tier.GOLD.value)
+
+        parts: list[str] = [f"<reply>{reply_out.reply_text}</reply>"]
+        if reply_out.whisper_note:
+            parts.append(f"<whisper>{reply_out.whisper_note}</whisper>")
+        if tier_val is Tier.GOLD and reply_out.alternative_perspectives:
+            persp_lines = "\n".join(reply_out.alternative_perspectives)
+            parts.append(f"<perspectives>\n{persp_lines}\n</perspectives>")
+        if reply_out.actionable_suggestions:
+            sugg_lines = "\n".join(reply_out.actionable_suggestions)
+            parts.append(f"<suggestions>\n{sugg_lines}\n</suggestions>")
+
+        full_text = "\n".join(parts)
         step = 14
         for idx in range(0, len(full_text), step):
             await asyncio.sleep(0)
@@ -374,6 +387,20 @@ class FakeAdapter:
                     corrected_transcript="",
                     duration_ms=0,
                 )
+        elif b"TEXT:" in raw_bytes:
+            # Allows binary-valid WAV/WebM/MP3 test fixtures to carry an embedded UTF-8 utterance
+            marker_pos = raw_bytes.index(b"TEXT:") + 5
+            tail = raw_bytes[marker_pos:]
+            nul_pos = tail.find(b"\x00")
+            if nul_pos != -1:
+                tail = tail[:nul_pos]
+            decoded = tail.decode("utf-8", errors="ignore").strip()
+            if decoded.upper() in {"SILENCE", "NOISE", "EMPTY"}:
+                return TranscribeOutput(
+                    raw_transcript="",
+                    corrected_transcript="",
+                    duration_ms=0,
+                )
         else:
             try:
                 cand = raw_bytes.decode("utf-8")
@@ -383,12 +410,26 @@ class FakeAdapter:
                 decoded = ""
 
         if not decoded:
-            person_hint = (
-                (payload.active_person_name or "").strip()
-                or (payload.known_person_names[0] if payload.known_person_names else "")
-                or "对方"
-            )
-            decoded = f"{person_hint}提到最近想好好休息。"
+            active_name = (payload.active_person_name or "").strip()
+            context_blob = " ".join(payload.recent_context_snippets)
+            if active_name:
+                if any(k in context_blob for k in ("复查", "膝盖", "医院")):
+                    decoded = f"陪{active_name}去复查前，结合手帐帮我列一份准备清单吧？"
+                elif any(k in context_blob for k in ("围巾", "礼物", "羊绒")):
+                    decoded = f"想给{active_name}买条围巾当礼物，手帐里之前提过什么讲究？"
+                elif any(k in context_blob for k in ("甩锅", "邮件", "签字", "需求", "复盘")):
+                    decoded = f"按时间线帮我整理一下和{active_name}的关键客观事实和书面留痕要点？"
+                elif any(k in context_blob for k in ("过敏", "忌口", "喜欢", "爱吃", "爱喝")):
+                    decoded = f"最近约{active_name}见面吃饭，有哪些偏好和忌口要提前留意？"
+                else:
+                    decoded = (
+                        f"结合手帐里记下的细节，最近和{active_name}相处有哪些需要提前准备的事？"
+                    )
+            else:
+                person_hint = (
+                    payload.known_person_names[0] if payload.known_person_names else ""
+                ) or "对方"
+                decoded = f"{person_hint}提到最近想好好休息。"
 
         corrected = postprocess_asr_transcript(
             decoded,
@@ -1956,14 +1997,30 @@ class FakeAdapter:
                     evidence_by_rec[f.record_id] = (parts, f.happened_on)
         for m in payload.referenced_materials:
             referenced_rec_ids.add(m.record_id)
-            mat_text = f"{m.title}：{m.body}" if m.title and m.title not in m.body else m.body
+            if m.title and not self._is_redundant_text(m.title, m.body):
+                mat_text = f"{m.title}：{m.body}"
+            else:
+                mat_text = m.body
             if m.record_id not in evidence_by_rec:
                 evidence_by_rec[m.record_id] = ([mat_text], m.happened_on)
                 evidence_order.append(m.record_id)
             else:
                 parts, dt_s = evidence_by_rec[m.record_id]
-                if mat_text and not any(mat_text in p or p in mat_text for p in parts):
-                    parts.append(mat_text)
+                if mat_text:
+                    mat_norm = self._normalize_dedup_text(mat_text)
+                    replaced = False
+                    already_covered = False
+                    for idx_p, existing_p in enumerate(parts):
+                        if self._is_redundant_text(mat_text, existing_p):
+                            already_covered = True
+                            break
+                        exist_norm = self._normalize_dedup_text(existing_p)
+                        if exist_norm and exist_norm in mat_norm:
+                            parts[idx_p] = mat_text
+                            replaced = True
+                            break
+                    if not already_covered and not replaced:
+                        parts.append(mat_text)
                 if dt_s is None and m.happened_on is not None:
                     evidence_by_rec[m.record_id] = (parts, m.happened_on)
 
@@ -2123,9 +2180,7 @@ class FakeAdapter:
                 cited_record_ids=[],
                 has_unrecorded_gap=True,
                 alternative_perspectives=[],
-                actionable_suggestions=[
-                    f"可以顺口问问{payload.person_name}或留意日常细节，确认后再补记到手帐里。"
-                ],
+                actionable_suggestions=[],
                 disclaimer=None,
             )
 
@@ -2193,6 +2248,22 @@ class FakeAdapter:
                 ["也许他也有自己的压力"] if self._faults.leak_silver_perspective_once else []
             )
             self._faults.leak_silver_perspective_once = False
+            silver_is_work = bool(
+                re.search(
+                    r"(?:需求|邮件|范围|排期|项目|周五|加班|复盘|交付|签字|合同|工作|甩锅)",
+                    clean_query + " " + ev_natural,
+                )
+            )
+            silver_suggestions = (
+                [
+                    "「关于本次临时调整的需求与排期，烦请回复邮件书面确认最新的交付范围与截止时间，方便双方按记录推进，谢谢。」",
+                    "「前期已书面确认本阶段交付范围，新增事项建议排入下一周期，如需调整请邮件同步确认。」",
+                ]
+                if silver_is_work
+                else [
+                    "「这件事我已按时间记清经过，后续相关沟通请直接文字确认，彼此边界清楚更稳妥。」",
+                ]
+            )
             return CompanionChatOutput(
                 safety_flag=SafetyCategory.NORMAL,
                 reply_text=reply_body,
@@ -2200,10 +2271,7 @@ class FakeAdapter:
                 cited_record_ids=cited_ids,
                 has_unrecorded_gap=has_gap,
                 alternative_perspectives=leaked_persp,
-                actionable_suggestions=[
-                    "守住边界：不主动迎合、不替对方找借口，所有工作/往来只留书面客观凭证。",
-                    "先照顾好自己的休息与心情，把精力留给真正尊重你的人和事。",
-                ],
+                actionable_suggestions=silver_suggestions,
                 disclaimer=None,
             )
 
@@ -2223,17 +2291,20 @@ class FakeAdapter:
                     f"帮你把和{payload.person_name}相关的记录理清楚了：{ev_natural}。"
                     "职场与日常往来咱们就事论事、清爽守住边界，不用给自己额外心理负担。"
                 )
-            crystal_suggestions = (
-                [
-                    "得体沟通参考：「这周末我正好有安排就不参与啦，对了上次我那块充电宝周末出门要用，方便今天顺手拿给我吗？谢谢啦！」"
-                ]
-                if any("充电宝" in txt or "份子" in txt for _, txt, _ in matched_ev)
+            if has_gap:
+                crystal_suggestions: list[str] = []
+            elif (
+                any("充电宝" in txt or "份子" in txt for _, txt, _ in matched_ev)
                 or "充电宝" in clean_query
                 or "份子" in clean_query
-                else [
-                    f"跟{payload.person_name}确认关键时间点或交接事项时，顺手留一句微信/邮件文字确认最省心。"
+            ):
+                crystal_suggestions = [
+                    "「这周末我正好有安排就不参与啦，对了上次我那块充电宝周末出门要用，方便今天顺手拿给我吗？谢谢啦！」"
                 ]
-            )
+            else:
+                crystal_suggestions = [
+                    f"「{payload.person_name}您好，跟您确认一下接下来的时间安排和需要提前准备的细节，方便的话烦请文字回复确认，谢谢！」"
+                ]
             return CompanionChatOutput(
                 safety_flag=SafetyCategory.NORMAL,
                 reply_text=reply_body,
@@ -2263,7 +2334,7 @@ class FakeAdapter:
                 "温和破冰微信草稿：「看你刚才忙得脸色不太好，蛋糕记得趁新鲜吃呀，等忙完这阵好好休息一下，有空我们再聊～」",
             ]
             suggestions = [
-                "温和破冰微信草稿：「刚看你还在忙着开会而且脸色不太好，别太累啦，点心放着空了吃，等你忙完休息好我们再说～」"
+                "「刚看你还在忙着开会而且脸色不太好，别太累啦，点心放着空了吃，等你忙完休息好我们再慢慢聊～」"
             ]
         else:
             draft_note = ""
@@ -2285,9 +2356,32 @@ class FakeAdapter:
                     f"{temporal_warning}{draft_note}"
                 )
             perspectives = []
-            suggestions = [
-                f"顺着这些记下的小细节提前留心准备，{payload.person_name}一定会感受到你满满的用心。"
-            ]
+            combined_topic = clean_query + " " + ev_natural
+            if has_gap:
+                suggestions = []
+            elif "复查" in combined_topic and "围巾" in combined_topic:
+                suggestions = [
+                    f"「{payload.person_name}，复查那天我提前过来接您，医保卡和旧片子我都提前收好啦，天冷出门记得戴上软和的围巾～」",
+                    f"「{payload.person_name}，前阵子看您喜欢浅驼色羊绒围巾，天凉了我想给您挑一条软和的，复查那天正好戴着保暖～」",
+                ]
+            elif "复查" in combined_topic:
+                suggestions = [
+                    f"「{payload.person_name}，复查那天我提前过来接您，医保卡和之前的片子我都记着帮您带好，您放心就好～」"
+                ]
+            elif "围巾" in combined_topic or "礼物" in clean_query:
+                suggestions = [
+                    f"「{payload.person_name}，最近天凉了，给您挑了一条软软暖暖的浅驼色羊绒围巾，出门戴着刚好护住脖子呀～」"
+                    if "浅驼色" in combined_topic
+                    else f"「{payload.person_name}，最近降温了，给您挑了份贴心小礼物，有空见面亲手带给您呀～」"
+                ]
+            elif re.search(r"(?:写一段|祝贺|祝福|生日)", clean_query):
+                suggestions = [
+                    f"「{payload.person_name}，太替你开心啦！祝你一切顺遂开心，有空我们一起好好庆祝一下呀～」"
+                ]
+            else:
+                suggestions = [
+                    f"「{payload.person_name}，最近降温了记得多照顾自己呀，有空咱们约顿你爱吃的饭慢慢聊～」"
+                ]
 
         return CompanionChatOutput(
             safety_flag=SafetyCategory.NORMAL,
@@ -2299,6 +2393,30 @@ class FakeAdapter:
             actionable_suggestions=suggestions,
             disclaimer=None,
         )
+
+    @staticmethod
+    def _normalize_dedup_text(text: str) -> str:
+        return re.sub(r"[\s，,。；;：:！!？?、（）()「」【】\"'·\-]+", "", text).lower()
+
+    @classmethod
+    def _is_redundant_text(cls, candidate: str, target: str) -> bool:
+        """Return True when `candidate` (e.g. title) is already covered by `target` (e.g. body)."""
+        cand_norm = cls._normalize_dedup_text(candidate)
+        targ_norm = cls._normalize_dedup_text(target)
+        if not cand_norm:
+            return True
+        if not targ_norm:
+            return False
+        if cand_norm in targ_norm:
+            return True
+        if len(cand_norm) >= 4 and targ_norm.startswith(cand_norm[:4]):
+            return True
+        if len(cand_norm) >= 4 and len(targ_norm) >= 4:
+            c_bg = {cand_norm[i : i + 2] for i in range(len(cand_norm) - 1)}
+            t_bg = {targ_norm[i : i + 2] for i in range(len(targ_norm) - 1)}
+            if c_bg and (len(c_bg & t_bg) / len(c_bg)) >= 0.5:
+                return True
+        return False
 
     @staticmethod
     def _format_short_date(dt_s: str | None) -> str:
@@ -2346,9 +2464,9 @@ class FakeAdapter:
         return False
 
     _QUERY_FILLER_RE = re.compile(
-        r"(?:请问|帮我看看?|帮我查查?|告诉我|说一下|问一下|一下|什么|怎么|怎么样|可以吗|"
-        r"有没有|平时|最近|记得|关于|喜欢|讨厌|今天|明天|现在|准备|想要|打算|适合|应该|"
-        r"注意|需要|什么时候|哪天|几点)"
+        r"(?:请问|帮我看看?|帮我查查?|帮我|告诉我|说一下|问一下|一下子|一下|一点|什么|怎么|怎么样|"
+        r"可以吗|有没有|平时|最近|记得|关于|喜欢|讨厌|今天|明天|现在|准备|想要|打算|适合|应该|"
+        r"注意|留意|需要|什么时候|哪天|几点|提醒|提前|另外|清单|手帐|记录|梳理|整理|设一个|设个)"
     )
     _QUERY_TOPIC_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("水果", ("草莓", "蓝莓", "芒果", "苹果", "西瓜", "葡萄", "橙子", "桃", "梨")),
@@ -2386,10 +2504,10 @@ class FakeAdapter:
         if person_name and len(person_name.strip()) >= 1:
             focused_q = focused_q.replace(person_name.strip(), " ")
         focused_q = cls._QUERY_FILLER_RE.sub(" ", focused_q)
-        focused_runs = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,}", focused_q)
+        focused_runs = re.findall(r"[\u4e00-\u9fa5]{2,}|[A-Za-z0-9]{2,}", focused_q)
         q_bigrams: set[str] = set()
         for run in focused_runs:
-            if len(run) == 2:
+            if run.isascii() or len(run) == 2:
                 q_bigrams.add(run)
             else:
                 for i in range(len(run) - 1):
@@ -2412,7 +2530,10 @@ class FakeAdapter:
         positive_scored = [entry for entry in scored if entry[0] > 0]
         if positive_scored:
             positive_scored.sort(key=lambda e: (e[0], e[1], e[2]), reverse=True)
-            return [entry[3] for entry in positive_scored]
+            top_score = positive_scored[0][0]
+            min_score = top_score * 0.45
+            filtered = [entry for entry in positive_scored if entry[0] >= min_score][:3]
+            return [entry[3] for entry in filtered]
 
         # Secondary fallback for broad eat/drink questions when no specific noun matched
         fallback_tokens: set[str] = set()
@@ -2422,14 +2543,14 @@ class FakeAdapter:
         if fallback_tokens:
             fb_hits = [item for item in evidence if any(tok in item[1] for tok in fallback_tokens)]
             if fb_hits:
-                return fb_hits
+                return fb_hits[:3]
 
         if ref_set:
             ref_items = [item for item in evidence if item[0] in ref_set]
             if ref_items:
-                return ref_items
+                return ref_items[:3]
 
-        return evidence[:4]
+        return evidence[:3]
 
     @staticmethod
     def _handle_summarize_thread(ctx: dict[str, Any]) -> str:

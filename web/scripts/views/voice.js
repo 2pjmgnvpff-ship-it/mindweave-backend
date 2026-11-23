@@ -3,6 +3,7 @@
 // < 300 ms → discarded with a quiet '按住说话' hint. Real waveform from an AnalyserNode.
 import { $, h, svg } from '../dom.js';
 import { store } from '../store.js';
+import { haptic, setAudioSession, prefersReducedMotion } from '../native-bridge.js';
 import { MIC_SVG } from '../icons.js';
 import { computeZone, routeFor, decideRelease, shouldAutoStop, formatTimer, MAX_HOLD_MS } from '../voice-logic.js';
 import { createRecorder, MicError } from '../recorder.js';
@@ -15,6 +16,7 @@ const NEAR_CAP_MS = MAX_HOLD_MS - 10000;
 let hold = null; // { pointerId, ox, oy, t0, zone, rec, recReady, raf, timer, finished, level }
 let hintTimer = null;
 let zoneCaptionEl = null;
+let sessionActive = false;
 
 function els() {
   return {
@@ -70,11 +72,8 @@ function setZone(zone, { force = false } = {}) {
   app.dataset.voiceCancel = String(zone === 'cancel');
   updateZoneCaption(zone);
   if (changed) {
-    try {
-      navigator.vibrate?.(zone === 'cancel' ? 14 : 7);
-    } catch {
-      /* ignore */
-    }
+    haptic('selection');
+    if (prefersReducedMotion()) drawSilk(0);
   }
 }
 
@@ -88,14 +87,15 @@ function clearCanvas() {
 function drawSilk(now) {
   const { canvas, stage } = els();
   if (!hold || !canvas) return;
+  const reduced = prefersReducedMotion();
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
   const hgt = canvas.height;
   const mid = hgt / 2;
-  const t = now * 0.0046;
+  const t = reduced ? 0.6 : now * 0.0046;
   const level = hold.recReady ? hold.rec.level() : 0.12;
   hold.level = hold.level == null ? level : hold.level * 0.72 + level * 0.28;
-  const gain = 0.36 + hold.level * 1.9;
+  const gain = reduced ? 0.45 + hold.level * 0.85 : 0.36 + hold.level * 1.9;
   const zone = hold.zone;
   const ribbons =
     zone === 'cancel'
@@ -129,7 +129,7 @@ function drawSilk(now) {
     ctx.stroke();
   });
   stage.style.setProperty('--voice-level', hold.level.toFixed(3));
-  hold.raf = requestAnimationFrame(drawSilk);
+  if (!reduced) hold.raf = requestAnimationFrame(drawSilk);
 }
 
 function tick() {
@@ -138,6 +138,7 @@ function tick() {
   const elapsed = performance.now() - hold.t0;
   timer.textContent = formatTimer(elapsed);
   pill.classList.toggle('voice-near-cap', elapsed >= NEAR_CAP_MS);
+  if (prefersReducedMotion()) drawSilk(0);
   if (shouldAutoStop(elapsed)) {
     announce('已经两分钟啦，先替你收好这一段');
     finish(hold.zone === 'cancel' ? 'current' : hold.zone);
@@ -172,6 +173,11 @@ function closeStage() {
 
 async function begin(e) {
   if (hold) return;
+  haptic('medium');
+  if (!sessionActive) {
+    sessionActive = true;
+    setAudioSession?.('playAndRecord');
+  }
   const { orb } = els();
   const rect = orb.getBoundingClientRect();
   hold = {
@@ -188,7 +194,8 @@ async function begin(e) {
   const current = hold;
   setZone(current.zone, { force: true });
   openStage();
-  current.raf = requestAnimationFrame(drawSilk);
+  if (prefersReducedMotion()) drawSilk(0);
+  else current.raf = requestAnimationFrame(drawSilk);
   current.timer = setInterval(tick, 200);
   announce('正在听，松开收进手帐，往远处拖可以取消');
   try {
@@ -198,6 +205,7 @@ async function begin(e) {
   } catch (err) {
     if (hold === current) teardown();
     current.rec.discard();
+    haptic('warning');
     const kind = err instanceof MicError ? err.kind : 'unsupported';
     if (kind === 'denied') {
       whisper('麦克风没打开，先打字记下吧', 3200);
@@ -225,6 +233,10 @@ function teardown() {
   cancelAnimationFrame(hold.raf);
   clearInterval(hold.timer);
   hold = null;
+  if (sessionActive) {
+    sessionActive = false;
+    setAudioSession?.('deactivate');
+  }
   closeStage();
 }
 
@@ -240,9 +252,15 @@ async function finish(forcedZone) {
   const decision = decideRelease({ zone, durationMs });
   if (decision !== 'submit' || !current.recReady) {
     current.rec.discard();
-    if (decision === 'too-short') showHoldHint();
-    else if (decision === 'cancel') announce('已取消，什么也没记');
-    else whisper('麦克风刚准备好，再按住说一次吧', 2600);
+    if (decision === 'too-short') {
+      haptic('light');
+      showHoldHint();
+    } else if (decision === 'cancel') {
+      haptic('warning');
+      announce('已取消，什么也没记');
+    } else {
+      whisper('麦克风刚准备好，再按住说一次吧', 2600);
+    }
     return;
   }
   const { blob } = await current.rec.stop();
@@ -252,6 +270,7 @@ async function finish(forcedZone) {
   }
   const route = routeFor(zone, { activePersonId, directory });
   if (!route) return;
+  haptic('success');
   submitVoice({ blob, route });
 }
 

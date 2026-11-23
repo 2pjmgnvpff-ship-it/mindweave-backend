@@ -113,4 +113,4 @@ export async function readSseResponse(response, onEvent) {
   }
 }
 
-export const CHAT_EVENTS = ['delta', 'citation', 'whisper', 'perspective', 'suggestion', 'crisis', 'done', 'error'];
+export const CHAT_EVENTS = ['agent_step', 'delta', 'citation', 'action_proposal', 'whisper', 'perspective', 'suggestion', 'crisis', 'done', 'error'];

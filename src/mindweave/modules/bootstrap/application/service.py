@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from uuid import UUID
 
@@ -12,7 +12,7 @@ from mindweave.modules.bootstrap.infra.query_repo import BootstrapQueryRepositor
 from mindweave.modules.people.domain.entities import PersonProfile, PhotoSlot
 from mindweave.modules.people.domain.tier_transition import partition_person_ids
 from mindweave.modules.people.infra.repository import PeopleRepository
-from mindweave.shared.enums import CupidLayout, Edition
+from mindweave.shared.enums import CupidLayout, Edition, RecordKind, Tier
 from mindweave.shared.pencil import QUESTION_INBOX_KINDS
 from mindweave.shared.scopes import UserScope
 
@@ -162,23 +162,46 @@ class BootstrapService:
                 if row is None:
                     continue
                 profile = self._people_repo.decrypt_person_row(row, scope=scope, dek=dek)
+                is_silver = profile.tier is Tier.SILVER
+                if is_silver:
+                    profile = replace(
+                        profile,
+                        has_photo=False,
+                        avatar_object_key=None,
+                        main_photo_object_key=None,
+                        sub_photo_object_key=None,
+                    )
                 mat_items = [
                     (
                         m,
-                        self._material_media_url(scope, m.id, m.media_object_key, now=now),
+                        None
+                        if (is_silver and m.kind is RecordKind.PHOTO)
+                        else self._material_media_url(scope, m.id, m.media_object_key, now=now),
                     )
                     for m in materials_by_pid.get(pid, ())
                 ]
                 people_dict[str(pid)] = BootstrapPersonAggregate(
                     profile=profile,
-                    avatar_url=self._photo_url(
-                        scope, pid, PhotoSlot.AVATAR, profile.avatar_object_key, now=now
+                    avatar_url=(
+                        None
+                        if is_silver
+                        else self._photo_url(
+                            scope, pid, PhotoSlot.AVATAR, profile.avatar_object_key, now=now
+                        )
                     ),
-                    main_photo_url=self._photo_url(
-                        scope, pid, PhotoSlot.MAIN, profile.main_photo_object_key, now=now
+                    main_photo_url=(
+                        None
+                        if is_silver
+                        else self._photo_url(
+                            scope, pid, PhotoSlot.MAIN, profile.main_photo_object_key, now=now
+                        )
                     ),
-                    sub_photo_url=self._photo_url(
-                        scope, pid, PhotoSlot.SUB, profile.sub_photo_object_key, now=now
+                    sub_photo_url=(
+                        None
+                        if is_silver
+                        else self._photo_url(
+                            scope, pid, PhotoSlot.SUB, profile.sub_photo_object_key, now=now
+                        )
                     ),
                     materials=mat_items,
                 )

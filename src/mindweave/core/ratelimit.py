@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.clock import Clock
 from mindweave.core.errors import QuotaExceededError, RateLimitedError
-from mindweave.core.orm import CaptureRow, ChatMessageRow
+from mindweave.core.orm import AiCallRow, CaptureRow, ChatMessageRow
 from mindweave.shared.scopes import UserScope
 
 
@@ -60,7 +60,7 @@ class TokenBucketRateLimiter:
 
 
 class QuotaService:
-    """Enforces daily chat message and voice duration quotas (Assumptions A-08 / A-09)."""
+    """Enforces daily chat message and voice duration/transcribe quotas (Assumptions A-08 / A-09)."""
 
     def __init__(
         self,
@@ -68,10 +68,16 @@ class QuotaService:
         *,
         daily_chat_quota: int = 100,
         daily_voice_minutes_quota: int = 60,
+        daily_transcribe_calls_quota: int | None = None,
     ) -> None:
         self._clock = clock
         self._daily_chat_quota = daily_chat_quota
         self._daily_voice_ms_quota = daily_voice_minutes_quota * 60 * 1000
+        self._daily_transcribe_calls_quota = (
+            daily_transcribe_calls_quota
+            if daily_transcribe_calls_quota is not None
+            else (max(1, daily_voice_minutes_quota * 4) if daily_voice_minutes_quota > 0 else 0)
+        )
 
     def _day_bounds_utc(self, tz_name: str) -> tuple[datetime, datetime]:
         tz = ZoneInfo(tz_name)
@@ -120,12 +126,35 @@ class QuotaService:
             )
         )
         used_ms = int(used or 0)
-        if used_ms + additional_ms > self._daily_voice_ms_quota:
+        if (
+            used_ms >= self._daily_voice_ms_quota
+            or used_ms + additional_ms > self._daily_voice_ms_quota
+        ):
             raise QuotaExceededError(
                 "Daily voice transcription quota reached.",
                 extensions={
                     "limitMs": self._daily_voice_ms_quota,
                     "usedMs": used_ms,
+                },
+            )
+
+        used_transcribe_calls = int(
+            await session.scalar(
+                select(func.count(AiCallRow.id)).where(
+                    AiCallRow.user_id == scope.user_id,
+                    AiCallRow.task == "transcribe",
+                    AiCallRow.created_at >= start_utc,
+                    AiCallRow.created_at < end_utc,
+                )
+            )
+            or 0
+        )
+        if used_transcribe_calls >= self._daily_transcribe_calls_quota:
+            raise QuotaExceededError(
+                "Daily voice transcription quota reached.",
+                extensions={
+                    "limitCalls": self._daily_transcribe_calls_quota,
+                    "usedCalls": used_transcribe_calls,
                 },
             )
         return max(0, self._daily_voice_ms_quota - used_ms)

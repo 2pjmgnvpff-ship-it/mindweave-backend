@@ -744,7 +744,12 @@ class PeopleService:
                 return hit.response_body, hit.status_code
             assert idem_row is not None
 
-            await self._repo.get_person_row(session, scope, person_id, for_update=True)
+            person_row = await self._repo.get_person_row(session, scope, person_id, for_update=True)
+            if person_row.tier == Tier.SILVER.value:
+                raise ValidationFailedError(
+                    "银箭人物默认收起照片，不支持上传照片",
+                    extensions={"field": "tier"},
+                )
             dek = await self._container.load_user_dek(session, scope)
             await self._container.storage.put_encrypted(
                 user_id=scope.user_id,
@@ -782,6 +787,8 @@ class PeopleService:
     ) -> tuple[bytes, str]:
         async with self._container.db.user_session(scope) as session:
             row = await self._repo.get_person_row(session, scope, person_id)
+            if row.tier == Tier.SILVER.value:
+                raise NotFoundError("照片不可访问")
             if slot is PhotoSlot.AVATAR:
                 object_key = row.avatar_object_key
             elif slot is PhotoSlot.MAIN:

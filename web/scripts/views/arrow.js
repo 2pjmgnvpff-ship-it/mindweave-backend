@@ -7,6 +7,7 @@ import { ARROW_PIN_IMG, ARROW_SVGS } from '../icons.js';
 import { TIER_LABEL } from '../format.js';
 import { showToast, whisper } from './toast.js';
 import { actions } from '../actions.js';
+import { haptic } from '../native-bridge.js';
 
 const ORDER = ['gold', 'silver', 'crystal'];
 let popover = null;
@@ -24,12 +25,14 @@ function closePopover() {
 async function changeTier(person, tier, { silent = false } = {}) {
   const previous = person.tier;
   if (previous === tier) return;
+  haptic('medium');
   applyTierChange({ personId: person.id, tier }); // optimistic
   try {
     const res = await api.setTier(person.id, tier);
     applyTierChange({ personId: person.id, tier: res.tier, coreIds: res.coreIds, casualIds: res.casualIds });
   } catch (err) {
     applyTierChange({ personId: person.id, tier: previous });
+    haptic('warning');
     whisper(err.message, 3000);
     return;
   }
@@ -94,6 +97,7 @@ export function renderArrow(person) {
   btn.addEventListener('click', () => {
     const open = !popover.classList.contains('is-open');
     if (!open) return closePopover();
+    haptic('light');
     popover.classList.add('is-open');
     btn.setAttribute('aria-expanded', 'true');
     outsideHandler = (e) => {

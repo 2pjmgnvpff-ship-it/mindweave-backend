@@ -31,6 +31,7 @@ from mindweave.core.errors import (
     ConflictError,
     NotFoundError,
     PayloadTooLargeError,
+    UpstreamAIError,
     ValidationFailedError,
 )
 from mindweave.core.idempotency import IdempotencyHit, hash_request_payload
@@ -40,6 +41,7 @@ from mindweave.core.orm import (
     FactRow,
     IdempotencyKeyRow,
     InboxItemRow,
+    PersonAliasRow,
     RecordRow,
 )
 from mindweave.modules.capture.application.dto import (
@@ -98,6 +100,8 @@ from mindweave.modules.memory.infra.repository import (
     apply_bitemporal_supersession_for_fact,
     check_polarity_flip_for_person,
     create_person_with_primary_alias,
+    decrypt_person_display_name,
+    decrypt_person_role_tag,
     get_user_timezone,
     require_person_row,
 )
@@ -121,7 +125,7 @@ from mindweave.shared.enums import (
 )
 from mindweave.shared.pencil import auto_ink_due_at, derive_pencil_state, is_auto_ink_eligible
 from mindweave.shared.pii import mask_hard_pii
-from mindweave.shared.scopes import UserScope
+from mindweave.shared.scopes import PersonScope, UserScope
 from mindweave.workers.ports import TASK_PROCESS_CAPTURE, JobQueuePort
 
 logger = structlog.get_logger(__name__)
@@ -159,6 +163,16 @@ class CaptureIngestCommand:
     client_capture_id: UUID | None = None
     idem_key: str | None = None
     route_path: str = "/v1/captures"
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceTranscribeResult:
+    """Result of pure in-chat conversational ASR (zero DB capture/record/fact writes)."""
+
+    transcript: str
+    corrected: str
+    raw_transcript: str = ""
+    duration_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -452,6 +466,157 @@ class CapturePipelineService:
             return None, hit
         assert cap_resp is not None
         return self._to_v10_voice_response(cap_resp), None
+
+    async def transcribe_only(
+        self,
+        *,
+        scope: UserScope,
+        audio_bytes: bytes,
+        active_person_id: UUID | None = None,
+    ) -> VoiceTranscribeResult:
+        """Transcribe conversational voice audio with person-grounded ASR without creating records or facts.
+
+        Enforces per-user token-bucket rate limiting, audio size & magic-byte validation,
+        `UserScope` / `PersonScope` + `FORCE RLS`, active-person ownership verification,
+        confirmed/non-held context loading, hard-PII masking, and `asr_postprocess.py`.
+        """
+        self.container.rate_limiter.check(
+            f"voice_transcribe:{scope.user_id}",
+            capacity=20,
+            refill_per_second=0.5,
+        )
+        if not audio_bytes:
+            raise ValidationFailedError("Voice transcription requires a non-empty audio file")
+        try:
+            audio_info = validate_and_sniff_audio(
+                audio_bytes,
+                max_bytes=self.container.settings.max_audio_bytes,
+            )
+        except MediaTooLargeError as exc:
+            raise PayloadTooLargeError(str(exc)) from exc
+        except InvalidMediaFormatError as exc:
+            raise ValidationFailedError(str(exc)) from exc
+
+        gateway = self._get_gateway()
+        if gateway is None:
+            raise UpstreamAIError("AI Model Gateway is not configured")
+
+        # Load person context strictly under PersonScope (when scoped) or UserScope + FORCE RLS
+        async with self.container.db.user_session(scope) as session:
+            tz_name = await get_user_timezone(session, scope)
+            await self.container.quotas.check_voice_quota(session, scope, tz_name=tz_name)
+            dek = await self.container.load_user_dek(session, scope)
+
+            scoped_profile: KnownPersonProfile | None = None
+            known_names: list[str] = []
+            raw_asr_snippets: list[str] = []
+
+            if active_person_id is not None:
+                person_scope = PersonScope(scope.user_id, active_person_id)
+                person_row = await require_person_row(
+                    session, person_scope.user_scope, person_scope.person_id
+                )
+                alias_rows = (
+                    await session.scalars(
+                        select(PersonAliasRow).where(
+                            PersonAliasRow.user_id == person_scope.user_id,
+                            PersonAliasRow.person_id == person_scope.person_id,
+                        )
+                    )
+                ).all()
+                aliases: list[str] = []
+                for alias_row in alias_rows:
+                    decrypted_alias = self.container.cipher.decrypt_str(
+                        dek,
+                        alias_row.alias_enc,
+                        user_id=person_scope.user_id,
+                        table="person_aliases",
+                        column="alias_enc",
+                        row_id=alias_row.id,
+                    )
+                    if decrypted_alias and decrypted_alias not in aliases:
+                        aliases.append(decrypted_alias)
+
+                facts_by_person, _ = await load_recent_person_context(
+                    session,
+                    person_scope.user_scope,
+                    dek,
+                    self.container.cipher,
+                    [person_scope.person_id],
+                )
+                scoped_facts = tuple(facts_by_person.get(person_scope.person_id, ()))
+                scoped_profile = KnownPersonProfile(
+                    person_id=person_row.id,
+                    display_name=decrypt_person_display_name(
+                        self.container.cipher, dek, person_row
+                    ),
+                    aliases=tuple(aliases),
+                    tier=Tier(person_row.tier),
+                    state=PersonState(person_row.state),
+                    role_tag=decrypt_person_role_tag(self.container.cipher, dek, person_row),
+                    monogram=person_row.monogram,
+                    recent_facts=scoped_facts,
+                )
+                known_names.extend(scoped_profile.all_surface_forms())
+                raw_asr_snippets.extend(scoped_facts)
+            else:
+                known_profiles, _ = await load_known_person_profiles(
+                    session,
+                    scope=scope,
+                    dek=dek,
+                    cipher=self.container.cipher,
+                )
+                facts_by_person, recent_snippets = await load_recent_person_context(
+                    session,
+                    scope,
+                    dek,
+                    self.container.cipher,
+                    [p.person_id for p in known_profiles],
+                )
+                for profile in known_profiles:
+                    known_names.extend(profile.all_surface_forms())
+                raw_asr_snippets.extend(recent_snippets)
+
+        masked_asr_snippets = list(
+            dict.fromkeys(
+                masked
+                for snippet in raw_asr_snippets
+                if (masked := mask_hard_pii(snippet).masked_text.strip())
+            )
+        )[:12]
+
+        active_person_name_safe = (
+            mask_hard_pii(scoped_profile.display_name).masked_text.strip() or None
+            if scoped_profile is not None
+            else None
+        )
+        trans_payload = TranscribeInput(
+            audio_bytes=audio_bytes,
+            mime_type=audio_info.mime_type,
+            known_person_names=[mask_hard_pii(name).masked_text for name in known_names[:60]],
+            active_person_name=active_person_name_safe,
+            recent_context_snippets=masked_asr_snippets,
+        )
+
+        # Call AI Gateway (`transcribe_audio@1.1.0` + `asr_postprocess.py` + zero-PII metering)
+        async with self.container.db.user_session(scope) as meter_session:
+            trans_out = await gateway.transcribe(
+                scope=scope,
+                payload=trans_payload,
+                session=meter_session,
+            )
+
+        raw_clean = trans_out.raw_transcript.strip()
+        corrected_clean = trans_out.corrected_transcript.strip() or raw_clean
+        if corrected_clean:
+            corrected_clean = apply_spoken_self_correction(corrected_clean)
+
+        return VoiceTranscribeResult(
+            transcript=corrected_clean,
+            corrected=corrected_clean,
+            raw_transcript=raw_clean,
+            duration_ms=trans_out.duration_ms,
+        )
 
     # =========================================================================
     # Core Pipeline Worker / Inline Processor
@@ -1214,8 +1379,12 @@ class CapturePipelineService:
                             ikind = decision.inbox_kind or InboxItemKind.FACT_CONFIRM
                             pending_by_inbox_kind[ikind].append(fact_row)
 
-                        # Proposed reminder when date/promise has trigger_date or lunar date
-                        if f_item.fact_type in (FactType.DATE, FactType.PROMISE):
+                        # Proposed reminder when date/promise has trigger_date or lunar date;
+                        # venting-quarantined captures NEVER spawn active/proposed reminders.
+                        if (
+                            f_item.fact_type in (FactType.DATE, FactType.PROMISE)
+                            and decision.pending_reason is not PendingReason.VENTING
+                        ):
                             await upsert_reminder_for_fact(
                                 session,
                                 scope=scope,
@@ -2149,3 +2318,6 @@ def decode_optional_base64(value: str | None, *, field_name: str) -> bytes | Non
         return base64.b64decode(value, validate=True)
     except Exception as exc:
         raise ValidationFailedError(f"Invalid base64 encoding for {field_name}") from exc
+
+
+CaptureService = CapturePipelineService

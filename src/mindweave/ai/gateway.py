@@ -781,6 +781,26 @@ class ModelGateway(ModelGatewayPort):
         guarded_out = enforce_companion_output_guard(verified_out, tier=masked_payload.tier)
         return guarded_out, prompt_ver, model_profile
 
+    @staticmethod
+    def _build_streaming_companion_prompt(rendered_text: str, *, tier_value: str) -> str:
+        """Append streaming XML wire-format override ONLY for streaming companion responses."""
+        perspectives_rule = (
+            "3. `<perspectives>可选，仅在用户表达委屈或冲突时输出 1-2 条温和第三方视角，每行一条；无冲突时省略本标签</perspectives>`"
+            if tier_value == "gold"
+            else "3. **严禁**输出 `<perspectives>` 标签（非金层级绝不输出替对方辩解或换位视角）。"
+        )
+        override = (
+            "\n\n---\n"
+            "## 流式输出协议覆盖指令（仅本次流式输出生效，优先级高于前文 JSON 格式要求）\n"
+            "本次为实时流式响应：**严禁**输出 JSON 对象、`{...}` 或 Markdown 代码块包裹（如 ```json）。\n"
+            "请严格按以下 XML 标签顺序直接输出：\n"
+            "1. `<reply>主回复正文（自然中文，严格遵守层级语气、安全红线与 [rec_<record_id>] 引用规范）</reply>`\n"
+            "2. `<whisper>一句简短私密耳语提示（<= 28 字，零技术术语）</whisper>`\n"
+            f"{perspectives_rule}\n"
+            "4. `<suggestions>1-2 条可直接复制发送给对方的自然中文消息草稿（每行一条，严禁输出元指令或空泛建议）</suggestions>`\n"
+        )
+        return rendered_text + override
+
     async def stream_companion_reply(
         self,
         *,
@@ -790,6 +810,10 @@ class ModelGateway(ModelGatewayPort):
     ) -> AsyncIterator[str]:
         masked_payload = _mask_companion_payload(payload)
         rendered = self._render_companion_prompt(masked_payload)
+        stream_prompt = self._build_streaming_companion_prompt(
+            rendered.rendered_text,
+            tier_value=masked_payload.tier.value,
+        )
         spec = self._routing.tasks["ask_relationship"]
         timeout_sec = self._resolve_timeout("ask_relationship")
         allowed_ids = self._allowed_record_ids(masked_payload)
@@ -809,7 +833,7 @@ class ModelGateway(ModelGatewayPort):
             req = AdapterCallRequest(
                 task="ask_relationship",
                 model=model_name,
-                prompt=rendered.rendered_text,
+                prompt=stream_prompt,
                 temperature=spec.temperature,
                 timeout_seconds=timeout_sec,
                 structured_context={"payload": masked_payload.model_dump(mode="json")},
@@ -838,7 +862,7 @@ class ModelGateway(ModelGatewayPort):
                     prompt_id=rendered.prompt_id,
                     prompt_version=rendered.version,
                     prompt_hash=rendered.sha256,
-                    input_tokens=estimate_token_count(rendered.rendered_text),
+                    input_tokens=estimate_token_count(stream_prompt),
                     output_tokens=max(1, (emitted_chars + 1) // 2),
                     latency_ms=lat_ms,
                     outcome="stream_ok",

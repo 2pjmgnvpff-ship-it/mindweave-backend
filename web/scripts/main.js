@@ -1,6 +1,7 @@
 // main.js — boot: sign in → bootstrap → first-time ritual or the last page you were on.
 // Wires the cross-view action registry and registers the offline shell.
 import { $, h } from './dom.js';
+import { initNativeBridge, haptic, isNativeIos, openServerConfig } from './native-bridge.js';
 import { api, client } from './api/endpoints.js';
 import { store, applyBootstrap, isEmptyAccount } from './store.js';
 import { actions } from './actions.js';
@@ -77,10 +78,24 @@ async function signOut(message) {
 function bootError(err) {
   const veil = $('#bootVeil');
   veil.classList.remove('is-gone');
-  veil.replaceChildren(
+  const nodes = [
     h('p', { text: err?.message || '心络这边出了点小状况，稍后再试' }),
-    h('button', { type: 'button', class: 'onb-enter', text: '再试一次', onClick: () => enterApp() }),
-  );
+    h('button', { type: 'button', class: 'onb-enter', text: '再试一次', onClick: () => { haptic('light'); enterApp(); } }),
+  ];
+  if (isNativeIos()) {
+    nodes.push(
+      h('button', {
+        type: 'button',
+        class: 'boot-server-link',
+        text: '服务器连接',
+        onClick: () => {
+          haptic('light');
+          openServerConfig();
+        },
+      }),
+    );
+  }
+  veil.replaceChildren(...nodes);
 }
 
 async function enterApp() {
@@ -109,17 +124,21 @@ async function enterApp() {
 }
 
 function registerServiceWorker() {
-  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:' || location.protocol === 'mindweave:') return;
   window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
 }
 
 async function boot() {
+  initNativeBridge();
   client.setOnAuthLost(() => signOut('登录已过期，请重新登录'));
   initJournal();
   initDock();
   initCasual();
   initVoice();
-  $('#settingsBtn').addEventListener('click', () => openSettings({ onSignOut: () => signOut() }));
+  $('#settingsBtn').addEventListener('click', () => {
+    haptic('light');
+    openSettings({ onSignOut: () => signOut() });
+  });
   registerServiceWorker();
   if (!client.isLoggedIn()) {
     $('#bootVeil').classList.add('is-gone');

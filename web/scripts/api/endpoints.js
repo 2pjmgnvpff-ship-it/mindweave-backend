@@ -45,6 +45,12 @@ export const api = {
     if (id) form.append('id', id);
     return client.request('POST', '/voice/ingest', { form, idem: idem || true });
   },
+  transcribeVoice: ({ blob, filename, personId }) => {
+    const form = new FormData();
+    form.append('audio', blob, filename || 'voice.webm');
+    if (personId) form.append('active_person_id', personId);
+    return client.request('POST', '/voice/transcribe', { form, idem: true });
+  },
   captureImage: ({ id, file, text, routeMode, activePersonId }, idem) => {
     const form = new FormData();
     form.append('image', file, file?.name || 'image.jpg');
@@ -58,9 +64,19 @@ export const api = {
   },
   undoCapture: (captureId) => client.post(`/captures/${encodeURIComponent(captureId)}:undo`, {}),
 
-  // §7 materials, facts, reminders, inbox
+  // §7 materials, facts, reminders, brief, inbox
+  brief: (personId) => client.get(`/people/${encodeURIComponent(personId)}/brief`),
   materials: (personId, { cursor, limit = 30, includeHeld } = {}) =>
     client.get(`/persons/${encodeURIComponent(personId)}/materials`, { query: { cursor, limit, includeHeld } }),
+  createMaterial: (personId, { kind = 'note', title, body, pinned = false } = {}) => {
+    const text = String(body || '').trim();
+    return client.post(`/persons/${encodeURIComponent(personId)}/materials`, {
+      kind,
+      title: String(title || text).slice(0, 80),
+      body: text,
+      pinned: Boolean(pinned),
+    });
+  },
   uploadPhoto: (personId, { file, caption, pinned = false }) => {
     const form = new FormData();
     const note = String(caption || '').trim() || '拍下的一张照片';
@@ -82,6 +98,20 @@ export const api = {
     client.get(`/persons/${encodeURIComponent(personId)}/facts`, { query }),
   reminders: (personId, query = {}) =>
     client.get('/reminders', { query: { personId, ...query } }),
+  createReminder: (personId, { title, triggerDate, rule, factId, leadDays } = {}) =>
+    client.post(`/people/${encodeURIComponent(personId)}/reminders`, {
+      title,
+      triggerDate,
+      ...(rule !== undefined ? { rule } : {}),
+      ...(factId !== undefined ? { factId } : {}),
+      ...(leadDays !== undefined ? { leadDays } : {}),
+    }),
+  patchReminder: (reminderId, body, version) =>
+    client.patch(
+      `/reminders/${encodeURIComponent(reminderId)}`,
+      body,
+      version != null ? { headers: { 'If-Match': `"${version}"` } } : {},
+    ),
   /** PATCH a fact; the backend requires If-Match with the fact version (contract §7). */
   patchFact: (factId, body, version) =>
     client.patch(`/facts/${encodeURIComponent(factId)}`, body, version != null ? { headers: { 'If-Match': `"${version}"` } } : {}),

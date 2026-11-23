@@ -111,10 +111,12 @@ def record_row_to_dto(
     tokens: TokenService | None = None,
     now: datetime | None = None,
     mask_person_id: bool = False,
+    cloak_photo_media: bool = False,
 ) -> MaterialDto:
     title, body, snippet = decrypt_record_fields(cipher, dek, row)
-    has_media = bool(row.media_object_key)
     kind_enum = RecordKind(row.kind)
+    cloak = cloak_photo_media and kind_enum is RecordKind.PHOTO
+    has_media = False if cloak else bool(row.media_object_key)
     media_url: str | None = None
     if has_media:
         raw_path = f"/v1/materials/{row.id}/media"
@@ -321,7 +323,8 @@ class MemoryService:
         kind: RecordKind | None = None,
     ) -> CursorPage[MaterialDto]:
         async with self.container.db.user_session(scope) as session:
-            await require_person_row(session, scope, person_id)
+            person_row = await require_person_row(session, scope, person_id)
+            cloak_photo = person_row.tier == Tier.SILVER.value
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
 
@@ -353,6 +356,7 @@ class MemoryService:
                     r,
                     tokens=self.container.tokens,
                     now=now,
+                    cloak_photo_media=cloak_photo,
                 )
                 for r in page_rows
             ]
@@ -403,7 +407,19 @@ class MemoryService:
             if hit is not None:
                 return None, hit
 
-            await require_person_row(session, scope, person_id)
+            person_row = await require_person_row(session, scope, person_id)
+            effective_kind = RecordKind.PHOTO if sanitized is not None else req.kind
+            if person_row.tier == Tier.SILVER.value and (
+                effective_kind is RecordKind.PHOTO
+                or sanitized is not None
+                or raw_photo is not None
+                or bool(req.photo_base64)
+            ):
+                raise ValidationFailedError(
+                    "银箭人物默认收起照片，不支持上传照片",
+                    extensions={"field": "kind"},
+                )
+
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
             rec_id = req.id or new_id()
@@ -412,7 +428,6 @@ class MemoryService:
             if existing_rec is not None:
                 raise ConflictError("Material ID already exists")
 
-            effective_kind = RecordKind.PHOTO if sanitized is not None else req.kind
             object_key: str | None = None
             if sanitized is not None:
                 object_key = f"{scope.user_id}/materials/{rec_id}/photo.{sanitized.extension}"
@@ -476,6 +491,7 @@ class MemoryService:
                 row,
                 tokens=self.container.tokens,
                 now=now,
+                cloak_photo_media=(person_row.tier == Tier.SILVER.value),
             )
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -507,6 +523,7 @@ class MemoryService:
                 tokens=self.container.tokens,
                 now=now,
                 mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
+                cloak_photo_media=(owner.tier == Tier.SILVER.value),
             )
             (dto,) = await self._attach_pencil_states(session, scope=scope, dek=dek, items=[dto])
             return dto
@@ -716,6 +733,7 @@ class MemoryService:
                 tokens=self.container.tokens,
                 now=now,
                 mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
+                cloak_photo_media=(owner.tier == Tier.SILVER.value),
             )
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -765,6 +783,36 @@ class MemoryService:
             row.deleted_at = now
             row.updated_at = now
             row.version += 1
+
+            linked_facts = list(
+                (
+                    await session.scalars(
+                        select(FactRow)
+                        .where(
+                            FactRow.record_id == row.id,
+                            FactRow.user_id == scope.user_id,
+                            FactRow.invalid_at.is_(None),
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            linked_fact_ids: list[UUID] = []
+            for fact in linked_facts:
+                fact.status = FactStatus.REJECTED.value
+                fact.invalid_at = now
+                fact.updated_at = now
+                fact.version += 1
+                linked_fact_ids.append(fact.id)
+
+            if linked_fact_ids:
+                await cancel_reminders_for_facts(
+                    session,
+                    user_id=scope.user_id,
+                    fact_ids=linked_fact_ids,
+                    now=now,
+                )
+
             await session.flush()
 
             assert idem_row is not None
@@ -792,12 +840,14 @@ class MemoryService:
             )
             if row is None or not row.media_object_key:
                 raise NotFoundError("Material media not found")
-            await _load_material_owner_or_404(
+            owner = await _load_material_owner_or_404(
                 session,
                 scope=scope,
                 person_id=row.person_id,
                 not_found_msg="Material media not found",
             )
+            if owner.tier == Tier.SILVER.value and row.kind == RecordKind.PHOTO.value:
+                raise NotFoundError("照片不可访问")
             dek = await self.container.load_user_dek(session, scope)
             object_key = row.media_object_key
 
@@ -1109,6 +1159,7 @@ class MemoryService:
                     raise ValidationFailedError(
                         "lunarMonth and lunarDay are required when isLunar is true"
                     )
+            previous_status = row.status
             if req.status is not None:
                 row.status = req.status.value
                 if req.status is FactStatus.CONFIRMED:
@@ -1154,6 +1205,17 @@ class MemoryService:
                     now=now,
                 )
 
+            if previous_status == FactStatus.PENDING.value and row.status in (
+                FactStatus.CONFIRMED.value,
+                FactStatus.REJECTED.value,
+            ):
+                await self._auto_resolve_fact_confirm_inbox_items(
+                    session,
+                    scope=scope,
+                    fact_id=row.id,
+                    now=now,
+                )
+
             dto = fact_row_to_dto(self.container.cipher, dek, row)
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -1163,6 +1225,77 @@ class MemoryService:
                 response_body=dto.model_dump(mode="json", by_alias=True),
             )
             return dto, None
+
+    async def _auto_resolve_fact_confirm_inbox_items(
+        self,
+        session: AsyncSession,
+        *,
+        scope: UserScope,
+        fact_id: UUID,
+        now: datetime,
+    ) -> None:
+        """Auto-resolve open `FACT_CONFIRM` inbox items once none of their facts remain `PENDING`."""
+        open_items = list(
+            (
+                await session.scalars(
+                    select(InboxItemRow)
+                    .where(
+                        InboxItemRow.user_id == scope.user_id,
+                        InboxItemRow.kind == InboxItemKind.FACT_CONFIRM.value,
+                        InboxItemRow.status == InboxItemStatus.OPEN.value,
+                        func.array_position(InboxItemRow.fact_ids, fact_id).is_not(None),
+                    )
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if not open_items:
+            return
+
+        touched_captures: set[UUID] = set()
+        resolved_any = False
+        for item in open_items:
+            item_fact_ids = list(item.fact_ids or ())
+            if not item_fact_ids:
+                continue
+            item_facts = list(
+                (
+                    await session.scalars(
+                        select(FactRow).where(
+                            FactRow.user_id == scope.user_id,
+                            FactRow.id.in_(item_fact_ids),
+                        )
+                    )
+                ).all()
+            )
+            still_pending = any(
+                f.status == FactStatus.PENDING.value and f.invalid_at is None for f in item_facts
+            )
+            if still_pending:
+                continue
+            any_confirmed = any(
+                f.status == FactStatus.CONFIRMED.value and f.invalid_at is None for f in item_facts
+            )
+            item.status = InboxItemStatus.RESOLVED.value
+            item.resolution_action = (
+                InboxResolutionAction.CONFIRM.value
+                if any_confirmed
+                else InboxResolutionAction.DISCARD.value
+            )
+            item.resolved_at = now
+            resolved_any = True
+            if item.capture_id is not None:
+                touched_captures.add(item.capture_id)
+
+        if resolved_any:
+            await session.flush()
+            for capture_id in touched_captures:
+                await sync_capture_status_after_inbox_resolution(
+                    session,
+                    scope=scope,
+                    capture_id=capture_id,
+                    now=now,
+                )
 
     async def delete_fact(
         self,

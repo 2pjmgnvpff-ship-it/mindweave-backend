@@ -7,8 +7,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.crypto import KeyShreddedError
@@ -55,12 +57,13 @@ from mindweave.modules.reminders.infra.repositories import (
 )
 from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
+    FactStatus,
     PersonState,
     PushPlatform,
     ReminderRule,
     ReminderStatus,
 )
-from mindweave.shared.scopes import UserScope
+from mindweave.shared.scopes import PersonScope, UserScope
 
 logger = get_logger(__name__)
 
@@ -238,6 +241,32 @@ class ReminderService:
             limit=limit,
         )
 
+    async def create_person_reminder(
+        self,
+        session: AsyncSession,
+        scope: PersonScope,
+        inp: CreateReminderInput,
+    ) -> DecryptedReminder:
+        """Create an encrypted reminder strictly bound to `PersonScope(user_id, person_id)`."""
+        scoped_inp = CreateReminderInput(
+            person_id=scope.person_id,
+            title=inp.title,
+            rule=inp.rule,
+            fact_id=inp.fact_id,
+            is_lunar=inp.is_lunar,
+            target_month=inp.target_month,
+            target_day=inp.target_day,
+            is_leap_month=inp.is_leap_month,
+            once_date=inp.once_date,
+            fire_hour=inp.fire_hour,
+            fire_minute=inp.fire_minute,
+            lead_days=inp.lead_days,
+            timezone=inp.timezone,
+            status=inp.status,
+            requested_id=inp.requested_id,
+        )
+        return await self.create_reminder(session, scope.user_scope, scoped_inp)
+
     async def create_reminder(
         self,
         session: AsyncSession,
@@ -269,6 +298,9 @@ class ReminderService:
                 select(FactRow.id).where(
                     FactRow.id == inp.fact_id,
                     FactRow.user_id == scope.user_id,
+                    FactRow.person_id == inp.person_id,
+                    FactRow.invalid_at.is_(None),
+                    FactRow.status != FactStatus.REJECTED.value,
                 )
             )
             if fact_exists is None:
@@ -276,10 +308,13 @@ class ReminderService:
 
         if inp.requested_id is not None:
             existing_id = await session.scalar(
-                select(ReminderRow.id).where(ReminderRow.id == inp.requested_id)
+                select(ReminderRow.id).where(
+                    ReminderRow.id == inp.requested_id,
+                    ReminderRow.user_id == scope.user_id,
+                )
             )
             if existing_id is not None:
-                raise ConflictError("Reminder with this ID already exists")
+                raise ConflictError("Reminder id already exists")
 
         resolved_tz = inp.timezone
         if resolved_tz is None or not resolved_tz.strip():
@@ -329,11 +364,17 @@ class ReminderService:
 
         if inp.status is ReminderStatus.ACTIVE:
             if slot is None:
-                raise ValidationFailedError(
-                    "All reminder fire slots for onceDate are already in the past"
-                )
-            next_fire_at: datetime | None = slot.scheduled_for_utc
-            next_lead_day: int | None = slot.lead_day
+                local_today = now.astimezone(ZoneInfo(resolved_tz)).date()
+                if inp.rule is ReminderRule.ONCE and resolved_once_date == local_today:
+                    next_fire_at: datetime | None = now + timedelta(minutes=5)
+                    next_lead_day: int | None = 0
+                else:
+                    raise ValidationFailedError(
+                        "All reminder fire slots for onceDate are already in the past"
+                    )
+            else:
+                next_fire_at = slot.scheduled_for_utc
+                next_lead_day = slot.lead_day
         else:
             next_fire_at = None
             next_lead_day = None
@@ -367,7 +408,11 @@ class ReminderService:
             updated_at=now,
         )
         session.add(row)
-        await session.flush()
+        try:
+            async with session.begin_nested():
+                await session.flush()
+        except IntegrityError as exc:
+            raise ConflictError("Reminder id already exists") from exc
         return self._reminders.decrypt_row(row, scope, dek)
 
     async def _require_valid_person_for_reminder(
@@ -544,11 +589,17 @@ class ReminderService:
 
         if new_status is ReminderStatus.ACTIVE:
             if slot is None:
-                raise ValidationFailedError(
-                    "All reminder fire slots for onceDate are already in the past"
-                )
-            row.next_fire_at = slot.scheduled_for_utc
-            row.next_lead_day = slot.lead_day
+                local_today = now.astimezone(ZoneInfo(new_tz)).date()
+                if new_rule is ReminderRule.ONCE and new_once_date == local_today:
+                    row.next_fire_at = now + timedelta(minutes=5)
+                    row.next_lead_day = 0
+                else:
+                    raise ValidationFailedError(
+                        "All reminder fire slots for onceDate are already in the past"
+                    )
+            else:
+                row.next_fire_at = slot.scheduled_for_utc
+                row.next_lead_day = slot.lead_day
         else:
             row.next_fire_at = None
             row.next_lead_day = None

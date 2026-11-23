@@ -13,7 +13,7 @@ export const MIC_SVG = `<svg viewBox="0 0 24 24" fill="none"><rect x="9" y="3.2"
 
 export const SPARK_SVG = `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3.2C12.7 7.6 16.4 11.3 20.8 12C16.4 12.7 12.7 16.4 12 20.8C11.3 16.4 7.6 12.7 3.2 12C7.6 11.3 11.3 7.6 12 3.2Z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" fill="rgba(255,255,255,0.32)"/><circle cx="18.2" cy="5.8" r="1.25" fill="currentColor"/></svg>`;
 
-export const SUNBURST_SVG = `<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="16" cy="16" r="3" fill="currentColor"/><line x1="16" y1="2" x2="16" y2="7"/><line x1="16" y1="25" x2="16" y2="30"/><line x1="2" y1="16" x2="7" y2="16"/><line x1="25" y1="16" x2="30" y2="16"/><line x1="6.1" y1="6.1" x2="9.6" y2="9.6"/><line x1="22.4" y1="22.4" x2="25.9" y2="25.9"/><line x1="25.9" y1="6.1" x2="22.4" y2="9.6"/><line x1="9.6" y1="22.4" x2="6.1" y2="25.9"/></svg>`;
+export const SUNBURST_SVG = `<svg viewBox="0 0 40 40" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20 1.4L21.05 16.5L26.8 4.4L22.35 17.4L33.1 6.9L23.5 18.45L36.2 13.6L24.1 19.35L38.6 20L24.1 20.65L36.2 26.4L23.5 21.55L33.1 33.1L22.35 22.6L26.8 35.6L21.05 23.5L20 38.6L18.95 23.5L13.2 35.6L17.65 22.6L6.9 33.1L16.5 21.55L3.8 26.4L15.9 20.65L1.4 20L15.9 19.35L3.8 13.6L16.5 18.45L6.9 6.9L17.65 17.4L13.2 4.4L18.95 16.5Z"/><circle cx="20" cy="20" r="2.6"/></svg>`;
 
 // Brass clip rewritten with relative `v` commands (same shape as the reference).
 export const BRASS_CLIP_SVG = `<svg viewBox="0 0 44 82" fill="none"><defs><linearGradient id="brassGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#F6E2A8"/><stop offset="45%" stop-color="#C99A49"/><stop offset="80%" stop-color="#8F6523"/><stop offset="100%" stop-color="#E5C478"/></linearGradient></defs><path d="M13 24 v36 C13 69.5 31 69.5 31 60 v-45 C31 7.5 17 7.5 17 15 v37 C17 56.5 26 56.5 26 52 v-26" stroke="url(#brassGrad)" stroke-width="3.2" stroke-linecap="round"/></svg>`;
@@ -33,6 +33,12 @@ export const SEARCH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 export const CLOSE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>`;
 
 export const CAMERA_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.8"/><circle cx="9.2" cy="10.4" r="1.4"/><path d="M5.5 16.5l4.2-3.8 3.2 2.8 2.6-2.4 3 3.4"/></svg>`;
+
+export const BELL_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 15.5c1.1-1.1 1.6-2.4 1.6-4.6a4.2 4.2 0 1 1 8.4 0c0 2.2.5 3.5 1.6 4.6a.9.9 0 0 1-.65 1.5H6.85a.9.9 0 0 1-.65-1.5Z"/><path d="M9.8 19.2a2.4 2.4 0 0 0 4.4 0"/></svg>`;
+
+export const PEN_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.8 4.6a2.1 2.1 0 0 1 3 3L8.2 18.2l-4.2 1.2 1.2-4.2L15.8 4.6Z"/><path d="M13.6 6.8l3.6 3.6"/></svg>`;
+
+export const AUDIO_NOTE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 17.5V6.6l9-2.1v10.8"/><circle cx="7" cy="17.5" r="2.5"/><circle cx="16" cy="15.3" r="2.5"/></svg>`;
 
 export const ARROW_PIN_IMG = {
   gold: './assets/cupid/arrow_pin_gold.webp',

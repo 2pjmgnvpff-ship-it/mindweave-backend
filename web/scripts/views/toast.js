@@ -1,6 +1,7 @@
 // toast.js — bottom whisper toast with a 5 s countdown ring and an optional 撤销 action.
 // One toast at a time; host has role=status + aria-live=polite (see index.html).
 import { h, clear, $ } from '../dom.js';
+import { haptic } from '../native-bridge.js';
 
 let current = null;
 
@@ -55,6 +56,7 @@ export function showToast(text, { actionLabel = '', onAction = null, ms = 5000, 
         onClick: async () => {
           if (acted) return;
           acted = true;
+          haptic('warning');
           btn.disabled = true;
           dismissToast();
           try {

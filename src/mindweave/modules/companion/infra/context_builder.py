@@ -6,8 +6,9 @@ import math
 import re
 from collections import Counter
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -28,6 +29,7 @@ from mindweave.core.orm import (
     FactRow,
     PersonRow,
     RecordRow,
+    ReminderRow,
     UserPreferenceRow,
 )
 from mindweave.modules.companion.domain.output_guard import sanitize_text
@@ -39,18 +41,21 @@ from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
     FactStatus,
     FactType,
+    PendingReason,
     PersonState,
     RecordReviewState,
+    ReminderStatus,
     SafetyCategory,
     Tier,
 )
 from mindweave.shared.pii import mask_hard_pii
 from mindweave.shared.scopes import PersonScope
 
-# Chinese grammatical stop-phrases stripped before CJK bigram generation
+# Chinese grammatical and meta-action stop-phrases stripped before CJK bigram generation
 _ZH_STOP_PHRASES_RE = re.compile(
-    r"(?:什么|怎么|怎样|如何|一下子|一下|有没有|是不是|能不能|可不可以|为什么|可以|"
-    r"这个|那个|这些|那些|我们|你们|他们|她们|帮我|请问|觉得|感觉|知道|告诉)"
+    r"(?:什么|怎么|怎样|如何|一下子|一下|一点|有没有|是不是|能不能|可不可以|为什么|可以|"
+    r"这个|那个|这些|那些|我们|你们|他们|她们|帮我|请问|觉得|感觉|知道|告诉|"
+    r"设一个|设个|提前|提醒|准备|另外|清单|手帐|记录|留意|注意|梳理|整理)"
 )
 
 # Chinese grammatical particles, pronouns, and copulas excluded from standalone tokens & bigrams
@@ -286,6 +291,12 @@ class BuiltCompanionContext:
     record_catalog: dict[UUID, CitationRecordMeta]
     timezone: str
     late_night_care_enabled: bool
+    total_records_scanned: int = 0
+    confirmed_facts_count: int = 0
+    active_reminders_count: int = 0
+    recalled_records_count: int = 0
+    recalled_dates: list[str] = field(default_factory=list)
+    upcoming_reminders: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ContextBuilder:
@@ -364,6 +375,7 @@ class ContextBuilder:
         referenced_material_ids: Sequence[UUID] = (),
         safety_override: SafetyCategory = SafetyCategory.NORMAL,
         exclude_message_id: UUID | None = None,
+        now_utc: datetime | None = None,
     ) -> BuiltCompanionContext:
         # 1. Verify PersonRow strictly belongs to (scope.user_id, scope.person_id), not deleted & not unassigned
         person_row = await session.scalar(
@@ -565,6 +577,20 @@ class ContextBuilder:
                     ),
                 )
 
+        try:
+            tz_info = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            tz_info = None
+
+        if now_utc is not None:
+            local_today = (
+                now_utc.astimezone(tz_info).date() if tz_info is not None else now_utc.date()
+            )
+        else:
+            local_today = datetime.now(tz_info).date() if tz_info is not None else date.today()
+
+        scanned_record_ids: set[UUID] = set(record_catalog.keys())
+
         # 4b. D4 Raw Record Recall: in-memory decrypted BM25 + time-decay over person-scoped slips.
         #     Strictly scoped to (user_id, person_id), physically excluding soft-deleted records,
         #     held venting records, and records whose only facts are pending/rejected/superseded (I1 & I4).
@@ -602,6 +628,8 @@ class ContextBuilder:
                 )
             ).all()
 
+            scanned_record_ids.update(rec.id for rec in recall_rows)
+
             if recall_rows:
                 recall_candidates: list[RecallCandidateRecord] = []
                 for rec in recall_rows:
@@ -622,11 +650,6 @@ class ContextBuilder:
                             deleted_at=rec.deleted_at,
                         )
                     )
-
-                try:
-                    local_today = datetime.now(ZoneInfo(tz_name)).date()
-                except ZoneInfoNotFoundError:
-                    local_today = date.today()
 
                 recalled_hits = recall_relevant_records(
                     user_message,
@@ -657,6 +680,14 @@ class ContextBuilder:
                             happened_on=happened_str,
                         )
                     )
+
+        # Collect unique chronological/ranked dates for recalled & attached raw materials
+        recalled_dates: list[str] = []
+        seen_dates: set[str] = set()
+        for mat in referenced_materials:
+            if mat.happened_on and mat.happened_on not in seen_dates:
+                seen_dates.add(mat.happened_on)
+                recalled_dates.append(mat.happened_on)
 
         # 5. Load ChatThreadRow rolling summary + last 12 ChatMessageRow turns for (user_id, person_id)
         thread_row = await session.scalar(
@@ -712,6 +743,100 @@ class ContextBuilder:
                 )
             )
 
+        # 6. Load active person-scoped ReminderRow items (strictly excluding venting/held/deleted/rejected/superseded backing facts)
+        active_reminder_rows = (
+            await session.scalars(
+                select(ReminderRow)
+                .outerjoin(
+                    FactRow,
+                    and_(
+                        FactRow.id == ReminderRow.fact_id,
+                        FactRow.user_id == scope.user_id,
+                        FactRow.person_id == scope.person_id,
+                    ),
+                )
+                .outerjoin(
+                    RecordRow,
+                    and_(
+                        RecordRow.id == FactRow.record_id,
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == scope.person_id,
+                    ),
+                )
+                .where(
+                    ReminderRow.user_id == scope.user_id,
+                    ReminderRow.person_id == scope.person_id,
+                    ReminderRow.status == ReminderStatus.ACTIVE.value,
+                    or_(
+                        ReminderRow.fact_id.is_(None),
+                        and_(
+                            FactRow.id.is_not(None),
+                            FactRow.invalid_at.is_(None),
+                            FactRow.status != FactStatus.REJECTED.value,
+                            FactRow.pending_reason.is_distinct_from(PendingReason.VENTING.value),
+                            or_(
+                                FactRow.record_id.is_(None),
+                                and_(
+                                    RecordRow.id.is_not(None),
+                                    RecordRow.deleted_at.is_(None),
+                                    RecordRow.review_state != RecordReviewState.HELD.value,
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+                .order_by(
+                    ReminderRow.next_fire_at.asc().nullslast(),
+                    ReminderRow.created_at.desc(),
+                )
+                .limit(50)
+            )
+        ).all()
+
+        upcoming_reminders: list[dict[str, Any]] = []
+        for rem in active_reminder_rows:
+            raw_rem_title = self._cipher.decrypt_str(
+                dek,
+                rem.title_enc,
+                user_id=scope.user_id,
+                table="reminders",
+                column="title_enc",
+                row_id=rem.id,
+            )
+            clean_rem_title = sanitize_text(raw_rem_title, allow_empty=True).cleaned_text
+            if not clean_rem_title:
+                continue
+
+            event_date: date | None = rem.once_date
+            if event_date is None and rem.next_fire_at is not None:
+                local_fire_date = (
+                    rem.next_fire_at.astimezone(tz_info).date()
+                    if tz_info is not None
+                    else rem.next_fire_at.date()
+                )
+                event_date = local_fire_date + timedelta(days=int(rem.next_lead_day or 0))
+
+            days_until = (event_date - local_today).days if event_date is not None else None
+            if days_until is None or days_until >= 0:
+                upcoming_reminders.append(
+                    {
+                        "id": str(rem.id),
+                        "title": clean_rem_title,
+                        "triggerDate": event_date.isoformat() if event_date is not None else None,
+                        "daysUntil": days_until,
+                        "isLunar": bool(rem.is_lunar),
+                        "rule": rem.rule,
+                        "status": rem.status,
+                    }
+                )
+
+        upcoming_reminders.sort(
+            key=lambda item: (
+                item["daysUntil"] is None,
+                item["daysUntil"] if item["daysUntil"] is not None else 999999,
+            )
+        )
+
         chat_input = CompanionChatInput(
             person_id=scope.person_id,
             person_name=mask_hard_pii(person_name).masked_text,
@@ -738,4 +863,10 @@ class ContextBuilder:
             record_catalog=record_catalog,
             timezone=tz_name,
             late_night_care_enabled=late_night_care_enabled,
+            total_records_scanned=len(scanned_record_ids),
+            confirmed_facts_count=len(confirmed_fact_items),
+            active_reminders_count=len(active_reminder_rows),
+            recalled_records_count=len(referenced_materials),
+            recalled_dates=recalled_dates,
+            upcoming_reminders=upcoming_reminders,
         )

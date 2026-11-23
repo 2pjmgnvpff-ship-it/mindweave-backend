@@ -7,18 +7,21 @@ import { TIER_LABEL } from '../format.js';
 import { openSheet, closeSheet } from './sheet.js';
 import { whisper } from './toast.js';
 import { actions } from '../actions.js';
+import { haptic } from '../native-bridge.js';
 
 const QUESTION_KINDS = new Set(['new_person_confirm', 'person_disambiguation']);
 
 async function resolve(item, body, okText, list) {
   try {
     const res = await api.resolveInbox(item.id, body);
+    haptic(body?.action === 'discard' ? 'warning' : 'success');
     whisper(okText, 2600);
     await actions.refreshBootstrap();
     if (item.personId) actions.reloadMaterials(item.personId);
     if (res?.targetPersonId && res.targetPersonId !== item.personId) actions.reloadMaterials(res.targetPersonId);
     list.remove(item.id);
   } catch (err) {
+    haptic('warning');
     whisper(err.status === 409 ? '这张便签已经处理过了' : err.message, 2800);
     list.remove(item.id);
   }

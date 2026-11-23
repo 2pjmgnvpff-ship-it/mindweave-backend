@@ -4,6 +4,7 @@ import { store } from '../store.js';
 import { personDecor, monogramOf, sealStyle } from '../decor.js';
 import { formatDateCn } from '../format.js';
 import { actions } from '../actions.js';
+import { haptic } from '../native-bridge.js';
 
 let lastKey = '';
 
@@ -15,10 +16,14 @@ function row(p, justDemoted) {
     'button',
     {
       type: 'button',
+      role: 'listitem',
       class: ['casual-folio-row', justDemoted && 'is-just-demoted'],
       dataset: { personId: p.id },
       'aria-label': `${p.nameCn}${p.state === 'provisional' ? '，待确认' : ''}`,
-      onClick: () => actions.openPerson(p.id, { fromDirectory: true }),
+      onClick: () => {
+        haptic('light');
+        actions.openPerson(p.id, { fromDirectory: true });
+      },
     },
     h('span', { class: 'folio-side-tab', 'aria-hidden': 'true', style: { background: d.tabColor } }),
     h('span', { class: 'folio-monogram-seal', 'aria-hidden': 'true', style: sealStyle(p), text: monogramOf(p) }),

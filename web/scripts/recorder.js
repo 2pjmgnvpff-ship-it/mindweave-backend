@@ -1,5 +1,6 @@
 // recorder.js — getUserMedia + MediaRecorder + AnalyserNode, behind a small interface.
 import { pickMimeType, levelFromTimeDomain } from './voice-logic.js';
+import { setAudioSession } from './native-bridge.js';
 
 export class MicError extends Error {
   constructor(kind, cause) {
@@ -25,12 +26,17 @@ export function createRecorder() {
   let analyser = null;
   let buf = null;
   let mime = '';
+  let sessionActive = false;
 
   async function start() {
     if (!recordingSupported()) throw new MicError('unsupported');
+    setAudioSession('playAndRecord');
+    sessionActive = true;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
     } catch (err) {
+      sessionActive = false;
+      setAudioSession('deactivate');
       const name = err && err.name;
       throw new MicError(name === 'NotAllowedError' || name === 'SecurityError' ? 'denied' : name === 'NotReadableError' ? 'busy' : 'unsupported', err);
     }
@@ -71,6 +77,10 @@ export function createRecorder() {
       audioCtx && audioCtx.close();
     } catch {
       /* ignore */
+    }
+    if (sessionActive) {
+      sessionActive = false;
+      setAudioSession('deactivate');
     }
     stream = null;
     audioCtx = null;

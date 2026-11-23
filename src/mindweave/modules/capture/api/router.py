@@ -17,7 +17,8 @@ from mindweave.core.dependencies import (
     parse_uuid_param,
     require_idempotency_key,
 )
-from mindweave.core.errors import ValidationFailedError
+from mindweave.core.errors import PayloadTooLargeError, ValidationFailedError
+from mindweave.modules.capture.api.schemas import VoiceTranscribeResponse
 from mindweave.modules.capture.application.dto import (
     CaptureCreateJsonRequest,
     CaptureResponse,
@@ -102,6 +103,8 @@ async def _parse_capture_ingest_request(
     scope: UserScope,
     idem_key: str | None,
     sync_query: bool | None,
+    max_audio_bytes: int,
+    max_image_bytes: int,
     default_voice_endpoint: bool = False,
 ) -> CaptureIngestCommand:
     content_type = request.headers.get("content-type", "").lower()
@@ -113,18 +116,28 @@ async def _parse_capture_ingest_request(
         audio_bytes: bytes | None = None
         image_bytes: bytes | None = None
 
+        max_audio_read = max_audio_bytes + 1
         for audio_field in ("audio", "voice", "file"):
             up = form.get(audio_field)
             if isinstance(up, UploadFile):
-                data = await up.read()
+                data = await up.read(max_audio_read)
+                if len(data) > max_audio_bytes:
+                    raise PayloadTooLargeError(
+                        f"Audio file size exceeds maximum allowed ({max_audio_bytes} bytes)"
+                    )
                 if data:
                     audio_bytes = data
                     break
 
+        max_image_read = max_image_bytes + 1
         for image_field in ("image", "screenshot", "photo"):
             up_img = form.get(image_field)
             if isinstance(up_img, UploadFile):
-                data_img = await up_img.read()
+                data_img = await up_img.read(max_image_read)
+                if len(data_img) > max_image_bytes:
+                    raise PayloadTooLargeError(
+                        f"Image file size exceeds maximum allowed ({max_image_bytes} bytes)"
+                    )
                 if data_img:
                     image_bytes = data_img
                     break
@@ -238,6 +251,8 @@ async def create_capture(
         scope=scope,
         idem_key=idem_key,
         sync_query=sync,
+        max_audio_bytes=container.settings.max_audio_bytes,
+        max_image_bytes=container.settings.max_image_bytes,
         default_voice_endpoint=False,
     )
     svc = CapturePipelineService(container)
@@ -263,6 +278,8 @@ async def ingest_voice(
         scope=scope,
         idem_key=idem_key,
         sync_query=True,
+        max_audio_bytes=container.settings.max_audio_bytes,
+        max_image_bytes=container.settings.max_image_bytes,
         default_voice_endpoint=True,
     )
     svc = CapturePipelineService(container)
@@ -273,6 +290,62 @@ async def ingest_voice(
     return JSONResponse(
         status_code=200,
         content=resp.model_dump(mode="json", by_alias=True),
+    )
+
+
+@router.post(
+    "/voice/transcribe",
+    response_model=VoiceTranscribeResponse,
+    response_model_by_alias=True,
+    status_code=200,
+    summary="Transcribe conversational voice audio without creating records or facts",
+)
+async def transcribe_voice(
+    request: Request,
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> VoiceTranscribeResponse:
+    content_type = request.headers.get("content-type", "").lower()
+    if not content_type.startswith("multipart/form-data"):
+        raise ValidationFailedError("Voice transcription requires multipart/form-data upload")
+
+    form = await request.form()
+    _reject_null_bytes_in_form(form)
+
+    audio_bytes: bytes | None = None
+    max_audio_bytes = container.settings.max_audio_bytes
+    max_read = max_audio_bytes + 1
+    for audio_field in ("audio", "voice", "file"):
+        upload = form.get(audio_field)
+        if isinstance(upload, UploadFile):
+            data = await upload.read(max_read)
+            if len(data) > max_audio_bytes:
+                raise PayloadTooLargeError(
+                    f"Audio file size exceeds maximum allowed ({max_audio_bytes} bytes)"
+                )
+            if data:
+                audio_bytes = data
+                break
+
+    if not audio_bytes:
+        raise ValidationFailedError("Voice transcription requires a non-empty audio file")
+
+    active_person_id = _parse_optional_uuid_form(
+        form.get("activePersonId") or form.get("active_person_id"),
+        field_name="activePersonId",
+    )
+
+    svc = CapturePipelineService(container)
+    result = await svc.transcribe_only(
+        scope=scope,
+        audio_bytes=audio_bytes,
+        active_person_id=active_person_id,
+    )
+    return VoiceTranscribeResponse(
+        transcript=result.transcript,
+        corrected=result.corrected,
+        raw_transcript=result.raw_transcript,
+        duration_ms=result.duration_ms,
     )
 
 

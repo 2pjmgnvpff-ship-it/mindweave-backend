@@ -1,6 +1,6 @@
 // sw.js — minimal offline shell. Caches the app shell + static assets only.
 // API traffic (/v1, /api, /auth media URLs) is NEVER cached: always straight to the network.
-const CACHE = 'mw-shell-3';
+const CACHE = 'mw-shell-6';
 const SHELL = [
   './',
   './index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   './assets/cupid/arrow_pin_silver.webp',
   './assets/cupid/arrow_pin_crystal.webp',
   './assets/gleb/lake_bench_clean.jpg',
+  './assets/gleb/orb_ai_glow.png',
   './styles/base.css',
   './styles/journal.css',
   './styles/dock.css',
@@ -22,6 +23,8 @@ const SHELL = [
   './scripts/store.js',
   './scripts/format.js',
   './scripts/icons.js',
+  './scripts/native-bridge.js',
+  './scripts/gestures.js',
   './scripts/voice-logic.js',
   './scripts/offline-queue.js',
   './scripts/actions.js',
@@ -40,6 +43,7 @@ const SHELL = [
   './scripts/views/capture.js',
   './scripts/views/chat.js',
   './scripts/views/chat-render.js',
+  './scripts/views/chat-voice.js',
   './scripts/views/settings.js',
   './scripts/views/sheet.js',
   './scripts/views/onboarding.js',

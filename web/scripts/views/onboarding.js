@@ -3,6 +3,7 @@
 // pick an arrow (金/银/水晶) → Cupid's first reply, citing that very sentence → into the journal.
 import { h, clear, svg, $, plainFromMarked } from '../dom.js';
 import { api, uuid } from '../api/endpoints.js';
+import { haptic, setAudioSession, prefersReducedMotion } from '../native-bridge.js';
 import { MIC_SVG, SEND_SVG, CUPID_IMG, ARROW_PIN_IMG } from '../icons.js';
 import { TIER_LABEL, shouldSendOnEnter, formatDateCn, todayIso } from '../format.js';
 import { MIN_HOLD_MS, MAX_HOLD_MS, extensionFor, formatTimer } from '../voice-logic.js';
@@ -103,15 +104,19 @@ export function runOnboarding() {
           const held = performance.now() - t0;
           if (cancel || held < MIN_HOLD_MS) {
             r.discard();
+            setAudioSession?.('deactivate');
+            haptic(cancel ? 'warning' : 'light');
             hint.textContent = held < MIN_HOLD_MS ? '要按住说哦，松开就记下' : '按住说话';
             return;
           }
           hint.textContent = '按住说话';
           try {
             const { blob } = await r.stop();
+            setAudioSession?.('deactivate');
             if (blob && blob.size > 200) submit({ kind: 'voice', blob });
             else hint.textContent = '好像没听到声音，再说一次？';
           } catch {
+            setAudioSession?.('deactivate');
             hint.textContent = '没录上，打字也可以';
           }
         };
@@ -120,6 +125,8 @@ export function runOnboarding() {
           if (busy || rec) return;
           e.preventDefault();
           orb.setPointerCapture?.(e.pointerId);
+          haptic('medium');
+          setAudioSession?.('playAndRecord');
           rec = createRecorder();
           t0 = performance.now();
           orb.classList.add('is-holding');
@@ -136,6 +143,7 @@ export function runOnboarding() {
             rec = null;
             clearInterval(timer);
             r?.discard();
+            setAudioSession?.('deactivate');
             orb.classList.remove('is-holding');
             hint.textContent = '麦克风没打开，打字也一样';
           }
@@ -226,7 +234,7 @@ export function runOnboarding() {
         box.appendChild(
           h(
             'button',
-            { type: 'button', class: 'onb-arrow-card', dataset: { tier }, onClick: (e) => chooseArrow(ctx, tier, box, e.currentTarget) },
+            { type: 'button', role: 'radio', 'aria-checked': 'false', class: 'onb-arrow-card', dataset: { tier }, onClick: (e) => chooseArrow(ctx, tier, box, e.currentTarget) },
             h('img', { src: ARROW_PIN_IMG[tier], alt: '' }),
             h('span', {}, h('strong', { text: `${TIER_LABEL[tier].arrow} · ${TIER_LABEL[tier].short}` }), h('small', { text: TIER_LABEL[tier].meaning })),
           ),
@@ -234,15 +242,18 @@ export function runOnboarding() {
       }
       box.appendChild(h('p', { class: 'onb-sub', text: '以后随时可以在 TA 那页右上角换。' }));
       root.appendChild(box);
-      box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      box.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
     }
 
     async function chooseArrow(ctx, tier, box, chosenBtn) {
       if (box.dataset.busy) return;
+      haptic('selection');
       box.dataset.busy = '1';
       box.querySelectorAll('.onb-arrow-card').forEach((btn) => {
-        btn.classList.toggle('is-chosen', btn === chosenBtn);
-        btn.classList.toggle('is-dimmed', btn !== chosenBtn);
+        const picked = btn === chosenBtn;
+        btn.classList.toggle('is-chosen', picked);
+        btn.classList.toggle('is-dimmed', !picked);
+        btn.setAttribute('aria-checked', String(picked));
       });
       status.textContent = '正在把这一页装订好…';
       let personId = ctx.personId;
@@ -261,7 +272,10 @@ export function runOnboarding() {
         await actions.refreshBootstrap();
       } catch (err) {
         delete box.dataset.busy;
-        box.querySelectorAll('.onb-arrow-card').forEach((btn) => btn.classList.remove('is-chosen', 'is-dimmed'));
+        box.querySelectorAll('.onb-arrow-card').forEach((btn) => {
+          btn.classList.remove('is-chosen', 'is-dimmed');
+          btn.setAttribute('aria-checked', 'false');
+        });
         status.textContent = err.message;
         return;
       }
@@ -277,7 +291,7 @@ export function runOnboarding() {
       const bubble = aiBubble();
       const enter = h(
         'button',
-        { type: 'button', class: 'onb-enter', id: 'onbEnter', onClick: () => finish(personId) },
+        { type: 'button', class: 'onb-enter', id: 'onbEnter', onClick: () => (haptic('success'), finish(personId)) },
         h('span', { text: `翻开「${ctx.name}」的手帐` }),
         h('span', { class: 'onb-enter-arrow', 'aria-hidden': 'true', text: '→' }),
       );
@@ -285,11 +299,12 @@ export function runOnboarding() {
       const question = '你记住了什么？';
       const reply = h('div', { class: 'onb-reply' }, userBubble(question), bubble.el, enter);
       root.appendChild(reply);
-      reply.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      reply.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'end' });
       const refs = ctx.materialId ? [ctx.materialId] : [];
       api
         .streamChat(personId, { message: question, referencedMaterialIds: refs, clientMessageId: uuid() }, ({ event, data }) => {
-          if (event === 'delta') bubble.append(data?.text || '');
+          if (event === 'agent_step') bubble.addAgentStep(data);
+          else if (event === 'delta') bubble.append(data?.text || '');
           else if (event === 'citation') bubble.addCitation(data, personId);
           else if (event === 'whisper') bubble.setWhisper(data?.text);
           else if (event === 'crisis') {
@@ -298,6 +313,7 @@ export function runOnboarding() {
           }
         })
         .then(() => {
+          bubble.finishTrace();
           if (!bubble.started) bubble.setText(`记住了。以后想到「${ctx.name}」的什么，按住左下角说一句就好。`);
         })
         .catch(() => bubble.setText(`记住了。以后想到「${ctx.name}」的什么，按住左下角说一句就好。`));

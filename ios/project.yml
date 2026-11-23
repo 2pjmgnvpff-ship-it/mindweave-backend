@@ -1,0 +1,66 @@
+name: MindWeave
+options:
+  bundleIdPrefix: app.mindweave
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+    SWIFT_STRICT_CONCURRENCY: targeted
+
+targets:
+  MindWeave:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: MindWeave/App
+      - path: MindWeave/Bridge
+      - path: MindWeave/Views
+      - path: MindWeave/Resources/Assets.xcassets
+      - path: MindWeave/WebBundle
+        type: folder
+    settings:
+      base:
+        PRODUCT_NAME: MindWeave
+        PRODUCT_BUNDLE_IDENTIFIER: app.mindweave.ios
+        INFOPLIST_FILE: MindWeave/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
+        SWIFT_EMIT_LOC_STRINGS: "NO"
+        SUPPORTS_MACCATALYST: "NO"
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          GCC_OPTIMIZATION_LEVEL: "0"
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          SWIFT_COMPILATION_MODE: wholemodule
+          ENABLE_BITCODE: "NO"
+          STRIP_INSTALLED_PRODUCT: "YES"
+schemes:
+  MindWeave:
+    build:
+      targets:
+        MindWeave: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+    management:
+      shared: true
