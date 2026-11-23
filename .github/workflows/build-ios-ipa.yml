@@ -14,7 +14,7 @@ on:
         type: string
         default: ""
   push:
-    branches: ["main", "develop"]
+    branches: ["main", "develop", "ios-ipa-*"]
     paths:
       - "web/**"
       - "ios/**"
