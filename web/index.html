@@ -46,15 +46,30 @@
         <div class="journal-top-left-bar">
           <button type="button" class="quiet-gear-btn" id="settingsBtn" aria-label="设置"></button>
           <button type="button" class="back-to-casual-pill" id="backToCasual" aria-label="回到记繁琐名册" hidden>‹ 记繁琐</button>
-          <div class="journal-folio-whisper">
-            <span id="folioDate"></span>
-            <span class="folio-subject" id="folioSubject"></span>
+          <div class="journal-folio-whisper" id="folioBar">
+            <span id="folioDate" hidden></span>
+            <button type="button" class="folio-subject-btn" id="folioSubjectBtn" aria-label="翻开人物手帐衬纸">
+              <span class="folio-subject" id="folioSubject"></span>
+            </button>
+            <button type="button" class="folio-month-btn" id="folioMonthBtn" aria-label="翻到指定月份" hidden>
+              <span id="folioMonthLabel"></span>
+              <span class="folio-month-caret" aria-hidden="true">▾</span>
+            </button>
+            <button type="button" class="quiet-search-btn" id="searchToggleBtn" aria-label="搜索这一页" hidden></button>
           </div>
+        </div>
+
+        <div class="spotlight-bar" id="spotlightBar" hidden>
+          <span class="spotlight-icon" id="spotlightIcon" aria-hidden="true"></span>
+          <input type="search" class="spotlight-input" id="spotlightInput" placeholder="在手帐里找一句…" autocomplete="off" aria-label="搜索这一页手帐">
+          <span class="spotlight-count" id="spotlightCount" hidden></span>
+          <button type="button" class="spotlight-close" id="spotlightClose" aria-label="关闭搜索"></button>
         </div>
 
         <div class="top-right-arrow-pin-anchor" id="arrowAnchor"></div>
 
         <div class="journal-scroll" id="journalScroll" role="region" aria-label="手帐页"></div>
+        <nav class="paper-edge-tabs" id="paperEdgeTabs" aria-label="月份索引" hidden></nav>
         <section class="casual-relationships-hub" id="casualHub" aria-label="记繁琐名册"></section>
         <button type="button" class="question-entry" id="questionEntry" hidden></button>
       </div>
@@ -103,6 +118,7 @@
 
       <section class="ai-chat-fullscreen" id="chat" role="dialog" aria-modal="true" aria-label="和丘比特聊聊" hidden></section>
 
+      <div class="mw-peek-layer" id="peekLayer"></div>
       <div class="mw-sheet-layer" id="sheetLayer"></div>
       <div class="mw-toast-host" id="toastHost" role="status" aria-live="polite"></div>
     </main>

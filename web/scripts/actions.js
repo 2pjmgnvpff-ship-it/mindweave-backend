@@ -5,7 +5,7 @@ const noop = () => {};
 export const actions = {
   openPerson: noop, // (personId, { materialId?, fromDirectory? })
   openDirectory: noop,
-  openChat: noop, // (personId)
+  openChat: noop, // (personId, opts?)
   closeChat: noop,
   openTextCapture: noop, // ({ personId?, prompt?, directory? })
   reloadMaterials: noop, // (personId)

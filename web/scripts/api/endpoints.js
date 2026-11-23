@@ -45,11 +45,43 @@ export const api = {
     if (id) form.append('id', id);
     return client.request('POST', '/voice/ingest', { form, idem: idem || true });
   },
+  captureImage: ({ id, file, text, routeMode, activePersonId }, idem) => {
+    const form = new FormData();
+    form.append('image', file, file?.name || 'image.jpg');
+    form.append('source', 'image');
+    form.append('sync', 'true');
+    form.append('routeMode', routeMode || 'global');
+    if (activePersonId) form.append('activePersonId', activePersonId);
+    if (text) form.append('text', text);
+    if (id) form.append('id', id);
+    return client.request('POST', '/captures', { query: { sync: 'true' }, form, idem: idem || true });
+  },
   undoCapture: (captureId) => client.post(`/captures/${encodeURIComponent(captureId)}:undo`, {}),
 
-  // §7 materials, facts, inbox
+  // §7 materials, facts, reminders, inbox
   materials: (personId, { cursor, limit = 30, includeHeld } = {}) =>
     client.get(`/persons/${encodeURIComponent(personId)}/materials`, { query: { cursor, limit, includeHeld } }),
+  uploadPhoto: (personId, { file, caption, pinned = false }) => {
+    const form = new FormData();
+    const note = String(caption || '').trim() || '拍下的一张照片';
+    form.append('photo', file, file?.name || 'photo.jpg');
+    form.append('kind', 'photo');
+    form.append('title', note.slice(0, 80));
+    form.append('body', note);
+    form.append('pinned', String(Boolean(pinned)));
+    return client.request('POST', `/persons/${encodeURIComponent(personId)}/materials`, { form, idem: true });
+  },
+  patchMaterial: (materialId, body, version) =>
+    client.patch(
+      `/materials/${encodeURIComponent(materialId)}`,
+      body,
+      version != null ? { headers: { 'If-Match': `"${version}"` } } : {},
+    ),
+  deleteMaterial: (materialId) => client.request('DELETE', `/materials/${encodeURIComponent(materialId)}`),
+  facts: (personId, query = {}) =>
+    client.get(`/persons/${encodeURIComponent(personId)}/facts`, { query }),
+  reminders: (personId, query = {}) =>
+    client.get('/reminders', { query: { personId, ...query } }),
   /** PATCH a fact; the backend requires If-Match with the fact version (contract §7). */
   patchFact: (factId, body, version) =>
     client.patch(`/facts/${encodeURIComponent(factId)}`, body, version != null ? { headers: { 'If-Match': `"${version}"` } } : {}),
@@ -72,6 +104,9 @@ export const api = {
     });
     await readSseResponse(res, onEvent);
   },
+
+  // §10 meta
+  aiStatus: () => client.get('/meta/ai-status'),
 };
 
 export { uuid };

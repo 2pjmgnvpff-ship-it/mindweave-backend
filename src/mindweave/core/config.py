@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # AI Model Gateway
     ai_primary_provider: Literal["fake", "gemini", "dashscope", "ark", "deepseek"] = "fake"
     ai_fallback_provider: Literal["none", "fake", "gemini", "dashscope", "ark", "deepseek"] = "none"
+    ai_asr_provider: Literal["inherit", "fake", "gemini", "dashscope", "ark"] = "inherit"
     gemini_api_key: str = ""
     gemini_model_fast: str = "gemini-2.5-flash"
     gemini_model_chat: str = "gemini-2.5-flash"
@@ -86,6 +87,7 @@ class Settings(BaseSettings):
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     dashscope_extract_model: str = "qwen-plus"
     dashscope_vision_model: str = "qwen-vl-max"
+    dashscope_asr_model: str = "qwen-audio-turbo"
 
     ark_api_key: str = ""
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
@@ -133,12 +135,20 @@ class Settings(BaseSettings):
         ):
             raise ValueError("Dev auth shortcuts must be disabled in staging and prod_cn")
         if self.environment == "prod_cn":
-            if self.ai_primary_provider == "gemini" or self.ai_fallback_provider == "gemini":
+            if (
+                self.ai_primary_provider == "gemini"
+                or self.ai_fallback_provider == "gemini"
+                or self.ai_asr_provider == "gemini"
+            ):
                 raise ValueError(
                     "Compliance Gate M6: Gemini provider is strictly forbidden in prod_cn; "
                     "switch to a domestic filed model (dashscope / ark / deepseek)."
                 )
-            if self.ai_primary_provider == "fake" or self.ai_fallback_provider == "fake":
+            if (
+                self.ai_primary_provider == "fake"
+                or self.ai_fallback_provider == "fake"
+                or self.ai_asr_provider == "fake"
+            ):
                 raise ValueError("prod_cn must not use fake AI provider")
             if self.kek_hex == DEFAULT_DEV_KEK_HEX:
                 raise ValueError("prod_cn must not use DEFAULT_DEV_KEK_HEX")

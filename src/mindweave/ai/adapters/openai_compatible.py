@@ -22,6 +22,20 @@ from mindweave.ai.metering import estimate_token_count
 
 _TRANSIENT_HTTP_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 
+_AUDIO_MIME_TO_FORMAT: dict[str, str] = {
+    "audio/webm": "webm",
+    "audio/mp4": "mp4",
+    "audio/m4a": "mp4",
+    "audio/x-m4a": "mp4",
+    "audio/mpeg": "mp3",
+    "audio/mp3": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/wave": "wav",
+    "audio/ogg": "ogg",
+    "audio/opus": "ogg",
+}
+
 
 def validate_non_reasoning_model(model: str) -> None:
     """Enforce ADR-001 ban on DeepSeek-R1 / reasoning models."""
@@ -32,8 +46,12 @@ def validate_non_reasoning_model(model: str) -> None:
         )
 
 
+def _normalize_mime_base(mime_type: str) -> str:
+    return mime_type.split(";", 1)[0].strip().lower()
+
+
 class OpenAICompatibleAdapter:
-    """Async `httpx` OpenAI-compatible chat/vision adapter for domestic M6 providers."""
+    """Async `httpx` OpenAI-compatible chat/vision/audio adapter for domestic M6 providers."""
 
     def __init__(
         self,
@@ -74,22 +92,43 @@ class OpenAICompatibleAdapter:
             )
 
         if request.media_bytes is not None and request.media_mime_type:
-            if not request.media_mime_type.startswith("image/"):
-                raise AdapterPermanentError(
-                    f"Provider '{self._provider_name}' chat endpoint only accepts image/* media; "
-                    f"got '{request.media_mime_type}'"
-                )
+            mime_base = _normalize_mime_base(request.media_mime_type)
             b64 = base64.b64encode(request.media_bytes).decode("ascii")
-            data_uri = f"data:{request.media_mime_type};base64,{b64}"
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": data_uri}},
-                        {"type": "text", "text": request.prompt},
-                    ],
-                }
-            )
+            if mime_base.startswith("image/"):
+                data_uri = f"data:{mime_base};base64,{b64}"
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": data_uri}},
+                            {"type": "text", "text": request.prompt},
+                        ],
+                    }
+                )
+            elif mime_base.startswith("audio/"):
+                audio_fmt = _AUDIO_MIME_TO_FORMAT.get(mime_base)
+                if audio_fmt is None:
+                    raise AdapterPermanentError(
+                        f"Provider '{self._provider_name}' does not support audio mime type "
+                        f"'{request.media_mime_type}'"
+                    )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": b64, "format": audio_fmt},
+                            },
+                            {"type": "text", "text": request.prompt},
+                        ],
+                    }
+                )
+            else:
+                raise AdapterPermanentError(
+                    f"Provider '{self._provider_name}' chat endpoint only accepts image/* or "
+                    f"audio/* media; got '{request.media_mime_type}'"
+                )
         else:
             messages.append({"role": "user", "content": request.prompt})
 
@@ -140,7 +179,13 @@ class OpenAICompatibleAdapter:
             data = resp.json()
             choices = data.get("choices") or []
             message = choices[0].get("message") if choices else {}
-            content = str((message or {}).get("content") or "")
+            raw_content = (message or {}).get("content")
+            if isinstance(raw_content, list):
+                content = "".join(
+                    str(part.get("text") or "") for part in raw_content if isinstance(part, dict)
+                )
+            else:
+                content = str(raw_content or "")
             usage = data.get("usage") or {}
             in_tok = int(usage.get("prompt_tokens") or 0) or estimate_token_count(request.prompt)
             out_tok = int(usage.get("completion_tokens") or 0) or estimate_token_count(content)

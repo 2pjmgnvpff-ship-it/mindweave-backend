@@ -25,9 +25,9 @@ docker compose logs -f tunnel
 
 ---
 
-## 3. 架构总纲与门禁命令
+## 3. 架构总纲、AI 规则规范与门禁命令
 
-详见 [`docs/BACKEND_MASTER_PLAN.md`](./docs/BACKEND_MASTER_PLAN.md)、[`AGENTS.md`](./AGENTS.md) 与 [`docs/adr/`](./docs/adr/)。
+详见 [`docs/BACKEND_MASTER_PLAN.md`](./docs/BACKEND_MASTER_PLAN.md)、[`docs/AI_INTEGRATION_AND_RULES_SPEC.md`](./docs/AI_INTEGRATION_AND_RULES_SPEC.md)、[`AGENTS.md`](./AGENTS.md) 与 [`docs/adr/`](./docs/adr/)。
 
 ```bash
 make lint && make typecheck && make arch
@@ -35,17 +35,26 @@ make test   # 含单元、架构、Postgres RLS 集成与红队对抗测试
 make eval   # 离线评测集
 ```
 
+### 一键初始化演示工作区（Demo Day Showcase）
+
+```bash
+uv run python scripts/seed_demo.py --email demo@mindweave.app --reset
+```
+
+该脚本会在真实 PostgreSQL（`FORCE RLS` + 按用户 AES-256-GCM 信封加密）中预置 `妈妈`（金箭 · 18 条跨年手帐与真实可播放 WAV 语音）、`阿远`（金箭 · 6 条手帐）、`陈经理`（银箭 · 零照片事实边界记录）及 4 位 `记繁琐` 联系人。开发环境启动后端后，在首页输入 `demo@mindweave.app` 发送验证码即可自动回填一键登录。
+
 ---
 
-## 4. 切换 AI 提供方
+## 4. 切换 AI 提供方与语音识别通道
 
-通过环境变量 `MINDWEAVE_AI_PRIMARY_PROVIDER`（与可选的降级通道 `MINDWEAVE_AI_FALLBACK_PROVIDER`）即可在五种提供方之间切换（任务路由见 [`src/mindweave/ai/routing.yaml`](./src/mindweave/ai/routing.yaml)）：
+通过环境变量 `MINDWEAVE_AI_PRIMARY_PROVIDER`（可选降级通道 `MINDWEAVE_AI_FALLBACK_PROVIDER`，以及可选独立语音通道 `MINDWEAVE_AI_ASR_PROVIDER`）即可在五种提供方之间切换（任务路由见 [`src/mindweave/ai/routing.yaml`](./src/mindweave/ai/routing.yaml) 与 [`docs/AI_INTEGRATION_AND_RULES_SPEC.md`](./docs/AI_INTEGRATION_AND_RULES_SPEC.md)）：
 
 | 提供方 | `MINDWEAVE_AI_PRIMARY_PROVIDER` | 必填密钥 / 模型环境变量 | 说明 |
 |---|---|---|---|
 | 离线确定性桩 | `fake` | 无需密钥 | 本地开发与离线 E2E 默认项；`prod_cn` 环境禁止启用 |
-| Google Gemini | `gemini` | `MINDWEAVE_GEMINI_API_KEY`（可选 `MINDWEAVE_GEMINI_MODEL_FAST` / `MINDWEAVE_GEMINI_MODEL_CHAT`，默认 `gemini-2.5-flash`；`MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED`） | 仅用于内部自测与非国内环境；`prod_cn` 强制拦截 |
-| 阿里百炼（通义千问） | `dashscope` | `MINDWEAVE_DASHSCOPE_API_KEY`（默认 `qwen-plus` / 视觉 `qwen-vl-max`，可通过 `MINDWEAVE_DASHSCOPE_EXTRACT_MODEL`、`MINDWEAVE_DASHSCOPE_VISION_MODEL`、`MINDWEAVE_DASHSCOPE_BASE_URL` 覆盖） | 中国大陆合规备案模型之一 |
+| Google Gemini | `gemini` | `MINDWEAVE_GEMINI_API_KEY`（可选 `MINDWEAVE_GEMINI_MODEL_FAST` / `MINDWEAVE_GEMINI_MODEL_CHAT`，默认 `gemini-2.5-flash`；`MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED`） | 原生支持音频转写与多模态；仅用于内部自测与非国内环境，`prod_cn` 强制拦截 |
+| 阿里百炼（通义千问） | `dashscope` | `MINDWEAVE_DASHSCOPE_API_KEY`（默认 `qwen-plus` / 视觉 `qwen-vl-max` / 语音 `MINDWEAVE_DASHSCOPE_ASR_MODEL=qwen-audio-turbo`，可覆盖） | 中国大陆合规备案模型之一，支持多模态音频 `input_audio` |
 | 火山方舟（豆包） | `ark` | `MINDWEAVE_ARK_API_KEY`（可选 `MINDWEAVE_ARK_CHAT_MODEL` 默认 `doubao-1-5-pro-32k`、`MINDWEAVE_ARK_BASE_URL`） | 中国大陆合规备案模型之一 |
-| DeepSeek | `deepseek` | `MINDWEAVE_DEEPSEEK_API_KEY`（可选 `MINDWEAVE_DEEPSEEK_CHAT_MODEL` 默认 `deepseek-chat`、`MINDWEAVE_DEEPSEEK_BASE_URL`） | 严禁配置 `deepseek-reasoner` / `*-r1` 推理模型（遵循 ADR-001 首字延迟上限） |
+| DeepSeek | `deepseek` | `MINDWEAVE_DEEPSEEK_API_KEY`（可选 `MINDWEAVE_DEEPSEEK_CHAT_MODEL` 默认 `deepseek-chat`、`MINDWEAVE_DEEPSEEK_BASE_URL`） | 严禁配置 `deepseek-reasoner` / `*-r1` 推理模型（遵循 ADR-001 首字延迟上限）；可配合 `MINDWEAVE_AI_ASR_PROVIDER=dashscope` 处理语音 |
+
 

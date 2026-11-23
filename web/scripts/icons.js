@@ -28,6 +28,12 @@ export const PAPERS_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 
 export const VOICE_ARC_SVG = `<svg class="voice-split-arc-svg" viewBox="0 0 384 838" fill="none" aria-hidden="true"><path class="voice-inner-whisper-arc" d="M 52.2 715.2 A 78 78 0 0 1 124.8 787.8"/><path class="voice-split-arc-seg seg-up" d="M 56.3 659.3 A 134 134 0 0 1 129.5 687.4"/><path class="voice-split-arc-seg seg-right" d="M 149.6 706.9 A 134 134 0 0 1 180.3 779.0"/></svg>`;
 
+export const SEARCH_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.8" cy="10.8" r="6.3"/><path d="M15.6 15.6l4.4 4.4"/></svg>`;
+
+export const CLOSE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.95" stroke-linecap="round"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg>`;
+
+export const CAMERA_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.8"/><circle cx="9.2" cy="10.4" r="1.4"/><path d="M5.5 16.5l4.2-3.8 3.2 2.8 2.6-2.4 3 3.4"/></svg>`;
+
 export const ARROW_PIN_IMG = {
   gold: './assets/cupid/arrow_pin_gold.webp',
   silver: './assets/cupid/arrow_pin_silver.webp',

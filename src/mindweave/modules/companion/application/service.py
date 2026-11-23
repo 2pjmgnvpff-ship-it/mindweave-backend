@@ -863,6 +863,22 @@ class CompanionService:
         )
 
     @staticmethod
+    def _build_sse_done_payload(
+        turn: ChatTurnResponse,
+        *,
+        writeback_queued: bool = False,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "messageId": str(turn.message_id),
+            "tierSnapshot": turn.tier_snapshot.value,
+            "hasUnrecordedGap": turn.has_unrecorded_gap,
+            "citedMaterialIds": [str(mid) for mid in turn.cited_material_ids],
+        }
+        if writeback_queued:
+            payload["writebackQueued"] = True
+        return payload
+
+    @staticmethod
     def _replay_turn_as_sse(turn: ChatTurnResponse) -> AsyncIterator[str]:
         async def _gen() -> AsyncIterator[str]:
             if turn.crisis_card is not None:
@@ -897,18 +913,21 @@ class CompanionService:
                 )
             if asst.whisper_note:
                 yield format_sse_event("whisper", {"text": asst.whisper_note})
+            # ADR-005 #3: NEVER emit `perspective` SSE event for `silver` or `crystal` tiers
             if turn.tier_snapshot is Tier.GOLD and asst.perspectives:
                 yield format_sse_event("perspective", {"items": asst.perspectives})
             if asst.suggestions:
                 yield format_sse_event("suggestion", {"items": asst.suggestions})
+            writeback_queued = should_writeback_chat_message(
+                turn.user_message.content,
+                asst.safety_category,
+            )
             yield format_sse_event(
                 "done",
-                {
-                    "messageId": str(turn.message_id),
-                    "tierSnapshot": turn.tier_snapshot.value,
-                    "hasUnrecordedGap": turn.has_unrecorded_gap,
-                    "citedMaterialIds": [str(mid) for mid in turn.cited_material_ids],
-                },
+                CompanionService._build_sse_done_payload(
+                    turn,
+                    writeback_queued=writeback_queued,
+                ),
             )
 
         return _gen()
@@ -1159,14 +1178,16 @@ class CompanionService:
                 if asst.suggestions:
                     yield format_sse_event("suggestion", {"items": asst.suggestions})
 
+                writeback_queued = should_writeback_chat_message(
+                    message,
+                    asst.safety_category,
+                )
                 yield format_sse_event(
                     "done",
-                    {
-                        "messageId": str(persisted_turn.message_id),
-                        "tierSnapshot": persisted_turn.tier_snapshot.value,
-                        "hasUnrecordedGap": persisted_turn.has_unrecorded_gap,
-                        "citedMaterialIds": [str(mid) for mid in persisted_turn.cited_material_ids],
-                    },
+                    CompanionService._build_sse_done_payload(
+                        persisted_turn,
+                        writeback_queued=writeback_queued,
+                    ),
                 )
             except AppError as exc:
                 await self._release_failed_idempotency(

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.core.crypto import EnvelopeCipher
@@ -22,6 +23,7 @@ from mindweave.modules.capture.domain.routing import KnownPersonProfile
 from mindweave.modules.memory.infra.reminders_helper import cancel_reminders_for_facts
 from mindweave.modules.memory.infra.repository import (
     create_person_with_primary_alias,
+    decrypt_fact_content,
     decrypt_person_display_name,
     decrypt_person_role_tag,
 )
@@ -33,6 +35,7 @@ from mindweave.shared.enums import (
     InboxItemStatus,
     InboxResolutionAction,
     PersonState,
+    RecordReviewState,
     Tier,
 )
 from mindweave.shared.scopes import UserScope
@@ -103,6 +106,100 @@ async def load_known_person_profiles(
             )
         )
     return profiles, rows_by_id
+
+
+async def load_recent_person_context(
+    session: AsyncSession,
+    scope: UserScope,
+    dek: bytes,
+    cipher: EnvelopeCipher,
+    person_ids: Sequence[UUID],
+    max_facts_per_person: int = 5,
+    max_snippets_total: int = 12,
+) -> tuple[dict[UUID, list[str]], list[str]]:
+    """Load encrypted confirmed recent facts per person and recent context snippets.
+
+    Strictly scoped to `UserScope` (RLS + explicit `user_id == scope.user_id`), excluding:
+    - deleted or archived persons (`PersonRow.deleted_at`, `state == 'archived'`)
+    - non-confirmed facts (`status != 'confirmed'`)
+    - bi-temporally superseded/invalidated facts (`invalid_at IS NOT NULL`)
+    - facts backed by soft-deleted or held records (`RecordRow.deleted_at`, `review_state == 'held'`)
+    """
+    unique_person_ids = list(dict.fromkeys(person_ids))
+    if not unique_person_ids or (max_facts_per_person <= 0 and max_snippets_total <= 0):
+        return {}, []
+
+    stmt = (
+        select(FactRow)
+        .join(
+            PersonRow,
+            and_(
+                FactRow.person_id == PersonRow.id,
+                PersonRow.user_id == scope.user_id,
+            ),
+        )
+        .outerjoin(
+            RecordRow,
+            and_(
+                FactRow.record_id == RecordRow.id,
+                RecordRow.user_id == scope.user_id,
+            ),
+        )
+        .where(
+            FactRow.user_id == scope.user_id,
+            FactRow.person_id.in_(unique_person_ids),
+            FactRow.status == FactStatus.CONFIRMED.value,
+            FactRow.invalid_at.is_(None),
+            PersonRow.deleted_at.is_(None),
+            PersonRow.state != PersonState.ARCHIVED.value,
+            or_(
+                FactRow.record_id.is_(None),
+                and_(
+                    RecordRow.id.is_not(None),
+                    RecordRow.deleted_at.is_(None),
+                    RecordRow.review_state != RecordReviewState.HELD.value,
+                ),
+            ),
+        )
+        .order_by(FactRow.created_at.desc(), FactRow.id.desc())
+        .limit(max(len(unique_person_ids) * max(max_facts_per_person, 1) * 4, 200))
+    )
+    rows = (await session.scalars(stmt)).all()
+
+    facts_by_person: dict[UUID, list[str]] = defaultdict(list)
+    seen_per_person: dict[UUID, set[str]] = defaultdict(set)
+    recent_snippets: list[str] = []
+    seen_snippets: set[str] = set()
+
+    for row in rows:
+        if row.person_id is None:
+            continue
+        if (
+            row.user_id != scope.user_id
+            or row.status != FactStatus.CONFIRMED.value
+            or row.invalid_at is not None
+        ):
+            continue
+        content = decrypt_fact_content(cipher, dek, row).strip()
+        if not content:
+            continue
+        compact = content[:120]
+        if (
+            max_facts_per_person > 0
+            and len(facts_by_person[row.person_id]) < max_facts_per_person
+            and compact not in seen_per_person[row.person_id]
+        ):
+            seen_per_person[row.person_id].add(compact)
+            facts_by_person[row.person_id].append(compact)
+        if (
+            max_snippets_total > 0
+            and len(recent_snippets) < max_snippets_total
+            and compact not in seen_snippets
+        ):
+            seen_snippets.add(compact)
+            recent_snippets.append(compact)
+
+    return dict(facts_by_person), recent_snippets
 
 
 async def get_or_create_unassigned_placeholder(

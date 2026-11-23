@@ -141,3 +141,18 @@ export function sealStyle(person, date) {
   const d = personDecor(person, date);
   return { background: d.sealBg, color: d.sealColor };
 }
+
+/** Whether a material qualifies as a short note slip for side-by-side collage pairing. */
+export function isShortNoteSlip(m, tier) {
+  if (!m || m.presentation === 'question' || m.type === 'voice') return false;
+  if (m.type === 'photo' && m.mediaUrl && tier !== 'silver') return false;
+  const len = Array.from(String(m.body || m.snippet || '').trim()).length;
+  return len > 0 && len <= 28;
+}
+
+/** Subtle deterministic tilt in degrees for asymmetric editorial scrapbook flow. */
+export function gentleTilt(m, tier, sign = 1) {
+  const base = Math.abs(materialDecor(m, tier).rotation);
+  const clamped = Math.max(0.45, Math.min(1.65, base * 0.65));
+  return Number((sign * clamped).toFixed(2));
+}

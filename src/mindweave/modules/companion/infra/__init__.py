@@ -4,6 +4,10 @@ from mindweave.modules.companion.infra.context_builder import (
     BuiltCompanionContext,
     CitationRecordMeta,
     ContextBuilder,
+    RecallCandidateRecord,
+    RecalledRecord,
+    recall_relevant_records,
+    tokenize_zh_bm25,
 )
 from mindweave.modules.companion.infra.repository import (
     CompanionRepository,
@@ -18,4 +22,8 @@ __all__ = [
     "ContextBuilder",
     "HydratedChatMessage",
     "HydratedCitation",
+    "RecallCandidateRecord",
+    "RecalledRecord",
+    "recall_relevant_records",
+    "tokenize_zh_bm25",
 ]

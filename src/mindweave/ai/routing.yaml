@@ -21,7 +21,7 @@ tasks:
     models:
       fake: fake-asr-v1
       gemini: gemini-2.5-flash
-      dashscope: qwen-plus
+      dashscope: qwen-audio-turbo
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
 

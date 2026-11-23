@@ -7,7 +7,7 @@ import base64
 import json
 from collections import OrderedDict, defaultdict
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any, cast
 from uuid import UUID
@@ -63,8 +63,11 @@ from mindweave.modules.capture.domain.media_sniffer import (
 from mindweave.modules.capture.domain.routing import (
     CandidateHint,
     KnownPersonProfile,
+    apply_spoken_self_correction,
     is_non_person_stopword_mention,
     normalize_mention,
+    partition_by_event_group,
+    resolve_by_history_clues,
     resolve_mention_for_fact,
 )
 from mindweave.modules.capture.domain.screenshot_rules import (
@@ -78,6 +81,7 @@ from mindweave.modules.capture.infra.image_sanitizer import (
 from mindweave.modules.capture.infra.repository import (
     get_or_create_unassigned_placeholder,
     load_known_person_profiles,
+    load_recent_person_context,
     revert_capture_graph,
 )
 from mindweave.modules.memory.infra.pencil_views import (
@@ -487,6 +491,13 @@ class CapturePipelineService:
                 dek=dek,
                 cipher=self.container.cipher,
             )
+            facts_by_person, recent_snippets = await load_recent_person_context(
+                session,
+                scope,
+                dek,
+                self.container.cipher,
+                [p.person_id for p in known_profiles],
+            )
 
             source = CaptureSource(capture.source)
             route_mode = RouteMode(capture.route_mode)
@@ -506,6 +517,10 @@ class CapturePipelineService:
                 else ""
             )
 
+        known_profiles = [
+            replace(p, recent_facts=tuple(facts_by_person.get(p.person_id, ())))
+            for p in known_profiles
+        ]
         profiles_by_id = {p.person_id: p for p in known_profiles}
         scoped_profile = profiles_by_id.get(scoped_person_id) if scoped_person_id else None
 
@@ -532,19 +547,42 @@ class CapturePipelineService:
                 known_names: list[str] = []
                 for p in known_profiles:
                     known_names.extend(p.all_surface_forms())
+                raw_asr_snippets: list[str] = []
+                if scoped_profile is not None:
+                    raw_asr_snippets.extend(scoped_profile.recent_facts)
+                raw_asr_snippets.extend(recent_snippets)
+                masked_asr_snippets = list(
+                    dict.fromkeys(
+                        masked
+                        for snippet in raw_asr_snippets
+                        if (masked := mask_hard_pii(snippet).masked_text.strip())
+                    )
+                )[:12]
+                active_person_name_safe = (
+                    mask_hard_pii(scoped_profile.display_name).masked_text.strip() or None
+                    if scoped_profile is not None
+                    else None
+                )
+                trans_payload = TranscribeInput(
+                    audio_bytes=audio_bytes,
+                    mime_type=audio_mime,
+                    known_person_names=[
+                        mask_hard_pii(name).masked_text for name in known_names[:60]
+                    ],
+                    active_person_name=active_person_name_safe,
+                    recent_context_snippets=masked_asr_snippets,
+                )
                 trans_out = await gateway.transcribe(
                     scope=scope,
-                    payload=TranscribeInput(
-                        audio_bytes=audio_bytes,
-                        mime_type=audio_mime,
-                        known_person_names=known_names[:60],
-                    ),
+                    payload=trans_payload,
                 )
                 effective_text = (
                     trans_out.corrected_transcript.strip()
                     or trans_out.raw_transcript.strip()
                     or raw_text.strip()
                 )
+                if effective_text:
+                    effective_text = apply_spoken_self_correction(effective_text)
                 duration_ms = trans_out.duration_ms if trans_out.duration_ms is not None else 4000
 
             elif source is CaptureSource.IMAGE:
@@ -612,6 +650,49 @@ class CapturePipelineService:
             now_utc = self.container.clock.now()
             local_today = now_utc.astimezone(ZoneInfo(tz_name)).date()
 
+            known_person_refs: list[KnownPersonRef] = []
+            for p in known_profiles:
+                masked_recent_facts = [
+                    masked
+                    for fact in p.recent_facts
+                    if (masked := mask_hard_pii(fact).masked_text.strip())
+                ]
+                known_person_refs.append(
+                    KnownPersonRef(
+                        person_id=p.person_id,
+                        display_name=p.display_name,
+                        aliases=list(p.aliases),
+                        tier=p.tier,
+                        role_tag=p.role_tag,
+                        recent_facts=masked_recent_facts,
+                    )
+                )
+
+            ordered_profiles = (
+                [
+                    scoped_profile,
+                    *(p for p in known_profiles if p.person_id != scoped_profile.person_id),
+                ]
+                if scoped_profile is not None
+                else list(known_profiles)
+            )
+            recent_history_hints: list[str] = []
+            seen_hints: set[str] = set()
+            for p in ordered_profiles:
+                safe_name = mask_hard_pii(p.display_name).masked_text.strip()
+                for fact in p.recent_facts:
+                    safe_fact = mask_hard_pii(fact).masked_text.strip()
+                    if not safe_fact:
+                        continue
+                    hint_line = f"{safe_name}：{safe_fact}" if safe_name else safe_fact
+                    if hint_line not in seen_hints:
+                        seen_hints.add(hint_line)
+                        recent_history_hints.append(hint_line)
+                        if len(recent_history_hints) >= 12:
+                            break
+                if len(recent_history_hints) >= 12:
+                    break
+
             extract_in = ExtractRecordInput(
                 text=masked_for_llm,
                 current_date=local_today.isoformat(),
@@ -623,16 +704,8 @@ class CapturePipelineService:
                     else None
                 ),
                 input_source=source.value,
-                known_persons=[
-                    KnownPersonRef(
-                        person_id=p.person_id,
-                        display_name=p.display_name,
-                        aliases=list(p.aliases),
-                        tier=p.tier,
-                        role_tag=p.role_tag,
-                    )
-                    for p in known_profiles
-                ],
+                known_persons=known_person_refs,
+                recent_history_hints=recent_history_hints,
             )
             extract_out, prompt_version, model_profile = await gateway.extract_record(
                 scope=scope,
@@ -655,6 +728,7 @@ class CapturePipelineService:
                 idem_row_id=idem_row_id,
                 idem_status_code=idem_status_code,
                 response_serializer=response_serializer,
+                facts_by_person=facts_by_person,
             )
 
         except Exception as exc:
@@ -699,6 +773,7 @@ class CapturePipelineService:
         idem_row_id: UUID | None,
         idem_status_code: int,
         response_serializer: Callable[[CaptureResponse], dict[str, Any]] | None = None,
+        facts_by_person: dict[UUID, list[str]] | None = None,
     ) -> CaptureResponse:
         gate_cfg = self._gate_config()
 
@@ -720,6 +795,18 @@ class CapturePipelineService:
                 dek=dek,
                 cipher=self.container.cipher,
             )
+            if facts_by_person is None:
+                facts_by_person, _ = await load_recent_person_context(
+                    session,
+                    scope,
+                    dek,
+                    self.container.cipher,
+                    [p.person_id for p in known_profiles],
+                )
+            known_profiles = [
+                replace(p, recent_facts=tuple(facts_by_person.get(p.person_id, ())))
+                for p in known_profiles
+            ]
             profiles_by_id: dict[UUID, KnownPersonProfile] = {
                 p.person_id: p for p in known_profiles
             }
@@ -874,6 +961,20 @@ class CapturePipelineService:
                 ]
                 if len(hit_known) == 1:
                     person_groups[hit_known[0].person_id] = []
+                elif (
+                    not hit_known
+                    and route_mode is RouteMode.GLOBAL
+                    and effective_text.strip()
+                    and (hist_res := resolve_by_history_clues(effective_text, known_profiles))
+                    is not None
+                ):
+                    if (
+                        hist_res.matched_person_id is not None
+                        and hist_res.clause_person_unambiguous
+                    ):
+                        person_groups[hist_res.matched_person_id] = []
+                    else:
+                        ambiguous_groups[("", hist_res.candidate_person_ids)] = []
                 elif effective_text.strip() or capture.audio_object_key or capture.image_object_key:
                     cand_tuple = tuple(p.person_id for p in (hit_known or known_profiles))
                     ambiguous_groups[("", cand_tuple)] = []
@@ -887,7 +988,7 @@ class CapturePipelineService:
             matched_highlight_names: set[str] = set()
 
             # -----------------------------------------------------------------
-            # Persist per-person RecordRow + FactRow + InboxItemRow + ReminderRow
+            # Persist per-person (+ per-event-group) RecordRow + FactRow + InboxItemRow + ReminderRow
             # -----------------------------------------------------------------
             for pid, fact_entries in person_groups.items():
                 p_prof = profiles_by_id[pid]
@@ -896,12 +997,8 @@ class CapturePipelineService:
                     if surf and surf in effective_text:
                         matched_highlight_names.add(surf)
 
-                is_cross_in_current = bool(
-                    fact_entries and all(r.is_cross_person_in_scoped_mode for _, r in fact_entries)
-                )
-
                 # Evaluate GatePolicy for every fact of this person first so we know RecordReviewState
-                evaluated_facts: list[tuple[ExtractedFactItem, Any, bool]] = []
+                evaluated_facts: list[tuple[ExtractedFactItem, Any, bool, Any]] = []
                 for f_item, res in fact_entries:
                     matched_highlight_names.update(
                         [f_item.person_mention]
@@ -954,255 +1051,271 @@ class CapturePipelineService:
                             extraction_ok=True,
                         )
                     decision = decide_gate(gate_in, gate_cfg, now=now)
-                    evaluated_facts.append((f_item, decision, pol_flip))
+                    evaluated_facts.append((f_item, decision, pol_flip, res))
 
-                # Determine RecordReviewState
-                if is_cross_in_current:
-                    rec_review_state = RecordReviewState.HELD
-                elif evaluated_facts and all(
-                    dec.record_review_state is RecordReviewState.HELD
-                    for _, dec, _ in evaluated_facts
-                ):
-                    rec_review_state = RecordReviewState.HELD
-                elif (
-                    not evaluated_facts
-                    and bool(extract_out.is_venting_or_irony)
-                    and p_prof.tier is Tier.GOLD
-                ):
-                    rec_review_state = RecordReviewState.HELD
-                else:
-                    rec_review_state = RecordReviewState.NORMAL
-
-                # Build natural slip title & body
-                raw_contents = [
-                    strip_forbidden_dev_jargon(f_item.content)
-                    for f_item, _, _ in evaluated_facts
-                    if f_item.content.strip()
-                ]
-                slip_body = (
-                    "；".join(raw_contents)
-                    if raw_contents
-                    else strip_forbidden_dev_jargon(effective_text)
+                # Sub-group this person's facts into separate slips when 2+ distinct event_groups exist
+                event_fact_groups = partition_by_event_group(
+                    evaluated_facts,
+                    lambda entry: entry[0].event_group,
                 )
-                first_title = next(
-                    (
-                        strip_forbidden_dev_jargon(f_item.title)
-                        for f_item, _, _ in evaluated_facts
-                        if f_item.title.strip()
-                    ),
-                    "",
-                )
-                slip_tag = build_natural_slip_tag(first_title, slip_body)
 
-                rec_id = new_id()
-                record_row = RecordRow(
-                    id=rec_id,
-                    user_id=scope.user_id,
-                    person_id=pid,
-                    capture_id=capture.id,
-                    kind=record_kind.value,
-                    title_enc=self.container.cipher.encrypt_str(
-                        dek,
-                        slip_tag,
-                        user_id=scope.user_id,
-                        table="records",
-                        column="title_enc",
-                        row_id=rec_id,
-                    ),
-                    body_enc=self.container.cipher.encrypt_str(
-                        dek,
-                        slip_body,
-                        user_id=scope.user_id,
-                        table="records",
-                        column="body_enc",
-                        row_id=rec_id,
-                    ),
-                    snippet_enc=self.container.cipher.encrypt_str(
-                        dek,
-                        slip_body[:60],
-                        user_id=scope.user_id,
-                        table="records",
-                        column="snippet_enc",
-                        row_id=rec_id,
-                    ),
-                    media_object_key=media_key,
-                    audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
-                    happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
-                    pinned=True,
-                    review_state=rec_review_state.value,
-                    version=1,
-                    created_at=now,
-                    updated_at=now,
-                )
-                session.add(record_row)
-                await session.flush()
+                for group_facts in event_fact_groups:
+                    group_is_cross_in_current = bool(
+                        group_facts
+                        and all(r.is_cross_person_in_scoped_mode for _, _, _, r in group_facts)
+                    )
 
-                pending_by_inbox_kind: dict[InboxItemKind, list[FactRow]] = defaultdict(list)
-                person_fact_rows: list[FactRow] = []
+                    # Determine RecordReviewState strictly from this slip's facts
+                    if group_is_cross_in_current:
+                        rec_review_state = RecordReviewState.HELD
+                    elif group_facts and all(
+                        dec.record_review_state is RecordReviewState.HELD
+                        for _, dec, _, _ in group_facts
+                    ):
+                        rec_review_state = RecordReviewState.HELD
+                    elif (
+                        not group_facts
+                        and bool(extract_out.is_venting_or_irony)
+                        and p_prof.tier is Tier.GOLD
+                    ):
+                        rec_review_state = RecordReviewState.HELD
+                    else:
+                        rec_review_state = RecordReviewState.NORMAL
 
-                for f_item, decision, _ in evaluated_facts:
-                    clean_fact_content = strip_forbidden_dev_jargon(f_item.content)
-                    if not clean_fact_content:
-                        continue
-                    fact_id = new_id()
-                    parsed_tdate = _safe_parse_iso_date(f_item.trigger_date)
-                    fact_row = FactRow(
-                        id=fact_id,
+                    # Build natural slip title & body (zero cross-person or cross-event text bleed)
+                    raw_contents = list(
+                        dict.fromkeys(
+                            clean
+                            for f_item, _, _, _ in group_facts
+                            if (clean := strip_forbidden_dev_jargon(f_item.content).strip())
+                        )
+                    )
+                    if raw_contents:
+                        slip_body = "；".join(raw_contents)
+                    elif len(person_groups) == 1:
+                        slip_body = strip_forbidden_dev_jargon(effective_text)
+                    else:
+                        slip_body = p_prof.display_name or "随手手札"
+
+                    first_title = next(
+                        (
+                            strip_forbidden_dev_jargon(f_item.title)
+                            for f_item, _, _, _ in group_facts
+                            if f_item.title.strip()
+                        ),
+                        "",
+                    )
+                    slip_tag = build_natural_slip_tag(first_title, slip_body)
+
+                    rec_id = new_id()
+                    record_row = RecordRow(
+                        id=rec_id,
                         user_id=scope.user_id,
                         person_id=pid,
-                        record_id=rec_id,
                         capture_id=capture.id,
-                        type=f_item.fact_type.value,
-                        polarity=f_item.polarity.value,
-                        time_status=f_item.time_status.value,
-                        source_speaker=f_item.source_speaker.value,
-                        content_enc=self.container.cipher.encrypt_str(
+                        kind=record_kind.value,
+                        title_enc=self.container.cipher.encrypt_str(
                             dek,
-                            clean_fact_content,
+                            slip_tag,
                             user_id=scope.user_id,
-                            table="facts",
-                            column="content_enc",
-                            row_id=fact_id,
+                            table="records",
+                            column="title_enc",
+                            row_id=rec_id,
                         ),
-                        trigger_date=parsed_tdate,
-                        is_lunar=f_item.is_lunar,
-                        lunar_month=f_item.lunar_month,
-                        lunar_day=f_item.lunar_day,
-                        lunar_is_leap_month=False,
-                        status=decision.status.value,
-                        pending_reason=(
-                            decision.pending_reason.value if decision.pending_reason else None
+                        body_enc=self.container.cipher.encrypt_str(
+                            dek,
+                            slip_body,
+                            user_id=scope.user_id,
+                            table="records",
+                            column="body_enc",
+                            row_id=rec_id,
                         ),
-                        needs_glance=decision.needs_glance,
-                        confidence=f_item.confidence,
-                        created_by=CreatedBy.AI.value,
-                        valid_at=now,
-                        prompt_version=prompt_version,
+                        snippet_enc=self.container.cipher.encrypt_str(
+                            dek,
+                            slip_body[:60],
+                            user_id=scope.user_id,
+                            table="records",
+                            column="snippet_enc",
+                            row_id=rec_id,
+                        ),
+                        media_object_key=media_key,
+                        audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
+                        happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
+                        pinned=False,
+                        review_state=rec_review_state.value,
                         version=1,
                         created_at=now,
                         updated_at=now,
                     )
-                    session.add(fact_row)
+                    session.add(record_row)
                     await session.flush()
-                    person_fact_rows.append(fact_row)
 
-                    if decision.is_confirmed:
-                        await apply_bitemporal_supersession_for_fact(
-                            session,
-                            scope=scope,
-                            dek=dek,
-                            cipher=self.container.cipher,
-                            new_fact=fact_row,
-                            new_fact_content=clean_fact_content,
-                            now=now,
-                        )
-                    else:
-                        pending_fact_count += 1
-                        ikind = decision.inbox_kind or InboxItemKind.FACT_CONFIRM
-                        pending_by_inbox_kind[ikind].append(fact_row)
+                    pending_by_inbox_kind: dict[InboxItemKind, list[FactRow]] = defaultdict(list)
+                    slip_fact_rows: list[FactRow] = []
 
-                    # Proposed reminder when date/promise has trigger_date or lunar date
-                    if f_item.fact_type in (FactType.DATE, FactType.PROMISE):
-                        await upsert_reminder_for_fact(
-                            session,
-                            scope=scope,
-                            dek=dek,
-                            cipher=self.container.cipher,
-                            fact=fact_row,
-                            fact_content=clean_fact_content,
-                            desired_status=(
-                                ReminderStatus.ACTIVE
-                                if decision.is_confirmed
-                                else ReminderStatus.PROPOSED
-                            ),
-                            now=now,
-                            tz_name=tz_name,
-                        )
-
-                # Create InboxItemRow(s) for pending facts (or new provisional person with 0 facts / venting note)
-                if (
-                    pid in newly_created_person_ids
-                    and InboxItemKind.NEW_PERSON_CONFIRM not in pending_by_inbox_kind
-                ):
-                    pending_by_inbox_kind[InboxItemKind.NEW_PERSON_CONFIRM] = []
-                elif (
-                    not evaluated_facts
-                    and rec_review_state is RecordReviewState.HELD
-                    and p_prof.tier is Tier.GOLD
-                ):
-                    pending_by_inbox_kind[InboxItemKind.VENTING_HOLD] = []
-
-                person_inbox_ids: dict[InboxItemKind, UUID] = {}
-                for ikind, p_facts in pending_by_inbox_kind.items():
-                    inbox_id = new_id()
-                    expires_at = (
-                        now + timedelta(hours=self.container.settings.venting_hold_expiry_hours)
-                        if ikind is InboxItemKind.VENTING_HOLD
-                        else None
-                    )
-                    # D1: "probably right, just unsure" drafts turn to ink on their own after
-                    # 48h. Venting and person questions never auto-promote.
-                    auto_ink_at = (
-                        auto_ink_due_at(now)
-                        if ikind is InboxItemKind.FACT_CONFIRM
-                        and is_auto_ink_eligible(
-                            _pending_reason_or_none(f.pending_reason) for f in p_facts
-                        )
-                        else None
-                    )
-                    payload_obj = {
-                        "summary": slip_body[:160],
-                        "mention": p_prof.display_name,
-                    }
-                    inbox_row = InboxItemRow(
-                        id=inbox_id,
-                        user_id=scope.user_id,
-                        person_id=pid,
-                        capture_id=capture.id,
-                        record_id=rec_id,
-                        kind=ikind.value,
-                        status=InboxItemStatus.OPEN.value,
-                        fact_ids=[f.id for f in p_facts],
-                        candidate_person_ids=[pid],
-                        payload_enc=self.container.cipher.encrypt_json(
-                            dek,
-                            payload_obj,
+                    for f_item, decision, _, _ in group_facts:
+                        clean_fact_content = strip_forbidden_dev_jargon(f_item.content)
+                        if not clean_fact_content:
+                            continue
+                        fact_id = new_id()
+                        parsed_tdate = _safe_parse_iso_date(f_item.trigger_date)
+                        fact_row = FactRow(
+                            id=fact_id,
                             user_id=scope.user_id,
-                            table="inbox_items",
-                            column="payload_enc",
-                            row_id=inbox_id,
-                        ),
-                        expires_at=expires_at,
-                        auto_ink_at=auto_ink_at,
-                        created_at=now,
-                    )
-                    session.add(inbox_row)
-                    inbox_item_ids.append(inbox_id)
-                    person_inbox_ids[ikind] = inbox_id
-
-                if not is_cross_in_current:
-                    pencil_state = derive_pencil_state(
-                        review_state=rec_review_state,
-                        open_inbox_kinds=tuple(person_inbox_ids),
-                        facts=[_fact_row_to_pencil_view(f) for f in person_fact_rows],
-                        is_new_person=pid in newly_created_person_ids,
-                    )
-                    splits.append(
-                        CaptureSplitDto(
                             person_id=pid,
-                            person_name=p_prof.display_name,
-                            tier=p_prof.tier,
-                            is_new_person=pid in newly_created_person_ids,
-                            material_id=rec_id,
-                            tag=slip_tag,
-                            dur=format_duration_mmss(duration_ms),
-                            body=slip_body,
-                            presentation=pencil_state.presentation,
-                            glance_hint=pencil_state.glance_hint,
-                            fact_ids=[f.id for f in person_fact_rows],
-                            inbox_item_id=_primary_inbox_id(person_inbox_ids),
+                            record_id=rec_id,
+                            capture_id=capture.id,
+                            type=f_item.fact_type.value,
+                            polarity=f_item.polarity.value,
+                            time_status=f_item.time_status.value,
+                            source_speaker=f_item.source_speaker.value,
+                            content_enc=self.container.cipher.encrypt_str(
+                                dek,
+                                clean_fact_content,
+                                user_id=scope.user_id,
+                                table="facts",
+                                column="content_enc",
+                                row_id=fact_id,
+                            ),
+                            trigger_date=parsed_tdate,
+                            is_lunar=f_item.is_lunar,
+                            lunar_month=f_item.lunar_month,
+                            lunar_day=f_item.lunar_day,
+                            lunar_is_leap_month=False,
+                            status=decision.status.value,
+                            pending_reason=(
+                                decision.pending_reason.value if decision.pending_reason else None
+                            ),
+                            needs_glance=decision.needs_glance,
+                            confidence=f_item.confidence,
+                            created_by=CreatedBy.AI.value,
+                            valid_at=now,
+                            prompt_version=prompt_version,
+                            version=1,
+                            created_at=now,
+                            updated_at=now,
                         )
-                    )
+                        session.add(fact_row)
+                        await session.flush()
+                        slip_fact_rows.append(fact_row)
+
+                        if decision.is_confirmed:
+                            await apply_bitemporal_supersession_for_fact(
+                                session,
+                                scope=scope,
+                                dek=dek,
+                                cipher=self.container.cipher,
+                                new_fact=fact_row,
+                                new_fact_content=clean_fact_content,
+                                now=now,
+                            )
+                        else:
+                            pending_fact_count += 1
+                            ikind = decision.inbox_kind or InboxItemKind.FACT_CONFIRM
+                            pending_by_inbox_kind[ikind].append(fact_row)
+
+                        # Proposed reminder when date/promise has trigger_date or lunar date
+                        if f_item.fact_type in (FactType.DATE, FactType.PROMISE):
+                            await upsert_reminder_for_fact(
+                                session,
+                                scope=scope,
+                                dek=dek,
+                                cipher=self.container.cipher,
+                                fact=fact_row,
+                                fact_content=clean_fact_content,
+                                desired_status=(
+                                    ReminderStatus.ACTIVE
+                                    if decision.is_confirmed
+                                    else ReminderStatus.PROPOSED
+                                ),
+                                now=now,
+                                tz_name=tz_name,
+                            )
+
+                    # Create InboxItemRow(s) for pending facts (or new provisional person with 0 facts / venting note)
+                    if (
+                        pid in newly_created_person_ids
+                        and InboxItemKind.NEW_PERSON_CONFIRM not in pending_by_inbox_kind
+                    ):
+                        pending_by_inbox_kind[InboxItemKind.NEW_PERSON_CONFIRM] = []
+                    elif (
+                        not group_facts
+                        and rec_review_state is RecordReviewState.HELD
+                        and p_prof.tier is Tier.GOLD
+                    ):
+                        pending_by_inbox_kind[InboxItemKind.VENTING_HOLD] = []
+
+                    slip_inbox_ids: dict[InboxItemKind, UUID] = {}
+                    for ikind, p_facts in pending_by_inbox_kind.items():
+                        inbox_id = new_id()
+                        expires_at = (
+                            now + timedelta(hours=self.container.settings.venting_hold_expiry_hours)
+                            if ikind is InboxItemKind.VENTING_HOLD
+                            else None
+                        )
+                        # D1: "probably right, just unsure" drafts turn to ink on their own after
+                        # 48h. Venting and person questions never auto-promote.
+                        auto_ink_at = (
+                            auto_ink_due_at(now)
+                            if ikind is InboxItemKind.FACT_CONFIRM
+                            and is_auto_ink_eligible(
+                                _pending_reason_or_none(f.pending_reason) for f in p_facts
+                            )
+                            else None
+                        )
+                        payload_obj = {
+                            "summary": slip_body[:160],
+                            "mention": p_prof.display_name,
+                        }
+                        inbox_row = InboxItemRow(
+                            id=inbox_id,
+                            user_id=scope.user_id,
+                            person_id=pid,
+                            capture_id=capture.id,
+                            record_id=rec_id,
+                            kind=ikind.value,
+                            status=InboxItemStatus.OPEN.value,
+                            fact_ids=[f.id for f in p_facts],
+                            candidate_person_ids=[pid],
+                            payload_enc=self.container.cipher.encrypt_json(
+                                dek,
+                                payload_obj,
+                                user_id=scope.user_id,
+                                table="inbox_items",
+                                column="payload_enc",
+                                row_id=inbox_id,
+                            ),
+                            expires_at=expires_at,
+                            auto_ink_at=auto_ink_at,
+                            created_at=now,
+                        )
+                        session.add(inbox_row)
+                        inbox_item_ids.append(inbox_id)
+                        slip_inbox_ids[ikind] = inbox_id
+
+                    if not group_is_cross_in_current:
+                        pencil_state = derive_pencil_state(
+                            review_state=rec_review_state,
+                            open_inbox_kinds=tuple(slip_inbox_ids),
+                            facts=[_fact_row_to_pencil_view(f) for f in slip_fact_rows],
+                            is_new_person=pid in newly_created_person_ids,
+                        )
+                        splits.append(
+                            CaptureSplitDto(
+                                person_id=pid,
+                                person_name=p_prof.display_name,
+                                tier=p_prof.tier,
+                                is_new_person=pid in newly_created_person_ids,
+                                material_id=rec_id,
+                                tag=slip_tag,
+                                dur=format_duration_mmss(duration_ms),
+                                body=slip_body,
+                                presentation=pencil_state.presentation,
+                                glance_hint=pencil_state.glance_hint,
+                                fact_ids=[f.id for f in slip_fact_rows],
+                                inbox_item_id=_primary_inbox_id(slip_inbox_ids),
+                            )
+                        )
 
             # -----------------------------------------------------------------
             # Persist Ambiguous Person Disambiguation Groups (held until resolved!)
@@ -1277,7 +1390,7 @@ class CapturePipelineService:
                     media_object_key=media_key,
                     audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
                     happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
-                    pinned=True,
+                    pinned=False,
                     review_state=RecordReviewState.HELD.value,
                     version=1,
                     created_at=now,
@@ -1587,7 +1700,7 @@ class CapturePipelineService:
                 media_object_key=capture.audio_object_key or capture.image_object_key,
                 audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
                 happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
-                pinned=True,
+                pinned=False,
                 review_state=record_review_state.value,
                 version=1,
                 created_at=now,

@@ -1,14 +1,15 @@
 // capture.js — everything that turns a sentence (voice or text) into journal ink:
 // optimistic "drying ink" slip → API → real splits → fly avatars + undo toast.
 // Offline / flaky network → IndexedDB draft queue, flushed on `online` with the same Idempotency-Key.
-import { h, $ } from '../dom.js';
+import { h, clear, svg, $ } from '../dom.js';
 import { api, uuid } from '../api/endpoints.js';
 import { isRetryableError } from '../api/client.js';
-import { store, addPending, removePending } from '../store.js';
+import { store, addPending, removePending, upsertMaterial } from '../store.js';
 import { createDraftQueue, idbStorage, memoryStorage } from '../offline-queue.js';
 import { extensionFor } from '../voice-logic.js';
-import { namesList, TIER_LABEL, shouldSendOnEnter } from '../format.js';
+import { namesList, TIER_LABEL, shouldSendOnEnter, clip } from '../format.js';
 import { monogramOf, sealStyle } from '../decor.js';
+import { CAMERA_SVG } from '../icons.js';
 import { showToast, whisper } from './toast.js';
 import { openSheet, closeSheet } from './sheet.js';
 import { actions } from '../actions.js';
@@ -90,6 +91,44 @@ export function submitText({ text, route }) {
   return submit(draft, { optimisticText: text });
 }
 
+export async function submitImage({ file, text = '', route }) {
+  const id = uuid();
+  const pageId = store.get().view === 'journal' ? store.get().activePersonId : null;
+  addPending({ id, pageId, text: text || '正在细看这张截图…', state: 'drying', kind: 'image' });
+  try {
+    const res = await api.captureImage(
+      { id, file, text: text || undefined, routeMode: route.routeMode, activePersonId: route.activePersonId || null },
+      uuid(),
+    );
+    removePending(id);
+    handleCaptureResult(res, { captureId: res.captureId || res.jobId });
+    return res;
+  } catch (err) {
+    setPendingState(id, { state: 'failed', text: err.message });
+    setTimeout(() => removePending(id), 4200);
+    whisper(err.message, 3400);
+    return null;
+  }
+}
+
+export async function submitPhotoMaterial({ personId, file, caption = '' }) {
+  const id = uuid();
+  addPending({ id, pageId: personId, text: caption || '正在把照片贴进手帐…', state: 'drying', kind: 'photo' });
+  try {
+    const created = await api.uploadPhoto(personId, { file, caption, pinned: false });
+    removePending(id);
+    if (created?.id) upsertMaterial(personId, created);
+    else actions.reloadMaterials(personId);
+    whisper('照片贴进手帐啦', 2600);
+    return created;
+  } catch (err) {
+    setPendingState(id, { state: 'failed', text: err.message });
+    setTimeout(() => removePending(id), 4200);
+    whisper(err.message, 3400);
+    return null;
+  }
+}
+
 function uniqueSplits(splits) {
   const seen = new Map();
   for (const s of splits || []) if (s.personId && !seen.has(s.personId)) seen.set(s.personId, s);
@@ -161,10 +200,15 @@ export function initCapture() {
   setTimeout(() => flushDrafts(), 1200);
 }
 
-/* ---------------- text capture sheet ---------------- */
+/* ---------------- text + photo/screenshot capture sheet ---------------- */
 export function openTextCapture({ personId = null, prompt = '', directory = false } = {}) {
   const person = personId ? store.get().people[personId] : null;
+  const allowPhoto = Boolean(person && person.tier !== 'silver' && !directory);
   let mode = person && !directory ? 'current' : 'global';
+  let selectedFile = null;
+  let previewUrl = null;
+  let imageKind = 'capture'; // capture (OCR/extract) | photo (Polaroid slip)
+
   const textarea = h('textarea', {
     class: 'capture-textarea',
     id: 'captureText',
@@ -173,7 +217,98 @@ export function openTextCapture({ personId = null, prompt = '', directory = fals
     'aria-label': '想记下的一句话',
     placeholder: prompt ? `${prompt} 说一句就好` : '比如：她不吃香菜，生日是 5 月 12 日',
   });
+  const fileInput = h('input', {
+    type: 'file',
+    id: 'captureImageInput',
+    accept: 'image/*',
+    hidden: true,
+    'aria-label': '选择照片或截图',
+  });
+  const previewHost = h('div', { class: 'capture-image-preview', hidden: true });
   const sendBtn = h('button', { type: 'button', class: 'sheet-btn', id: 'captureSend', text: '收进手帐', disabled: true });
+
+  const syncSendEnabled = () => {
+    sendBtn.disabled = !textarea.value.trim() && !selectedFile;
+  };
+  const revokePreview = () => {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+  };
+  const clearImage = () => {
+    selectedFile = null;
+    fileInput.value = '';
+    revokePreview();
+    clear(previewHost);
+    previewHost.hidden = true;
+    syncSendEnabled();
+  };
+
+  const renderPreview = () => {
+    clear(previewHost);
+    if (!selectedFile) {
+      previewHost.hidden = true;
+      return;
+    }
+    previewHost.hidden = false;
+    const modeRow = allowPhoto
+      ? h(
+          'div',
+          { class: 'capture-img-modes', role: 'radiogroup', 'aria-label': '图片用途' },
+          ...[
+            ['capture', '识别截图'],
+            ['photo', '贴成照片'],
+          ].map(([k, label]) =>
+            h('button', {
+              type: 'button',
+              class: ['img-mode-chip', imageKind === k && 'is-selected'],
+              role: 'radio',
+              'aria-checked': String(imageKind === k),
+              text: label,
+              onClick: () => {
+                imageKind = k;
+                renderPreview();
+              },
+            }),
+          ),
+        )
+      : null;
+    previewHost.append(
+      h('img', { class: 'capture-preview-thumb', src: previewUrl, alt: '已选图片预览' }),
+      h(
+        'div',
+        { class: 'capture-preview-meta' },
+        h('span', { class: 'capture-preview-name', text: clip(selectedFile.name || '已选一张图', 24) }),
+        modeRow,
+      ),
+      h('button', { type: 'button', class: 'capture-preview-clear', 'aria-label': '去掉这张图', text: '×', onClick: clearImage }),
+    );
+  };
+
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    revokePreview();
+    selectedFile = file;
+    previewUrl = URL.createObjectURL(file);
+    imageKind = 'capture';
+    renderPreview();
+    syncSendEnabled();
+  });
+
+  const imgBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'capture-image-btn',
+      id: 'captureImageBtn',
+      onClick: () => fileInput.click(),
+    },
+    svg(CAMERA_SVG, 'capture-image-icon'),
+    h('span', { text: '传照片 / 截图' }),
+  );
+
   const chips = [];
   const routeRow = person
     ? h(
@@ -207,14 +342,19 @@ export function openTextCapture({ personId = null, prompt = '', directory = fals
 
   const doSend = () => {
     const text = textarea.value.trim();
-    if (!text) return;
-    closeSheet();
+    if (!text && !selectedFile) return;
+    const file = selectedFile;
+    const kind = imageKind;
     const route = mode === 'current' && person ? { routeMode: 'current', activePersonId: person.id } : { routeMode: 'global', activePersonId: null };
+    closeSheet();
+    if (file) {
+      if (kind === 'photo' && allowPhoto && person) submitPhotoMaterial({ personId: person.id, file, caption: text });
+      else submitImage({ file, text, route });
+      return;
+    }
     submitText({ text, route });
   };
-  textarea.addEventListener('input', () => {
-    sendBtn.disabled = !textarea.value.trim();
-  });
+  textarea.addEventListener('input', syncSendEnabled);
   textarea.addEventListener('keydown', (e) => {
     if (shouldSendOnEnter(e)) {
       e.preventDefault();
@@ -235,10 +375,18 @@ export function openTextCapture({ personId = null, prompt = '', directory = fals
           )
         : null,
       textarea,
+      fileInput,
+      previewHost,
       routeRow,
-      h('div', { class: 'sheet-actions' }, h('button', { type: 'button', class: 'sheet-btn quiet', text: '算了', onClick: () => closeSheet() }), sendBtn),
+      h(
+        'div',
+        { class: 'sheet-actions is-split' },
+        imgBtn,
+        h('div', { class: 'sheet-actions-right' }, h('button', { type: 'button', class: 'sheet-btn quiet', text: '算了', onClick: () => closeSheet() }), sendBtn),
+      ),
     ],
     initialFocus: textarea,
+    onClose: revokePreview,
   });
 }
 

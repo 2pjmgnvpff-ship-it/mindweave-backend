@@ -26,6 +26,16 @@ from mindweave.ai.metering import estimate_token_count
 _TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({408, 429, 500, 502, 503, 504})
 
 
+_GEMINI_MIME_ALIASES: dict[str, str] = {
+    "audio/m4a": "audio/mp4",
+    "audio/x-m4a": "audio/mp4",
+    "audio/mp3": "audio/mpeg",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/opus": "audio/ogg",
+}
+
+
 class GeminiAdapter:
     """Production async adapter for Google Gemini (`gemini-2.5-flash` / `gemini-2.5-pro`)."""
 
@@ -45,11 +55,16 @@ class GeminiAdapter:
         self._client = genai.Client(api_key=self._api_key)
         return self._client
 
+    @staticmethod
+    def _normalize_mime_type(raw_mime: str) -> str:
+        base = raw_mime.split(";", 1)[0].strip().lower()
+        return _GEMINI_MIME_ALIASES.get(base, base)
+
     def _build_contents(self, request: AdapterCallRequest) -> Any:
         if request.media_bytes is not None and request.media_mime_type:
             media_part = types.Part.from_bytes(
                 data=request.media_bytes,
-                mime_type=request.media_mime_type,
+                mime_type=self._normalize_mime_type(request.media_mime_type),
             )
             return [media_part, request.prompt]
         return request.prompt

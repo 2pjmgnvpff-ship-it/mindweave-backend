@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import math
+import re
+from collections import Counter
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.ai.schemas.contracts import (
@@ -42,12 +47,217 @@ from mindweave.shared.enums import (
 from mindweave.shared.pii import mask_hard_pii
 from mindweave.shared.scopes import PersonScope
 
+# Chinese grammatical stop-phrases stripped before CJK bigram generation
+_ZH_STOP_PHRASES_RE = re.compile(
+    r"(?:什么|怎么|怎样|如何|一下子|一下|有没有|是不是|能不能|可不可以|为什么|可以|"
+    r"这个|那个|这些|那些|我们|你们|他们|她们|帮我|请问|觉得|感觉|知道|告诉)"
+)
+
+# Chinese grammatical particles, pronouns, and copulas excluded from standalone tokens & bigrams
+_ZH_STOP_CHARS: frozenset[str] = frozenset(
+    "的了呢吗啊吧呀哦嗯嘛呗啦哇哈我你她他它咱您是在有和与跟把被让给这那哪谁也都很太就才又着"
+)
+
+_TOKEN_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+|[a-z0-9]+")
+
+DEFAULT_RECALL_CANDIDATE_LIMIT = 200
+DEFAULT_RECALL_TOP_K = 5
+
 
 def _make_snippet(body: str, max_len: int = 80) -> str:
     compact = " ".join(body.split()).strip()
     if len(compact) <= max_len:
         return compact
     return compact[: max_len - 1].rstrip() + "…"
+
+
+def _extract_bm25_terms(text: str) -> tuple[list[str], set[str]]:
+    """Return `(all_tokens, strong_terms)` for Chinese-aware BM25 scoring.
+
+    `all_tokens` includes ASCII/digit tokens, CJK bigrams, and meaningful non-stop CJK
+    single characters. `strong_terms` contains multi-character tokens (CJK bigrams and
+    ASCII/digit tokens) plus standalone 1-character CJK segments so multi-char Chinese
+    words (e.g. `量子`, `火星`, `恐龙`) never falsely match unrelated words via incidental
+    single-character overlap (`饺子`, `大火`, `乌龙`).
+    """
+    if not text:
+        return [], set()
+    cleaned = _ZH_STOP_PHRASES_RE.sub(" ", text.lower())
+    tokens: list[str] = []
+    strong_terms: set[str] = set()
+
+    def _flush_cjk_segment(seg_chars: list[str]) -> None:
+        if not seg_chars:
+            return
+        if len(seg_chars) == 1:
+            ch = seg_chars[0]
+            tokens.append(ch)
+            strong_terms.add(ch)
+        else:
+            seg = "".join(seg_chars)
+            tokens.extend(seg_chars)
+            for idx in range(len(seg) - 1):
+                bg = seg[idx : idx + 2]
+                tokens.append(bg)
+                strong_terms.add(bg)
+        seg_chars.clear()
+
+    for match in _TOKEN_RUN_RE.finditer(cleaned):
+        run = match.group(0)
+        if run[0].isascii():
+            tok = (run.lstrip("0") or "0") if run.isdigit() else run
+            tokens.append(tok)
+            strong_terms.add(tok)
+            continue
+
+        # Split CJK ideograph run on stop-characters so stop-chars never pollute bigrams
+        seg_chars: list[str] = []
+        for ch in run:
+            if ch in _ZH_STOP_CHARS:
+                _flush_cjk_segment(seg_chars)
+            else:
+                seg_chars.append(ch)
+        _flush_cjk_segment(seg_chars)
+
+    return tokens, strong_terms
+
+
+def tokenize_zh_bm25(text: str) -> list[str]:
+    """Tokenize mixed Chinese/ASCII text into CJK bigrams, meaningful single chars & ASCII/digit tokens."""
+    tokens, _strong = _extract_bm25_terms(text)
+    return tokens
+
+
+@dataclass(frozen=True, slots=True)
+class RecallCandidateRecord:
+    """Decrypted record candidate scoped strictly to a single `PersonScope` for in-memory BM25 recall."""
+
+    record_id: UUID
+    kind: str
+    title: str
+    body: str
+    snippet: str
+    happened_on: date | None = None
+    pinned: bool = False
+    created_at: datetime | None = None
+    review_state: str = RecordReviewState.NORMAL.value
+    deleted_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecalledRecord:
+    """Ranked raw record recall result with its BM25 + recency + pinned score."""
+
+    candidate: RecallCandidateRecord
+    score: float
+
+
+def recall_relevant_records(
+    query: str,
+    candidates: Sequence[RecallCandidateRecord],
+    *,
+    top_k: int = DEFAULT_RECALL_TOP_K,
+    exclude_record_ids: Collection[UUID] = (),
+    reference_date: date | None = None,
+    k1: float = 1.2,
+    b: float = 0.75,
+) -> list[RecalledRecord]:
+    """Rank decrypted person-scoped records via Chinese-aware BM25 (`k1=1.2, b=0.75`) + recency + pinned boost.
+
+    Defensively excludes soft-deleted (`deleted_at IS NOT NULL`) and venting quarantine
+    (`review_state == 'held'`) records before computing corpus statistics, and returns only
+    records with strictly positive lexical overlap (`score > 0`) not in `exclude_record_ids`.
+    """
+    if top_k <= 0:
+        return []
+    query_tokens, query_strong_terms = _extract_bm25_terms(query)
+    if not query_tokens:
+        return []
+
+    # Defense-in-depth I4 exclusion BEFORE computing corpus IDF/avgdl
+    eligible = [
+        c
+        for c in candidates
+        if c.deleted_at is None and c.review_state != RecordReviewState.HELD.value
+    ]
+    if not eligible:
+        return []
+
+    tokenized_docs: list[list[str]] = []
+    doc_tfs: list[Counter[str]] = []
+    doc_freq: Counter[str] = Counter()
+
+    for cand in eligible:
+        happened_str = cand.happened_on.isoformat() if cand.happened_on is not None else ""
+        doc_text = f"{cand.title}\n{cand.body}\n{happened_str}"
+        toks = tokenize_zh_bm25(doc_text)
+        tokenized_docs.append(toks)
+        tf = Counter(toks)
+        doc_tfs.append(tf)
+        for unique_term in tf:
+            doc_freq[unique_term] += 1
+
+    n_docs = len(eligible)
+    total_len = sum(len(toks) for toks in tokenized_docs)
+    if total_len == 0:
+        return []
+    avgdl = total_len / n_docs
+
+    query_tf = Counter(query_tokens)
+    excluded = set(exclude_record_ids)
+    ref_date = reference_date or date.today()
+
+    scored: list[tuple[float, int, str, RecalledRecord]] = []
+    for idx, cand in enumerate(eligible):
+        if cand.record_id in excluded:
+            continue
+        dl = len(tokenized_docs[idx])
+        if dl == 0:
+            continue
+        tf_map = doc_tfs[idx]
+
+        if query_strong_terms and not any(st in tf_map for st in query_strong_terms):
+            continue
+
+        bm25_score = 0.0
+        for term, q_cnt in query_tf.items():
+            tf_val = tf_map.get(term, 0)
+            if tf_val <= 0:
+                continue
+            df_val = doc_freq.get(term, 0)
+            # Non-negative Lucene BM25 IDF (safe even when corpus has N=1 or N=2 records)
+            idf = math.log(1.0 + (n_docs - df_val + 0.5) / (df_val + 0.5))
+            denom = tf_val + k1 * (1.0 - b + b * (dl / avgdl))
+            term_weight = 2.0 if len(term) >= 2 else 1.0
+            bm25_score += term_weight * q_cnt * idf * (tf_val * (k1 + 1.0)) / denom
+
+        if bm25_score <= 0.0:
+            continue
+
+        rec_date = cand.happened_on or (
+            cand.created_at.date() if cand.created_at is not None else None
+        )
+        if rec_date is not None:
+            age_days = max(0, (ref_date - rec_date).days)
+            recency_factor = math.exp(-age_days / 180.0)
+            date_ord = rec_date.toordinal()
+        else:
+            recency_factor = 0.0
+            date_ord = 0
+
+        pinned_boost = 1.12 if cand.pinned else 1.0
+        final_score = bm25_score * (1.0 + 0.15 * recency_factor) * pinned_boost
+        scored.append(
+            (
+                -final_score,
+                -date_ord,
+                str(cand.record_id),
+                RecalledRecord(candidate=cand, score=final_score),
+            )
+        )
+
+    scored.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in scored[:top_k]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,12 +304,16 @@ class ContextBuilder:
         max_fact_tokens: int = 4000,
         max_fact_chars: int = 6000,
         recent_turn_limit: int = 12,
+        recall_top_k: int = DEFAULT_RECALL_TOP_K,
+        recall_candidate_limit: int = DEFAULT_RECALL_CANDIDATE_LIMIT,
     ) -> None:
         self._cipher = cipher
         self._default_timezone = default_timezone
         self._max_fact_tokens = max_fact_tokens
         self._max_fact_chars = max_fact_chars
         self._recent_turn_limit = recent_turn_limit
+        self._recall_top_k = recall_top_k
+        self._recall_candidate_limit = recall_candidate_limit
 
     def _decrypt_record_meta(
         self,
@@ -350,6 +564,99 @@ class ContextBuilder:
                         else tf.happened_on
                     ),
                 )
+
+        # 4b. D4 Raw Record Recall: in-memory decrypted BM25 + time-decay over person-scoped slips.
+        #     Strictly scoped to (user_id, person_id), physically excluding soft-deleted records,
+        #     held venting records, and records whose only facts are pending/rejected/superseded (I1 & I4).
+        if self._recall_top_k > 0 and user_message.strip():
+            has_any_fact = exists(
+                select(1).where(
+                    FactRow.user_id == scope.user_id,
+                    FactRow.record_id == RecordRow.id,
+                )
+            )
+            has_active_confirmed_fact = exists(
+                select(1).where(
+                    FactRow.user_id == scope.user_id,
+                    FactRow.record_id == RecordRow.id,
+                    FactRow.status == FactStatus.CONFIRMED.value,
+                    FactRow.invalid_at.is_(None),
+                )
+            )
+            recall_rows = (
+                await session.scalars(
+                    select(RecordRow)
+                    .where(
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == scope.person_id,
+                        RecordRow.deleted_at.is_(None),
+                        RecordRow.review_state != RecordReviewState.HELD.value,
+                        or_(
+                            RecordRow.review_state == RecordReviewState.NOTE_ONLY.value,
+                            ~has_any_fact,
+                            has_active_confirmed_fact,
+                        ),
+                    )
+                    .order_by(RecordRow.created_at.desc(), RecordRow.id.desc())
+                    .limit(self._recall_candidate_limit)
+                )
+            ).all()
+
+            if recall_rows:
+                recall_candidates: list[RecallCandidateRecord] = []
+                for rec in recall_rows:
+                    clean_title, body, clean_snippet = self._decrypt_record_meta(
+                        scope=scope, dek=dek, rec=rec
+                    )
+                    recall_candidates.append(
+                        RecallCandidateRecord(
+                            record_id=rec.id,
+                            kind=rec.kind,
+                            title=clean_title,
+                            body=body,
+                            snippet=clean_snippet,
+                            happened_on=rec.happened_on,
+                            pinned=bool(rec.pinned),
+                            created_at=rec.created_at,
+                            review_state=rec.review_state,
+                            deleted_at=rec.deleted_at,
+                        )
+                    )
+
+                try:
+                    local_today = datetime.now(ZoneInfo(tz_name)).date()
+                except ZoneInfoNotFoundError:
+                    local_today = date.today()
+
+                recalled_hits = recall_relevant_records(
+                    user_message,
+                    recall_candidates,
+                    top_k=self._recall_top_k,
+                    exclude_record_ids=dedup_ref_ids,
+                    reference_date=local_today,
+                )
+                for hit in recalled_hits:
+                    cand = hit.candidate
+                    happened_str = (
+                        cand.happened_on.isoformat() if cand.happened_on is not None else None
+                    )
+                    if cand.record_id not in record_catalog:
+                        record_catalog[cand.record_id] = CitationRecordMeta(
+                            record_id=cand.record_id,
+                            kind=cand.kind,
+                            title=cand.title,
+                            snippet=cand.snippet,
+                            happened_on=happened_str,
+                        )
+                    referenced_materials.append(
+                        ContextMaterialItem(
+                            record_id=cand.record_id,
+                            kind=cand.kind,
+                            title=mask_hard_pii(cand.title).masked_text,
+                            body=mask_hard_pii(cand.body).masked_text,
+                            happened_on=happened_str,
+                        )
+                    )
 
         # 5. Load ChatThreadRow rolling summary + last 12 ChatMessageRow turns for (user_id, person_id)
         thread_row = await session.scalar(

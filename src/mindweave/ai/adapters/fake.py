@@ -39,6 +39,7 @@ from mindweave.ai.schemas.contracts import (
     TranscribeInput,
     TranscribeOutput,
 )
+from mindweave.ai.validators.asr_postprocess import postprocess_asr_transcript
 from mindweave.modules.safety.domain.l1_rules import L1SafetyEngine
 from mindweave.shared.enums import (
     FactType,
@@ -354,9 +355,25 @@ class FakeAdapter:
     def _handle_transcribe(self, ctx: dict[str, Any]) -> TranscribeOutput:
         payload = TranscribeInput.model_validate(ctx["payload"])
         raw_bytes = payload.audio_bytes
+
+        # Explicit silent / unintelligible audio fixtures must return empty strings (zero hallucination)
+        stripped_marker = raw_bytes.strip().upper()
+        if not raw_bytes or stripped_marker in {b"SILENCE", b"NOISE", b"EMPTY"}:
+            return TranscribeOutput(
+                raw_transcript="",
+                corrected_transcript="",
+                duration_ms=0 if raw_bytes else None,
+            )
+
         decoded = ""
         if raw_bytes.startswith(b"TEXT:"):
             decoded = raw_bytes[5:].decode("utf-8", errors="ignore").strip()
+            if not decoded:
+                return TranscribeOutput(
+                    raw_transcript="",
+                    corrected_transcript="",
+                    duration_ms=0,
+                )
         else:
             try:
                 cand = raw_bytes.decode("utf-8")
@@ -366,10 +383,19 @@ class FakeAdapter:
                 decoded = ""
 
         if not decoded:
-            person_hint = payload.known_person_names[0] if payload.known_person_names else "对方"
+            person_hint = (
+                (payload.active_person_name or "").strip()
+                or (payload.known_person_names[0] if payload.known_person_names else "")
+                or "对方"
+            )
             decoded = f"{person_hint}提到最近想好好休息。"
 
-        corrected = re.sub(r"\s+", " ", decoded).strip()
+        corrected = postprocess_asr_transcript(
+            decoded,
+            active_person_name=payload.active_person_name,
+            known_person_names=payload.known_person_names,
+            recent_context_snippets=payload.recent_context_snippets,
+        )
         est_ms = max(1000, min(120_000, len(raw_bytes) // 4))
         return TranscribeOutput(
             raw_transcript=decoded,
@@ -766,6 +792,50 @@ class FakeAdapter:
         if scoped_locked and scoped_ref is not None and scoped_ref not in matched_refs:
             matched_refs.insert(0, scoped_ref)
 
+        # Implicit historical-context resolution via KnownPersonRef.recent_facts (global mode)
+        if (
+            not matched_refs
+            and not scoped_locked
+            and any(p.recent_facts for p in payload.known_persons)
+        ):
+            unique_hist_ref, hist_candidates, hist_clue = self._resolve_person_by_recent_facts(
+                working_text,
+                payload.known_persons,
+            )
+            if unique_hist_ref is not None:
+                matched_refs = [unique_hist_ref]
+            elif len(hist_candidates) >= 2:
+                cand_ids = [r.person_id for r in hist_candidates]
+                hist_clauses = self._split_into_clauses(working_text)
+                hist_ambig_facts: list[ExtractedFactItem] = []
+                for cl in hist_clauses:
+                    item = self._classify_clause_to_fact(
+                        cl,
+                        person_mention=hist_clue or "对方",
+                        person_id=None,
+                        current_date=payload.current_date,
+                        source_speaker=SourceSpeaker.NARRATOR,
+                    )
+                    if item is not None:
+                        hist_ambig_facts.append(item)
+                return ExtractRecordOutput(
+                    safety_flag=safety_flag,
+                    crisis_flag=False,
+                    is_venting_or_irony=is_venting,
+                    needs_disambiguation=True,
+                    scoped_person_locked=False,
+                    suggest_new_person=None,
+                    persons=[
+                        ExtractedPersonCandidate(
+                            mention=hist_clue or "对方",
+                            matched_person_id=None,
+                            candidate_person_ids=cand_ids,
+                            confidence=0.5,
+                        )
+                    ],
+                    facts=hist_ambig_facts,
+                )
+
         # New unarchived person check when nobody in known_persons matched
         if not matched_refs and not scoped_locked:
             new_name = self._detect_new_person_name(working_text, payload.known_persons)
@@ -862,6 +932,8 @@ class FakeAdapter:
             )
             if fallback_pid is not None and fallback_pid not in used_person_ids:
                 used_person_ids.append(fallback_pid)
+
+        facts = self._assign_event_groups(facts)
 
         persons_candidates: list[ExtractedPersonCandidate] = []
         for pid in used_person_ids:
@@ -1455,6 +1527,194 @@ class FakeAdapter:
             return kin.group(1)
         return None
 
+    _HISTORY_CLUE_STOPWORDS: frozenset[str] = frozenset(
+        {
+            "上次",
+            "之前",
+            "以前",
+            "那个",
+            "这个",
+            "改到",
+            "下周",
+            "这周",
+            "本周",
+            "上周",
+            "明天",
+            "今天",
+            "昨天",
+            "已经",
+            "一直",
+            "还是",
+            "就是",
+            "因为",
+            "所以",
+            "觉得",
+            "希望",
+            "可以",
+            "不能",
+            "不要",
+            "记得",
+            "喜欢",
+            "讨厌",
+            "过敏",
+            "的事",
+            "最近",
+            "平时",
+            "经常",
+            "总是",
+            "说好",
+            "告诉",
+            "问了",
+            "一起",
+            "朋友",
+            "同事",
+            "老板",
+            "时间",
+            "时候",
+            "东西",
+            "事情",
+            "问题",
+            "周一",
+            "周二",
+            "周三",
+            "周四",
+            "周五",
+            "周六",
+            "周日",
+            "下周一",
+            "下周二",
+            "下周三",
+            "下周四",
+            "下周五",
+            "下周六",
+            "下周日",
+            "医院",
+            "医生",
+            "复查",
+        }
+    )
+    _HISTORY_EDGE_PARTICLES: frozenset[str] = frozenset(
+        "的了是在有和与或我你他她它那这说去来要也都就还很太真被把给对从到个件次"
+    )
+
+    @classmethod
+    def _resolve_person_by_recent_facts(
+        cls,
+        text: str,
+        known_persons: list[KnownPersonRef],
+    ) -> tuple[KnownPersonRef | None, list[KnownPersonRef], str | None]:
+        """Resolve an implicit historical reference against `KnownPersonRef.recent_facts`.
+
+        Returns `(unique_person_or_none, matched_candidates, matched_clue)`.
+        Only binds a person when uniquely matched; ties or multi-person matches trigger
+        disambiguation so the write gate never guesses silently.
+        """
+        candidate_substrings: list[str] = []
+        seen_sub: set[str] = set()
+        for run in re.findall(r"[\u4e00-\u9fa5]{2,}", text):
+            max_n = min(8, len(run))
+            for n in range(max_n, 1, -1):
+                for idx in range(0, len(run) - n + 1):
+                    sub = run[idx : idx + n]
+                    if sub in seen_sub or sub in cls._HISTORY_CLUE_STOPWORDS:
+                        continue
+                    if (
+                        sub[0] in cls._HISTORY_EDGE_PARTICLES
+                        or sub[-1] in cls._HISTORY_EDGE_PARTICLES
+                    ):
+                        continue
+                    seen_sub.add(sub)
+                    candidate_substrings.append(sub)
+
+        if not candidate_substrings:
+            return None, [], None
+        candidate_substrings.sort(key=len, reverse=True)
+
+        scored: list[tuple[int, str, KnownPersonRef]] = []
+        for person in known_persons:
+            if not person.recent_facts:
+                continue
+            facts_blob = " | ".join(person.recent_facts)
+            best_len = 0
+            best_clue = ""
+            for sub in candidate_substrings:
+                if len(sub) < best_len:
+                    break
+                if sub in facts_blob:
+                    best_len = len(sub)
+                    best_clue = sub
+                    break
+            if best_len >= 2:
+                scored.append((best_len, best_clue, person))
+
+        if not scored:
+            return None, [], None
+
+        max_len = max(item[0] for item in scored)
+        top_hits = [item for item in scored if item[0] == max_len]
+        if len(top_hits) == 1:
+            return top_hits[0][2], [top_hits[0][2]], top_hits[0][1]
+        return None, [item[2] for item in top_hits], top_hits[0][1]
+
+    _TOPIC_SHIFT_PREFIX_RE = re.compile(r"^(?:另外|还有|对了|顺便|此外|再记一下)")
+
+    @staticmethod
+    def _event_domain_bucket(fact: ExtractedFactItem) -> str:
+        if fact.fact_type is FactType.DATE:
+            return "date"
+        if fact.fact_type is FactType.PROMISE:
+            return "promise"
+        if fact.fact_type is FactType.EVENT:
+            return "event"
+        return "taste"
+
+    @classmethod
+    def _assign_event_groups(cls, facts: list[ExtractedFactItem]) -> list[ExtractedFactItem]:
+        """Assign distinct `event_group` labels (`evt_1`, `evt_2`, ...) when one utterance
+        contains 2+ unrelated events for the SAME person; keep `None` for single-event inputs.
+        """
+        if len(facts) < 2:
+            return facts
+
+        by_person: dict[UUID, list[int]] = {}
+        for idx, item in enumerate(facts):
+            if item.person_id is not None:
+                by_person.setdefault(item.person_id, []).append(idx)
+
+        updated = list(facts)
+        for indices in by_person.values():
+            if len(indices) < 2:
+                continue
+            group_ids: list[int] = [1]
+            for pos in range(1, len(indices)):
+                prev_f = updated[indices[pos - 1]]
+                curr_f = updated[indices[pos]]
+                distinct_dates = (
+                    prev_f.trigger_date is not None
+                    and curr_f.trigger_date is not None
+                    and prev_f.trigger_date != curr_f.trigger_date
+                ) or (
+                    prev_f.is_lunar != curr_f.is_lunar
+                    and (prev_f.trigger_date or curr_f.trigger_date)
+                )
+                distinct_domains = cls._event_domain_bucket(prev_f) != cls._event_domain_bucket(
+                    curr_f
+                )
+                explicit_shift = bool(cls._TOPIC_SHIFT_PREFIX_RE.match(curr_f.content)) and (
+                    curr_f.fact_type is not prev_f.fact_type
+                    or curr_f.trigger_date != prev_f.trigger_date
+                )
+                if distinct_dates or distinct_domains or explicit_shift:
+                    group_ids.append(group_ids[-1] + 1)
+                else:
+                    group_ids.append(group_ids[-1])
+
+            if group_ids[-1] >= 2:
+                for idx, gid in zip(indices, group_ids, strict=True):
+                    updated[idx] = updated[idx].model_copy(update={"event_group": f"evt_{gid}"})
+
+        return updated
+
     @staticmethod
     def _split_into_clauses(text: str, *, person_names: Iterable[str] = ()) -> list[str]:
         if not text:
@@ -1473,7 +1733,7 @@ class FakeAdapter:
 
         split_regex = (
             r"[；;。！!？\?\n]+|"
-            r"(?:，|,\s*)(?=(?:另外|而且|不过|但|其实|对了|现在|目前|如今|后来|改喝|改成|这次|最近|冬天|夏天|出门只|只喝|只戴|喜欢|超爱|最爱|爱吃|讨厌|不喜欢|不吃|不喝|不能吃|让我帮|我答应|她平时|他平时|对[^\s，,]{1,6}(?:严重)?过敏|还特别嘱咐))|"
+            r"(?:，|,\s*)(?=(?:另外|还有|此外|而且|不过|但|其实|对了|现在|目前|如今|后来|改喝|改成|这次|最近|冬天|夏天|出门只|只喝|只戴|喜欢|超爱|最爱|爱吃|讨厌|不喜欢|不吃|不喝|不能吃|让我帮|我答应|她平时|他平时|对[^\s，,]{1,6}(?:严重)?过敏|还特别嘱咐))|"
             r"(?<=[\u4e00-\u9fa5])(?=不喝|但不能吃|但很喜欢)" + person_lookahead
         )
         raw_parts = re.split(split_regex, normalized)
@@ -1680,17 +1940,37 @@ class FakeAdapter:
         payload = CompanionChatInput.model_validate(ctx["payload"])
         clean_query = strip_prompt_injections(payload.user_message)
 
-        # Gather all in-scope evidence records for this single person
-        evidence: list[tuple[UUID, str, str | None]] = []
-        seen_rec: set[UUID] = set()
+        # Gather all in-scope evidence records for this single person (combining facts + referenced materials)
+        evidence_by_rec: dict[UUID, tuple[list[str], str | None]] = {}
+        evidence_order: list[UUID] = []
+        referenced_rec_ids: set[UUID] = set()
         for f in payload.confirmed_facts:
-            if f.record_id not in seen_rec:
-                seen_rec.add(f.record_id)
-                evidence.append((f.record_id, f.content, f.happened_on))
+            if f.record_id not in evidence_by_rec:
+                evidence_by_rec[f.record_id] = ([f.content], f.happened_on)
+                evidence_order.append(f.record_id)
+            else:
+                parts, dt_s = evidence_by_rec[f.record_id]
+                if f.content and f.content not in parts:
+                    parts.append(f.content)
+                if dt_s is None and f.happened_on is not None:
+                    evidence_by_rec[f.record_id] = (parts, f.happened_on)
         for m in payload.referenced_materials:
-            if m.record_id not in seen_rec:
-                seen_rec.add(m.record_id)
-                evidence.append((m.record_id, f"{m.title}：{m.body}", m.happened_on))
+            referenced_rec_ids.add(m.record_id)
+            mat_text = f"{m.title}：{m.body}" if m.title and m.title not in m.body else m.body
+            if m.record_id not in evidence_by_rec:
+                evidence_by_rec[m.record_id] = ([mat_text], m.happened_on)
+                evidence_order.append(m.record_id)
+            else:
+                parts, dt_s = evidence_by_rec[m.record_id]
+                if mat_text and not any(mat_text in p or p in mat_text for p in parts):
+                    parts.append(mat_text)
+                if dt_s is None and m.happened_on is not None:
+                    evidence_by_rec[m.record_id] = (parts, m.happened_on)
+
+        evidence: list[tuple[UUID, str, str | None]] = [
+            (rid, "；".join(evidence_by_rec[rid][0]), evidence_by_rec[rid][1])
+            for rid in evidence_order
+        ]
 
         # Determine effective safety category (never weakened by prompt injection!)
         safety_cls = self._handle_safety_classify({"text": clean_query})
@@ -1850,7 +2130,23 @@ class FakeAdapter:
             )
 
         # 6. Grounded Tier-Differentiated Reply (`GOLD` / `SILVER` / `CRYSTAL`)
-        matched_ev = self._match_relevant_evidence(clean_query, evidence)
+        is_hurt_or_conflict = bool(
+            re.search(r"(?:委屈|冷脸|放我鸽子|吵架|难受|泼了盆冰水|不开心|生气)", clean_query)
+        )
+        is_broad_review = is_hurt_or_conflict or bool(
+            re.search(
+                r"(?:写一段|祝贺|祝福|文案|往来|份子|总结|干过的事|有什么要注意|全记了什么|"
+                r"聊聊近况|心软|复合|兜兜转转|斤斤计较|抢话|揽到|气得)",
+                clean_query,
+            )
+        )
+        matched_ev = self._match_relevant_evidence(
+            clean_query,
+            evidence,
+            person_name=payload.person_name,
+            referenced_ids=referenced_rec_ids,
+            broad_review=is_broad_review,
+        )
         cited_ids = [rid for rid, _, _ in matched_ev]
         has_gap = len(matched_ev) == 0
 
@@ -1859,18 +2155,40 @@ class FakeAdapter:
             fake_uid = UUID("99999999-9999-4999-8999-999999999999")
             cited_ids = [*cited_ids, fake_uid]
 
-        ev_sentences = "；".join(
-            f"（{dt_s or '记录'}）{txt} [rec_{rid}]" for rid, txt, dt_s in matched_ev
-        )
+        ev_natural = self._format_natural_evidence(matched_ev)
 
         if payload.tier is Tier.SILVER:
-            reply_body = (
-                f"太懂你此刻的心情了，这100%不是你的错，你觉得愤怒或委屈完全合情合理！"
-                f"千万别心软自我怀疑，来看看你之前亲手封存的客观事实：{ev_sentences}。"
-                "他的所作所为早就有迹可循，绝不值得你再消耗自己的情绪或凌晨折腾自己去迁就！"
-                if matched_ev
-                else f"完全站在你这边！{payload.person_name}让你受的这股气换谁都忍不了，在咱们私密手帐里痛快骂出来，千万别憋坏自己！"
+            has_self_contradiction = bool(
+                re.search(r"(?:从来没|从没|没放过|没迟到|没爽约)", clean_query)
+                and any(
+                    re.search(r"(?:是我临时改|是我先|我先改|我迟到)", txt)
+                    for _, txt, _ in matched_ev
+                )
             )
+            if not matched_ev:
+                reply_body = (
+                    f"完全站在你这边！{payload.person_name}让你受的这股气换谁都忍不了，"
+                    "在咱们私密手帐里痛快吐出来，千万别憋坏自己。"
+                )
+            elif has_self_contradiction:
+                reply_body = (
+                    f"太懂你此刻的气愤和委屈了，被人在背后倒打一耙换谁都忍不了！"
+                    f"我一直站在你这边，不过按手帐里的原话如实帮你核对一句：{ev_natural}。"
+                    "就算之前有过时间变动，也不能成为对方到处抹黑甩锅的借口——"
+                    "稳稳守住自己的边界就好，不用再为这种人消耗心情。"
+                )
+            elif len(matched_ev) == 1:
+                reply_body = (
+                    f"我完全站在你这边，会觉得委屈和生气太正常了！"
+                    f"手帐里清清楚楚封存着这一笔：{ev_natural}。"
+                    "千万别心软怀疑自己，稳稳守住边界，把精力留给真正值得的人和事。"
+                )
+            else:
+                reply_body = (
+                    f"我完全站在你这边，你觉得愤怒或委屈太合情合理了！"
+                    f"千万别心软自我怀疑，手帐里白纸黑字封存着：{ev_natural}。"
+                    "对方这些做法早就有迹可循，绝不值得你再消耗自己的情绪或凌晨折腾自己去迁就。"
+                )
             leaked_persp = (
                 ["也许他也有自己的压力"] if self._faults.leak_silver_perspective_once else []
             )
@@ -1890,11 +2208,31 @@ class FakeAdapter:
             )
 
         if payload.tier is Tier.CRYSTAL:
-            reply_body = (
-                f"帮你把关于【{payload.person_name}】的相关记录与往来明细梳理清楚啦：{ev_sentences}。"
-                "职场与日常往来咱们就事论事、清爽守住边界，不必有心理负担。"
-                if matched_ev
-                else f"目前【{payload.person_name}】名下还没有对应的详细记录，可以先记上一笔方便后续跟进。"
+            if not matched_ev:
+                reply_body = (
+                    f"目前【{payload.person_name}】名下还没有对应的详细记录，"
+                    "有新进展随时顺手记一笔，后面我帮你盯着。"
+                )
+            elif len(matched_ev) == 1:
+                reply_body = (
+                    f"帮你翻到了关于{payload.person_name}的这条记录：{ev_natural}。"
+                    "按这条节点清爽跟进就好，留好文字确认省心又稳妥。"
+                )
+            else:
+                reply_body = (
+                    f"帮你把和{payload.person_name}相关的记录理清楚了：{ev_natural}。"
+                    "职场与日常往来咱们就事论事、清爽守住边界，不用给自己额外心理负担。"
+                )
+            crystal_suggestions = (
+                [
+                    "得体沟通参考：「这周末我正好有安排就不参与啦，对了上次我那块充电宝周末出门要用，方便今天顺手拿给我吗？谢谢啦！」"
+                ]
+                if any("充电宝" in txt or "份子" in txt for _, txt, _ in matched_ev)
+                or "充电宝" in clean_query
+                or "份子" in clean_query
+                else [
+                    f"跟{payload.person_name}确认关键时间点或交接事项时，顺手留一句微信/邮件文字确认最省心。"
+                ]
             )
             return CompanionChatOutput(
                 safety_flag=SafetyCategory.NORMAL,
@@ -1903,26 +2241,21 @@ class FakeAdapter:
                 cited_record_ids=cited_ids,
                 has_unrecorded_gap=has_gap,
                 alternative_perspectives=[],
-                actionable_suggestions=[
-                    "得体沟通参考：「这周末我正好有安排就不参与啦，对了上次我那块充电宝周末出门要用，方便今天顺手拿给我吗？谢谢啦！」"
-                ],
+                actionable_suggestions=crystal_suggestions,
                 disclaimer=None,
             )
 
         # Tier.GOLD (`记爱`)
-        is_hurt_or_conflict = bool(
-            re.search(r"(?:委屈|冷脸|放我鸽子|吵架|难受|泼了盆冰水|不开心|生气)", clean_query)
-        )
         temporal_warning = ""
         if len(matched_ev) >= 2 and any(
             "不再" in t or "改喝" in t or "加重" in t for _, t, _ in matched_ev
         ):
-            temporal_warning = "注意以最新更新的习惯与忌口为准哦！"
+            temporal_warning = " 另外特别留意一下，最近习惯有更新，按最新的那条来准备更稳妥哦！"
 
         if is_hurt_or_conflict:
             reply_body = (
                 f"抱抱你，满怀心意去付出却遇到这样的回应，换作任何人心里都会觉得特别委屈和失落，你的感受完全值得被心疼。"
-                f"{'回顾你们平时的点滴记录：' + ev_sentences + '。' if matched_ev else ''}"
+                f"{' 翻看你们平时的点滴记录：' + ev_natural + '。' if matched_ev else ''}"
                 "先别急着否定你们之间的感情，等情绪缓一缓我们再看怎么温柔沟通。"
             )
             perspectives = [
@@ -1936,14 +2269,24 @@ class FakeAdapter:
             draft_note = ""
             if re.search(r"(?:写一段|祝贺|祝福|消息|文案)", clean_query):
                 draft_note = " 你可以这样自然地发消息祝贺：「太替你开心啦！熬了这么久终于顺利通关，周末必须安排一顿心心念念的大餐配上一束向日葵好好庆祝一下！」"
-            reply_body = (
-                f"根据【{payload.person_name}】的手帐记录整理如下：{ev_sentences}。{temporal_warning}{draft_note}"
-                if matched_ev
-                else f"目前【{payload.person_name}】的手帐里还没有记下相关细节，你可以随时告诉我帮你记上。"
-            )
+            if not matched_ev:
+                reply_body = (
+                    f"目前关于{payload.person_name}的手帐里还没有记下相关细节，"
+                    "以后听到了随时跟我说一句，我帮你稳稳收进手帐里。"
+                )
+            elif len(matched_ev) == 1:
+                reply_body = (
+                    f"翻了翻关于{payload.person_name}的手帐，记着这么一条：{ev_natural}。"
+                    f"{temporal_warning}{draft_note}"
+                )
+            else:
+                reply_body = (
+                    f"帮你翻了翻关于{payload.person_name}的手帐，相关的这几件事都记着呢：{ev_natural}。"
+                    f"{temporal_warning}{draft_note}"
+                )
             perspectives = []
             suggestions = [
-                f"结合记录中的喜好与雷区提前准备，会让{payload.person_name}感受到你满满的用心。"
+                f"顺着这些记下的小细节提前留心准备，{payload.person_name}一定会感受到你满满的用心。"
             ]
 
         return CompanionChatOutput(
@@ -1956,6 +2299,24 @@ class FakeAdapter:
             actionable_suggestions=suggestions,
             disclaimer=None,
         )
+
+    @staticmethod
+    def _format_short_date(dt_s: str | None) -> str:
+        if not dt_s:
+            return ""
+        m = re.match(r"^\d{4}-0?(\d{1,2})-0?(\d{1,2})$", dt_s.strip())
+        if m:
+            return f"{m.group(1)}月{m.group(2)}日"
+        return dt_s.strip()
+
+    @classmethod
+    def _format_natural_evidence(cls, matched_ev: list[tuple[UUID, str, str | None]]) -> str:
+        parts: list[str] = []
+        for rid, txt, dt_s in matched_ev:
+            short_d = cls._format_short_date(dt_s)
+            prefix = f"{short_d}记过，" if short_d else ""
+            parts.append(f"{prefix}{txt} [rec_{rid}]")
+        return "；".join(parts)
 
     @staticmethod
     def _select_non_sensitive_boundary_evidence(
@@ -1984,27 +2345,91 @@ class FakeAdapter:
                     return True
         return False
 
-    @staticmethod
+    _QUERY_FILLER_RE = re.compile(
+        r"(?:请问|帮我看看?|帮我查查?|告诉我|说一下|问一下|一下|什么|怎么|怎么样|可以吗|"
+        r"有没有|平时|最近|记得|关于|喜欢|讨厌|今天|明天|现在|准备|想要|打算|适合|应该|"
+        r"注意|需要|什么时候|哪天|几点)"
+    )
+    _QUERY_TOPIC_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("水果", ("草莓", "蓝莓", "芒果", "苹果", "西瓜", "葡萄", "橙子", "桃", "梨")),
+        ("咖啡", ("拿铁", "美式", "燕麦", "浓缩", "咖啡")),
+        ("茶", ("乌龙", "绿茶", "红茶", "花茶", "奶茶", "茉莉", "桂花", "白桃")),
+        ("礼物", ("围巾", "香薰", "向日葵", "拍立得", "方巾", "乐高", "蛋糕")),
+        ("伴手礼", ("围巾", "香薰", "向日葵", "方巾", "茶", "蛋糕")),
+        ("身体", ("膝盖", "复查", "体检", "偏头痛", "痛风", "过敏", "胃")),
+        ("医院", ("膝盖", "复查", "体检", "医院")),
+        ("开会", ("签字", "复盘", "报告", "合同", "预算", "温水", "会议")),
+        ("工作", ("签字", "复盘", "报告", "合同", "预算", "项目", "报价")),
+    )
+    _BROAD_FALLBACK_EXPANSIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("喝", ("乌龙", "绿茶", "花茶", "奶茶", "拿铁", "美式", "温水", "红酒")),
+        ("吃", ("排骨", "火锅", "蛋糕", "糖藕", "香菜", "过敏", "忌口", "辣", "酸汤鱼")),
+    )
+
+    @classmethod
     def _match_relevant_evidence(
-        query: str, evidence: list[tuple[UUID, str, str | None]]
+        cls,
+        query: str,
+        evidence: list[tuple[UUID, str, str | None]],
+        *,
+        person_name: str = "",
+        referenced_ids: set[UUID] | None = None,
+        broad_review: bool = False,
     ) -> list[tuple[UUID, str, str | None]]:
         if not evidence:
             return []
-        # Extract 2-char Chinese content bigrams from query for topical overlap, falling back to full person context
-        clean_q = re.sub(r"[^\u4e00-\u9fa5A-Za-z0-9]", "", query)
-        q_bigrams = {clean_q[i : i + 2] for i in range(max(0, len(clean_q) - 1))}
-        scored: list[tuple[int, int, tuple[UUID, str, str | None]]] = []
-        for idx, item in enumerate(evidence):
-            _, txt, _ = item
-            overlap = sum(1 for bg in q_bigrams if len(bg) == 2 and bg in txt)
-            scored.append((overlap, idx, item))
+        if broad_review:
+            return evidence
 
-        # Per Master Plan §3.3, single-person memory is tiny (<=100 facts), so we include all
-        # matching records or all confirmed records of the target person when reviewing/venting.
-        positive_hits = [item for ov, _, item in scored if ov > 0]
-        if positive_hits and len(evidence) > 4:
-            return positive_hits
-        return evidence
+        ref_set = referenced_ids or set()
+        focused_q = query
+        if person_name and len(person_name.strip()) >= 1:
+            focused_q = focused_q.replace(person_name.strip(), " ")
+        focused_q = cls._QUERY_FILLER_RE.sub(" ", focused_q)
+        focused_runs = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]{2,}", focused_q)
+        q_bigrams: set[str] = set()
+        for run in focused_runs:
+            if len(run) == 2:
+                q_bigrams.add(run)
+            else:
+                for i in range(len(run) - 1):
+                    q_bigrams.add(run[i : i + 2])
+
+        expanded_tokens: set[str] = set()
+        for trigger, synonyms in cls._QUERY_TOPIC_EXPANSIONS:
+            if trigger in query:
+                expanded_tokens.update(synonyms)
+
+        scored: list[tuple[int, int, int, tuple[UUID, str, str | None]]] = []
+        for idx, item in enumerate(evidence):
+            rid, txt, _ = item
+            bigram_hits = sum(3 for bg in q_bigrams if bg in txt)
+            synonym_hits = sum(2 for tok in expanded_tokens if tok in txt)
+            score = bigram_hits + synonym_hits
+            is_ref = 1 if rid in ref_set else 0
+            scored.append((score, is_ref, -idx, item))
+
+        positive_scored = [entry for entry in scored if entry[0] > 0]
+        if positive_scored:
+            positive_scored.sort(key=lambda e: (e[0], e[1], e[2]), reverse=True)
+            return [entry[3] for entry in positive_scored]
+
+        # Secondary fallback for broad eat/drink questions when no specific noun matched
+        fallback_tokens: set[str] = set()
+        for trigger, synonyms in cls._BROAD_FALLBACK_EXPANSIONS:
+            if trigger in query:
+                fallback_tokens.update(synonyms)
+        if fallback_tokens:
+            fb_hits = [item for item in evidence if any(tok in item[1] for tok in fallback_tokens)]
+            if fb_hits:
+                return fb_hits
+
+        if ref_set:
+            ref_items = [item for item in evidence if item[0] in ref_set]
+            if ref_items:
+                return ref_items
+
+        return evidence[:4]
 
     @staticmethod
     def _handle_summarize_thread(ctx: dict[str, Any]) -> str:

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections import OrderedDict
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -99,6 +100,333 @@ _TEMPORAL_MENTION_RE = re.compile(
     r"^(?:(?:周|星期|礼拜)[一二三四五六日天末].*|(?:上|下|本|这)(?:周|星期|礼拜|个月).*|\d{1,2}月(?:\d{1,2}[日号]?)?)$"
 )
 
+_DATE_LITERAL_RE = re.compile(
+    r"\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}[日号]?|\d{1,2}月\d{1,2}[日号]?|\d{1,2}[:：]\d{2}"
+)
+_WORD_OR_CJK_RE = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]+", re.IGNORECASE)
+
+_HISTORY_CLUE_STRIP_PHRASES: tuple[str, ...] = tuple(
+    sorted(
+        (
+            "上次那个",
+            "之前那个",
+            "不喜欢吃",
+            "不喜欢喝",
+            "不爱吃",
+            "不爱喝",
+            "不能吃",
+            "不能喝",
+            "喜欢吃",
+            "喜欢喝",
+            "严重过敏",
+            "改成了",
+            "换成了",
+            "下个月",
+            "上个月",
+            "这个月",
+            "星期一",
+            "星期二",
+            "星期三",
+            "星期四",
+            "星期五",
+            "星期六",
+            "星期日",
+            "星期天",
+            "礼拜一",
+            "礼拜二",
+            "礼拜三",
+            "礼拜四",
+            "礼拜五",
+            "礼拜六",
+            "礼拜日",
+            "礼拜天",
+            "下周一",
+            "下周二",
+            "下周三",
+            "下周四",
+            "下周五",
+            "下周六",
+            "下周日",
+            "下周天",
+            "这周一",
+            "这周二",
+            "这周三",
+            "这周四",
+            "这周五",
+            "这周六",
+            "这周日",
+            "这周天",
+            "上周一",
+            "上周二",
+            "上周三",
+            "上周四",
+            "上周五",
+            "上周六",
+            "上周日",
+            "上周天",
+            "不喜欢",
+            "周一",
+            "周二",
+            "周三",
+            "周四",
+            "周五",
+            "周六",
+            "周日",
+            "周天",
+            "周末",
+            "下周",
+            "上周",
+            "这周",
+            "本周",
+            "今天",
+            "明天",
+            "昨天",
+            "前天",
+            "后天",
+            "今晚",
+            "明晚",
+            "今早",
+            "明早",
+            "最近",
+            "平时",
+            "以前",
+            "以后",
+            "现在",
+            "刚才",
+            "刚刚",
+            "上次",
+            "下次",
+            "这次",
+            "那个",
+            "这个",
+            "事情",
+            "东西",
+            "时候",
+            "时间",
+            "问题",
+            "一下",
+            "一点",
+            "一直",
+            "总是",
+            "已经",
+            "其实",
+            "本来",
+            "原来",
+            "记得",
+            "提醒",
+            "喜欢",
+            "讨厌",
+            "过敏",
+            "忌口",
+            "不吃",
+            "不喝",
+            "不能",
+            "爱吃",
+            "爱喝",
+            "严重",
+            "非常",
+            "特别",
+            "超级",
+            "比较",
+            "有点",
+            "可能",
+            "应该",
+            "好像",
+            "还是",
+            "然后",
+            "因为",
+            "所以",
+            "如果",
+            "但是",
+            "不过",
+            "打算",
+            "计划",
+            "准备",
+            "安排",
+            "取消",
+            "推迟",
+            "改期",
+            "改到",
+            "改成",
+            "改为",
+            "换成",
+            "提前",
+            "延后",
+            "上午",
+            "下午",
+            "晚上",
+            "中午",
+            "凌晨",
+            "每天",
+            "每次",
+            "预约",
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+_HISTORY_CLUE_SPLIT_CHARS = frozenset(
+    "的了呀呢吧嘛哦啊哈很太最都也还又在把被给对和与及或且是就这那她他它我你您改"
+)
+_HISTORY_CLUE_LEADING_VERBS = "吃喝买带看做去来要总"
+_HISTORY_CLUE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "喜欢",
+        "讨厌",
+        "过敏",
+        "忌口",
+        "不吃",
+        "不喝",
+        "不能",
+        "爱吃",
+        "爱喝",
+        "最近",
+        "今天",
+        "明天",
+        "昨天",
+        "前天",
+        "后天",
+        "上周",
+        "下周",
+        "这周",
+        "本周",
+        "周末",
+        "事情",
+        "东西",
+        "时候",
+        "时间",
+        "问题",
+        "大家",
+        "别人",
+        "自己",
+        "我们",
+        "你们",
+        "他们",
+        "她们",
+        "一下",
+        "一点",
+        "一直",
+        "总是",
+        "已经",
+        "可能",
+        "应该",
+        "好像",
+        "记得",
+        "提醒",
+        "准备",
+        "打算",
+        "计划",
+        "安排",
+        "平时",
+        "以前",
+        "以后",
+        "现在",
+        "刚才",
+        "刚刚",
+        "非常",
+        "特别",
+        "超级",
+        "比较",
+        "有点",
+        "其实",
+        "本来",
+        "原来",
+        "还是",
+        "然后",
+        "因为",
+        "所以",
+        "如果",
+        "但是",
+        "不过",
+        "这个",
+        "那个",
+        "上次",
+        "下次",
+        "这次",
+        "改到",
+        "改成",
+        "改为",
+        "换成",
+        "取消",
+        "推迟",
+        "提前",
+        "改期",
+        "每天",
+        "每次",
+        "上午",
+        "下午",
+        "晚上",
+        "中午",
+        "凌晨",
+        "预约",
+        "am",
+        "pm",
+        "ok",
+        "no",
+        "ta",
+    }
+)
+
+# Spoken self-correction regexes (pure text hygiene for voice transcripts)
+_SELF_CORRECTION_RE = re.compile(
+    r"(?P<sep>[，,、；;\s]*)"
+    r"(?:啊|哦|呃|嗯)?"
+    r"(?:不对|说错了|讲错了|口误|搞错了|记错了|不是不是|不是)"
+    r"(?:[，,、\s]*(?:应该是|其实是|改成|改到|是))"
+    r"\s*(?P<replacement>[^，,。；;！!？?\n]+)"
+)
+_CLAUSE_BOUNDARY_RE = re.compile(r"[，,。；;！!？?\n]")
+_CALENDAR_DATE_RE = re.compile(r"\d{1,2}月\d{1,2}[日号]?")
+_FULL_WEEKDAY_RE = re.compile(r"(?:下|这|本|上)?(?:周|星期|礼拜)[一二三四五六日天末]")
+_BARE_WEEKDAY_RE = re.compile(r"(?:周|星期|礼拜)[一二三四五六日天末]")
+_RELATIVE_DAY_RE = re.compile(r"(?:大后天|今天|明天|后天|昨天|前天|今晚|明早|明晚)")
+_CLOCK_TIME_RE = re.compile(
+    r"(?:上午|下午|中午|晚上|早上|凌晨|傍晚)?"
+    r"(?:\d{1,2}|[一二两三四五六七八九十]{1,2})[点时](?:半|\d{1,2}分?)?"
+)
+_DAY_PERIOD_RE = re.compile(r"(?:上午|下午|中午|晚上|早上|凌晨|傍晚)")
+_PERSON_PREP_RE = re.compile(
+    r"(?:和|跟|找|给|帮|陪|问|约)"
+    r"((?:小|老|阿|大)[\u4e00-\u9fff]|"
+    r"[\u4e00-\u9fff]{2,3}?(?=(?:一起|吃饭|喝|吃|去|看|买|送|做|聊|玩|见|说|打|开|学|走|住|谈|的|在|过|$)))"
+)
+_SUBJECT_PREDICATE_RE = re.compile(
+    r"^([\u4e00-\u9fff]{2,3})"
+    r"((?:喜欢|爱吃|爱喝|不吃|不喝|不能|讨厌|过敏|忌口|想去|想要|"
+    r"下周|这周|上周|本周|明天|今天|后天|昨天|周[一二三四五六日天末]|星期[一二三四五六日天末]|"
+    r"准备|打算|计划|预约|要去|去|说|提到|过生日|生日|体检|复查|结婚|纪念日|"
+    r"住院|出差|搬家|换工作|升职|辞职|最近|平时|一直|总是|对).*)$"
+)
+_VERB_OBJECT_TAIL_RE = re.compile(
+    r"(喜欢吃|喜欢喝|爱吃|爱喝|不能吃|不能喝|不爱吃|不爱喝|不吃|不喝|"
+    r"喜欢|讨厌|想要|想吃|想喝|买|送|带|喝|吃|点)([\u4e00-\u9fffA-Za-z0-9]{1,8})$"
+)
+_PERSON_TITLE_SUFFIXES = (
+    "妈",
+    "爸",
+    "哥",
+    "姐",
+    "弟",
+    "妹",
+    "叔",
+    "姨",
+    "婆",
+    "公",
+    "爷",
+    "奶",
+    "总",
+    "老师",
+    "医生",
+    "经理",
+    "主任",
+    "同学",
+    "同事",
+    "师兄",
+    "师姐",
+)
+_PERSON_NICK_PREFIXES = ("小", "老", "阿", "大")
+
 
 def normalize_mention(text: str) -> str:
     return "".join(text.strip().lower().split())
@@ -127,6 +455,7 @@ class KnownPersonProfile:
     state: PersonState = PersonState.ACTIVE
     role_tag: str = ""
     monogram: str = ""
+    recent_facts: tuple[str, ...] = ()
 
     def matches_exact(self, normalized_query: str) -> bool:
         if not normalized_query:
@@ -184,6 +513,291 @@ def clause_mentions_multiple_known_people(
                 hit_ids.add(person.person_id)
                 break
     return len(hit_ids) >= 2
+
+
+def _extract_history_clue_tokens(text: str) -> set[str]:
+    """Extract distinctive 2-char CJK bigrams and 2+ char ASCII tokens, excluding generic stopwords."""
+    cleaned = text.strip().lower()
+    if not cleaned:
+        return set()
+    cleaned = _DATE_LITERAL_RE.sub(" ", cleaned)
+    for phrase in _HISTORY_CLUE_STRIP_PHRASES:
+        cleaned = cleaned.replace(phrase, " ")
+
+    tokens: set[str] = set()
+    for chunk in _WORD_OR_CJK_RE.findall(cleaned):
+        if chunk.isascii():
+            if len(chunk) >= 2 and not chunk.isdigit() and chunk not in _HISTORY_CLUE_STOPWORDS:
+                tokens.add(chunk)
+            continue
+        # Split on structural particles/pronouns so unrelated adjacent words never fuse
+        sub_buf: list[str] = []
+        sub_chunks: list[str] = []
+        for ch in chunk:
+            if ch in _HISTORY_CLUE_SPLIT_CHARS:
+                if sub_buf:
+                    sub_chunks.append("".join(sub_buf))
+                    sub_buf = []
+            else:
+                sub_buf.append(ch)
+        if sub_buf:
+            sub_chunks.append("".join(sub_buf))
+
+        for sub in sub_chunks:
+            core = sub
+            while len(core) > 2 and core[0] in _HISTORY_CLUE_LEADING_VERBS:
+                core = core[1:]
+            if len(core) < 2:
+                continue
+            for idx in range(len(core) - 1):
+                bigram = core[idx : idx + 2]
+                if bigram not in _HISTORY_CLUE_STOPWORDS:
+                    tokens.add(bigram)
+
+    tokens -= _HISTORY_CLUE_STOPWORDS
+    return tokens
+
+
+def resolve_by_history_clues(
+    clause_text: str,
+    known_people: Sequence[KnownPersonProfile],
+) -> MentionResolution | None:
+    """Resolve an unnamed/pronoun global clause using distinctive overlap with recent confirmed facts.
+
+    Returns:
+    - A matched `MentionResolution` ONLY when a single person has a strictly unique match
+      (`clause_person_unambiguous=True` when score >= 2 with zero overlap elsewhere;
+      `clause_person_unambiguous=False` for moderate single-clue or margin matches so the
+      slip still receives gentle user confirmation).
+    - An ambiguous `MentionResolution` (`matched_person_id=None`, `candidate_person_ids=...`)
+      when 2+ people share the historical clue without a clear margin — NEVER guessing blindly.
+    - `None` when no distinctive historical clues overlap.
+    """
+    if not clause_text or not clause_text.strip() or not known_people:
+        return None
+    clause_tokens = _extract_history_clue_tokens(clause_text)
+    if not clause_tokens:
+        return None
+
+    scored: list[tuple[int, KnownPersonProfile]] = []
+    for person in known_people:
+        if not person.recent_facts:
+            continue
+        person_tokens: set[str] = set()
+        for fact in person.recent_facts:
+            person_tokens.update(_extract_history_clue_tokens(fact))
+        overlap = clause_tokens & person_tokens
+        if overlap:
+            scored.append((len(overlap), person))
+
+    if not scored:
+        return None
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    top_score, top_person = scored[0]
+
+    if len(scored) == 1:
+        return MentionResolution(
+            mention=top_person.display_name,
+            matched_person_id=top_person.person_id,
+            candidate_person_ids=(top_person.person_id,),
+            is_new_person=False,
+            scoped_locked=False,
+            clause_person_unambiguous=top_score >= 2,
+        )
+
+    second_score = scored[1][0]
+    if top_score >= 3 and (top_score - second_score) >= 2 and top_score >= second_score * 2:
+        return MentionResolution(
+            mention=top_person.display_name,
+            matched_person_id=top_person.person_id,
+            candidate_person_ids=(top_person.person_id,),
+            is_new_person=False,
+            scoped_locked=False,
+            clause_person_unambiguous=False,
+        )
+
+    return MentionResolution(
+        mention="",
+        matched_person_id=None,
+        candidate_person_ids=tuple(p.person_id for _, p in scored),
+        is_new_person=False,
+        scoped_locked=False,
+        clause_person_unambiguous=False,
+    )
+
+
+def _replace_last_match(pattern: re.Pattern[str], text: str, replacement: str) -> str | None:
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return None
+    last = matches[-1]
+    return f"{text[: last.start()]}{replacement}{text[last.end() :]}"
+
+
+def _looks_like_person_name(text: str) -> bool:
+    cleaned = text.strip()
+    if not cleaned or len(cleaned) > 4:
+        return False
+    if any(cleaned.endswith(suf) for suf in _PERSON_TITLE_SUFFIXES):
+        return True
+    return len(cleaned) in (2, 3) and cleaned.startswith(_PERSON_NICK_PREFIXES)
+
+
+def _apply_clause_replacement(clause: str, replacement: str) -> str | None:
+    """Apply a spoken self-correction replacement inside the immediately preceding clause."""
+    if not clause or not replacement:
+        return None
+
+    # 1. Calendar date (e.g. "5月12日" -> "5月15日")
+    if _CALENDAR_DATE_RE.fullmatch(replacement):
+        replaced = _replace_last_match(_CALENDAR_DATE_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+
+    # 2. Weekday (e.g. "周五" -> "周六", "下周五" -> "下周六" or "下周二" -> "下周五")
+    if _FULL_WEEKDAY_RE.fullmatch(replacement):
+        if replacement[0] in ("下", "这", "本", "上"):
+            replaced = _replace_last_match(_FULL_WEEKDAY_RE, clause, replacement)
+        else:
+            replaced = _replace_last_match(_BARE_WEEKDAY_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+
+    # 3. Relative day (e.g. "明天" -> "后天")
+    if _RELATIVE_DAY_RE.fullmatch(replacement):
+        replaced = _replace_last_match(_RELATIVE_DAY_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+
+    # 4. Clock time or day period (e.g. "3点" -> "4点", "上午" -> "下午")
+    if _CLOCK_TIME_RE.fullmatch(replacement):
+        replaced = _replace_last_match(_CLOCK_TIME_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+    if _DAY_PERIOD_RE.fullmatch(replacement):
+        replaced = _replace_last_match(_DAY_PERIOD_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+
+    # 5. Compound noun sharing a 2-char (or 1-char) tail (e.g. "草莓蛋糕" -> "抹茶蛋糕")
+    if len(replacement) >= 2 and all("\u4e00" <= ch <= "\u9fff" for ch in replacement):
+        suffix_lengths = (2, 1) if len(replacement) >= 3 else (1,)
+        leading_excluded = "买送带吃喝点给的看去来要很太最"
+        for suf_len in suffix_lengths:
+            suffix = replacement[-suf_len:]
+            if suffix in _HISTORY_CLUE_SPLIT_CHARS:
+                continue
+            prefix_len = len(replacement) - suf_len
+            candidate_lens = [prefix_len]
+            if prefix_len > 1:
+                candidate_lens.append(prefix_len - 1)
+            candidate_lens.append(prefix_len + 1)
+            for pre_len in candidate_lens:
+                compound_re = re.compile(rf"[\u4e00-\u9fff]{{{pre_len}}}{re.escape(suffix)}")
+                matches = [
+                    m
+                    for m in compound_re.finditer(clause)
+                    if m.group(0) != replacement and m.group(0)[0] not in leading_excluded
+                ]
+                if matches:
+                    last = matches[-1]
+                    return f"{clause[: last.start()]}{replacement}{clause[last.end() :]}"
+
+    # 6. Person / subject vs verb-object replacement
+    is_person_cue = _looks_like_person_name(replacement)
+    if is_person_cue:
+        prep_matches = list(_PERSON_PREP_RE.finditer(clause))
+        if prep_matches:
+            last = prep_matches[-1]
+            return f"{clause[: last.start(1)]}{replacement}{clause[last.end(1) :]}"
+        subj_match = _SUBJECT_PREDICATE_RE.match(clause)
+        if subj_match and not is_non_person_stopword_mention(subj_match.group(1)):
+            return f"{replacement}{subj_match.group(2)}"
+
+    verb_obj = _VERB_OBJECT_TAIL_RE.search(clause)
+    if verb_obj and not is_person_cue:
+        return f"{clause[: verb_obj.start(2)]}{replacement}"
+
+    subj_match = _SUBJECT_PREDICATE_RE.match(clause)
+    if (
+        subj_match
+        and 2 <= len(replacement) <= 4
+        and not is_non_person_stopword_mention(subj_match.group(1))
+    ):
+        return f"{replacement}{subj_match.group(2)}"
+
+    return None
+
+
+def apply_spoken_self_correction(text: str) -> str:
+    """Apply Chinese spoken self-correction hygiene without mutating clean text.
+
+    Handles natural voice repairs such as:
+    - `"妈妈周五复查，不对，是周六"` -> `"妈妈周六复查"`
+    - `"小陈不能吃香菜，说错了，是阿远"` -> `"阿远不能吃香菜"`
+    - `"给林溪买草莓蛋糕，不对，是抹茶蛋糕"` -> `"给林溪买抹茶蛋糕"`
+    Clean transcripts without an explicit correction cue are returned verbatim.
+    """
+    if not text or not text.strip():
+        return text
+
+    result = text
+    for _ in range(5):
+        match = _SELF_CORRECTION_RE.search(result)
+        if match is None:
+            break
+        raw_rep = match.group("replacement").strip()
+        rep_core = raw_rep.rstrip("吧哈啊呀哦啦呢了").strip() or raw_rep
+        before = result[: match.start()]
+        after = result[match.end() :]
+
+        boundaries = list(_CLAUSE_BOUNDARY_RE.finditer(before))
+        if boundaries:
+            split_pos = boundaries[-1].end()
+            prefix_before_clause = before[:split_pos]
+            prev_clause = before[split_pos:]
+        else:
+            prefix_before_clause = ""
+            prev_clause = before
+
+        leading_ws_len = len(prev_clause) - len(prev_clause.lstrip())
+        leading_ws = prev_clause[:leading_ws_len]
+        trimmed_clause = prev_clause[leading_ws_len:]
+
+        corrected_clause = _apply_clause_replacement(trimmed_clause, rep_core)
+        if corrected_clause is None:
+            break
+        result = f"{prefix_before_clause}{leading_ws}{corrected_clause}{after}"
+
+    return result
+
+
+def partition_by_event_group[T](
+    items: Sequence[T],
+    get_event_group: Callable[[T], str | None],
+) -> list[list[T]]:
+    """Partition a person's facts into separate slips when 2+ distinct non-empty event groups exist.
+
+    When `items` is empty, or all `event_group` values are None/empty or identical (fewer than 2
+    distinct non-empty groups), preserves the exact single-`RecordRow` grouping.
+    """
+    if not items:
+        return [[]]
+    distinct_non_empty: set[str] = set()
+    normalized: list[tuple[str, T]] = []
+    for item in items:
+        raw = get_event_group(item)
+        key = raw.strip() if isinstance(raw, str) else ""
+        if key:
+            distinct_non_empty.add(key)
+        normalized.append((key, item))
+    if len(distinct_non_empty) < 2:
+        return [list(items)]
+    buckets: OrderedDict[str, list[T]] = OrderedDict()
+    for key, item in normalized:
+        buckets.setdefault(key, []).append(item)
+    return list(buckets.values())
 
 
 def resolve_mention_for_fact(
@@ -353,6 +967,42 @@ def resolve_mention_for_fact(
                 mention=mention,
                 matched_person_id=None,
                 candidate_person_ids=tuple(p.person_id for p in mentioned_in_transcript),
+                is_new_person=False,
+                scoped_locked=False,
+                clause_person_unambiguous=False,
+            )
+        # No known person name appeared verbatim in full_transcript: check historical clues
+        history_res = resolve_by_history_clues(fact_content, known_people)
+        if history_res is None and full_transcript and full_transcript != fact_content:
+            history_res = resolve_by_history_clues(full_transcript, known_people)
+        if history_res is not None:
+            if history_res.matched_person_id is not None:
+                if (
+                    fact_person_id_hint is not None
+                    and fact_person_id_hint in by_id
+                    and fact_person_id_hint != history_res.matched_person_id
+                ):
+                    return MentionResolution(
+                        mention=mention,
+                        matched_person_id=None,
+                        candidate_person_ids=(history_res.matched_person_id, fact_person_id_hint),
+                        is_new_person=False,
+                        scoped_locked=False,
+                        clause_person_unambiguous=False,
+                    )
+                return MentionResolution(
+                    mention=history_res.mention,
+                    matched_person_id=history_res.matched_person_id,
+                    candidate_person_ids=history_res.candidate_person_ids,
+                    is_new_person=False,
+                    scoped_locked=False,
+                    clause_person_unambiguous=history_res.clause_person_unambiguous
+                    and (not entangled_clause),
+                )
+            return MentionResolution(
+                mention=mention,
+                matched_person_id=None,
+                candidate_person_ids=history_res.candidate_person_ids,
                 is_new_person=False,
                 scoped_locked=False,
                 clause_person_unambiguous=False,

@@ -1,7 +1,7 @@
 // voice.js — D3 hold-to-talk on the left orb with the split-arc gesture.
 // drag up = 自动分析 (global) · right/default = this person (current) · far = cancel (red, no popup).
 // < 300 ms → discarded with a quiet '按住说话' hint. Real waveform from an AnalyserNode.
-import { $, svg } from '../dom.js';
+import { $, h, svg } from '../dom.js';
 import { store } from '../store.js';
 import { MIC_SVG } from '../icons.js';
 import { computeZone, routeFor, decideRelease, shouldAutoStop, formatTimer, MAX_HOLD_MS } from '../voice-logic.js';
@@ -12,8 +12,9 @@ import { actions } from '../actions.js';
 
 const NEAR_CAP_MS = MAX_HOLD_MS - 10000;
 
-let hold = null; // { pointerId, ox, oy, t0, zone, rec, recReady, raf, timer, finished }
+let hold = null; // { pointerId, ox, oy, t0, zone, rec, recReady, raf, timer, finished, level }
 let hintTimer = null;
+let zoneCaptionEl = null;
 
 function els() {
   return {
@@ -34,6 +35,11 @@ function isDirectory() {
   return store.get().view === 'directory' || !store.get().activePersonId;
 }
 
+function activePersonName() {
+  const s = store.get();
+  return s.people[s.activePersonId]?.nameCn || '此人';
+}
+
 function announce(text) {
   const { live } = els();
   if (live) live.textContent = text;
@@ -47,16 +53,40 @@ export function showHoldHint() {
   hintTimer = setTimeout(() => hint.classList.remove('is-visible'), 3200);
 }
 
-function setZone(zone) {
+function updateZoneCaption(zone) {
+  if (!zoneCaptionEl) return;
+  if (zone === 'cancel') zoneCaptionEl.textContent = '松开即可取消';
+  else if (zone === 'global' || isDirectory()) zoneCaptionEl.textContent = '松开 · 自动整理人物与要点';
+  else zoneCaptionEl.textContent = `松开 · 收进「${activePersonName()}」`;
+}
+
+function setZone(zone, { force = false } = {}) {
   const { stage, app } = els();
   if (!hold) return;
+  const changed = hold.zone !== zone;
+  if (!changed && !force) return;
   hold.zone = zone;
   stage.dataset.voiceZone = zone;
   app.dataset.voiceCancel = String(zone === 'cancel');
+  updateZoneCaption(zone);
+  if (changed) {
+    try {
+      navigator.vibrate?.(zone === 'cancel' ? 14 : 7);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function clearCanvas() {
+  const { canvas } = els();
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  ctx?.clearRect(0, 0, canvas.width, canvas.height);
 }
 
 function drawSilk(now) {
-  const { canvas } = els();
+  const { canvas, stage } = els();
   if (!hold || !canvas) return;
   const ctx = canvas.getContext('2d');
   const w = canvas.width;
@@ -64,30 +94,30 @@ function drawSilk(now) {
   const mid = hgt / 2;
   const t = now * 0.0046;
   const level = hold.recReady ? hold.rec.level() : 0.12;
-  hold.level = hold.level == null ? level : hold.level * 0.7 + level * 0.3;
-  const gain = 0.35 + hold.level * 1.9;
+  hold.level = hold.level == null ? level : hold.level * 0.72 + level * 0.28;
+  const gain = 0.36 + hold.level * 1.9;
   const zone = hold.zone;
   const ribbons =
     zone === 'cancel'
       ? [
-          { color: 'rgba(255, 245, 244, 0.92)', amp: 18, freq: 0.013, speed: 0.95, lw: 4 },
-          { color: 'rgba(255, 198, 192, 0.58)', amp: 12, freq: 0.02, speed: -0.75, lw: 3 },
+          { color: 'rgba(255, 245, 244, 0.94)', amp: 18, freq: 0.013, speed: 0.95, lw: 4 },
+          { color: 'rgba(255, 198, 192, 0.6)', amp: 12, freq: 0.02, speed: -0.75, lw: 3 },
         ]
       : zone === 'global'
         ? [
-            { color: 'rgba(218, 150, 56, 0.88)', amp: 24, freq: 0.015, speed: 1.35, lw: 4.2 },
-            { color: 'rgba(92, 168, 236, 0.65)', amp: 18, freq: 0.021, speed: -1.05, lw: 3.4 },
-            { color: 'rgba(176, 128, 232, 0.45)', amp: 12, freq: 0.028, speed: 1.65, lw: 2.6 },
+            { color: 'rgba(218, 150, 56, 0.9)', amp: 24, freq: 0.015, speed: 1.35, lw: 4.2 },
+            { color: 'rgba(92, 168, 236, 0.68)', amp: 18, freq: 0.021, speed: -1.05, lw: 3.4 },
+            { color: 'rgba(176, 128, 232, 0.46)', amp: 12, freq: 0.028, speed: 1.65, lw: 2.6 },
           ]
         : [
-            { color: 'rgba(218, 142, 58, 0.86)', amp: 24, freq: 0.015, speed: 1.25, lw: 4.2 },
-            { color: 'rgba(238, 116, 56, 0.48)', amp: 17, freq: 0.021, speed: -0.95, lw: 3.2 },
+            { color: 'rgba(218, 142, 58, 0.88)', amp: 24, freq: 0.015, speed: 1.25, lw: 4.2 },
+            { color: 'rgba(238, 116, 56, 0.5)', amp: 17, freq: 0.021, speed: -0.95, lw: 3.2 },
             { color: 'rgba(182, 128, 92, 0.34)', amp: 11, freq: 0.0275, speed: 1.6, lw: 2.6 },
           ];
   ctx.clearRect(0, 0, w, hgt);
   ribbons.forEach((rb, i) => {
     ctx.beginPath();
-    for (let x = 0; x <= w; x += 4) {
+    for (let x = 0; x <= w; x += 3) {
       const env = Math.sin((x / w) * Math.PI);
       const y = mid + Math.sin(x * rb.freq + t * rb.speed + i) * Math.cos(x * 0.007 - t * 0.6) * Math.min(rb.amp * gain, mid - 2) * env;
       if (x === 0) ctx.moveTo(x, y);
@@ -98,7 +128,6 @@ function drawSilk(now) {
     ctx.lineCap = 'round';
     ctx.stroke();
   });
-  const { stage } = els();
   stage.style.setProperty('--voice-level', hold.level.toFixed(3));
   hold.raf = requestAnimationFrame(drawSilk);
 }
@@ -117,10 +146,10 @@ function tick() {
 
 function openStage() {
   const { app, stage, orb, labelRight, timer } = els();
-  const person = store.get().people[store.get().activePersonId];
   const directory = isDirectory();
-  labelRight.textContent = directory ? '默认此人' : `收进「${person?.nameCn || '此人'}」`;
+  labelRight.textContent = directory ? '默认此人' : `收进「${activePersonName()}」`;
   stage.dataset.directory = String(directory);
+  stage.style.setProperty('--voice-level', '0');
   timer.textContent = '0:00';
   stage.classList.add('is-active');
   stage.setAttribute('aria-hidden', 'false');
@@ -132,11 +161,13 @@ function closeStage() {
   const { app, stage, orb, puck, pill } = els();
   stage.classList.remove('is-active');
   stage.setAttribute('aria-hidden', 'true');
+  stage.style.setProperty('--voice-level', '0');
   app.dataset.voiceHolding = 'false';
   app.dataset.voiceCancel = 'false';
   orb.classList.remove('is-holding');
   puck.classList.remove('is-dragging');
   pill.classList.remove('voice-near-cap');
+  clearCanvas();
 }
 
 async function begin(e) {
@@ -155,7 +186,7 @@ async function begin(e) {
     level: null,
   };
   const current = hold;
-  setZone(current.zone);
+  setZone(current.zone, { force: true });
   openStage();
   current.raf = requestAnimationFrame(drawSilk);
   current.timer = setInterval(tick, 200);
@@ -225,8 +256,12 @@ async function finish(forcedZone) {
 }
 
 export function initVoice() {
-  const { orb, hint } = els();
+  const { orb, hint, stage, pill } = els();
   orb.prepend(svg(MIC_SVG, 'voice-orb-icon'));
+  if (stage && pill && !stage.querySelector('.voice-zone-caption')) {
+    zoneCaptionEl = h('span', { class: 'voice-zone-caption', 'aria-hidden': 'true' });
+    pill.after(zoneCaptionEl);
+  }
   orb.addEventListener('contextmenu', (e) => e.preventDefault());
   orb.addEventListener('pointerdown', (e) => {
     if (e.button !== undefined && e.button !== 0) return;
@@ -245,6 +280,12 @@ export function initVoice() {
   });
   orb.addEventListener('pointercancel', (e) => {
     if (hold && hold.pointerId === e.pointerId) {
+      hold.zone = 'cancel';
+      finish('cancel');
+    }
+  });
+  globalThis.addEventListener?.('blur', () => {
+    if (hold) {
       hold.zone = 'cancel';
       finish('cancel');
     }

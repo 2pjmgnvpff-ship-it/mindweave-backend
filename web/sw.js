@@ -1,6 +1,6 @@
 // sw.js — minimal offline shell. Caches the app shell + static assets only.
 // API traffic (/v1, /api, /auth media URLs) is NEVER cached: always straight to the network.
-const CACHE = 'mw-shell-2';
+const CACHE = 'mw-shell-3';
 const SHELL = [
   './',
   './index.html',

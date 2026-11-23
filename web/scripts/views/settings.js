@@ -66,6 +66,29 @@ export function openSettings({ onSignOut } = {}) {
       h('span', { class: 'edition-name', text: EDITION_LABEL[e] }),
     ),
   );
+  const statusFooter = h('p', { class: 'settings-ai-whisper', hidden: true });
+  api
+    .aiStatus()
+    .then((res) => {
+      if (!statusFooter.isConnected || !res) return;
+      const provider = res.aiPrimaryProvider || res.provider || '';
+      const isLive =
+        res.liveModelConfigured === true ||
+        res.live === true ||
+        res.connected === true ||
+        res.aiLive === true ||
+        res.mode === 'live' ||
+        (typeof provider === 'string' && provider.length > 0 && !/fake|mock|stub|offline/i.test(provider) && res.liveModelConfigured !== false && res.live !== false);
+      statusFooter.hidden = false;
+      statusFooter.replaceChildren(
+        h('span', { class: ['ai-whisper-dot', isLive && 'is-live'], 'aria-hidden': 'true' }),
+        h('span', { text: isLive ? '丘比特灵感已在线' : '丘比特轻演示模式' }),
+      );
+    })
+    .catch(() => {
+      /* graceful no-op if unavailable */
+    });
+
   openSheet({
     title: '我的设置',
     body: [
@@ -106,6 +129,7 @@ export function openSettings({ onSignOut } = {}) {
           h('small', { text: '手帐会安全地留在云端' }),
         ),
       ),
+      statusFooter,
     ],
   });
 }

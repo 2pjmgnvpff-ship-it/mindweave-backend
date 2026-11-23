@@ -72,6 +72,7 @@ button { cursor: pointer; }
   height: 100dvh;
   background: #f9f4ec;
   overflow: hidden;
+  overflow: clip;
   display: flex;
   flex-direction: column;
   isolation: isolate;
@@ -104,7 +105,7 @@ button { cursor: pointer; }
 /* --------------------------------------------------------------------------
    Paper canvas + 6 editions (cotton is default)
    -------------------------------------------------------------------------- */
-.journal-atelier-canvas { position: relative; flex: 1; width: 100%; height: 100%; overflow: hidden; isolation: isolate; transition: background 0.45s ease; }
+.journal-atelier-canvas { position: relative; flex: 1; width: 100%; height: 100%; overflow: hidden; overflow: clip; isolation: isolate; transition: background 0.45s ease; }
 .mw-viewport[data-journal-edition="cotton"] .journal-atelier-canvas {
   background: radial-gradient(circle at 86% 14%, rgba(255, 232, 198, 0.55) 0%, rgba(255, 244, 228, 0.18) 38%, transparent 65%), linear-gradient(165deg, #fbf6ef 0%, #f7efe3 54%, #f3e7d7 100%);
 }
@@ -174,21 +175,23 @@ button { cursor: pointer; }
 .hobo-quote-line { font-family: var(--font-serif); font-size: 9.5px; color: var(--ink-taupe); }
 
 /* --------------------------------------------------------------------------
-   Top-left folio bar (settings gear · back pill · date · subject)
+   Top-left ultra-minimal bar (gear · back pill · person cover · month · search)
    -------------------------------------------------------------------------- */
 .journal-top-left-bar {
-  position: absolute; top: calc(var(--top-pad) + 14px); left: 18px; z-index: 28;
-  display: inline-flex; align-items: center; gap: 8px; max-width: calc(100% - 120px); transition: left 0.3s ease;
+  position: absolute; top: calc(var(--top-pad) + 12px); left: 16px; z-index: 28;
+  display: inline-flex; align-items: center; gap: 6px; max-width: calc(100% - 102px); transition: left 0.3s ease;
 }
-.mw-viewport[data-journal-edition="hobonichi"][data-view-mode="person-journal"] .journal-top-left-bar { left: 150px; top: calc(var(--top-pad) + 16px); max-width: calc(100% - 240px); }
-.quiet-gear-btn {
-  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+.mw-viewport[data-journal-edition="hobonichi"][data-view-mode="person-journal"] .journal-top-left-bar { left: 146px; top: calc(var(--top-pad) + 15px); max-width: calc(100% - 232px); }
+.quiet-gear-btn, .quiet-search-btn {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  color: var(--ink-taupe); background: rgba(255, 252, 248, 0.55); border: 1px solid rgba(255, 255, 255, 0.8);
-  transition: color 0.2s ease, background 0.2s ease, transform 0.25s var(--ease-spring);
+  color: var(--ink-taupe); background: rgba(255, 252, 248, 0.56); border: 1px solid rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  transition: color 0.2s ease, background 0.2s ease, transform 0.25s var(--ease-spring), border-color 0.2s ease;
 }
 .quiet-gear-btn:hover { color: var(--ink-warm-brown); background: rgba(255, 255, 255, 0.9); transform: rotate(24deg); }
-.quiet-gear-btn svg { width: 16px; height: 16px; }
+.quiet-search-btn:hover, .quiet-search-btn.is-active { color: var(--ink-espresso); background: rgba(255, 255, 255, 0.94); border-color: rgba(207, 150, 56, 0.42); }
+.quiet-gear-btn svg, .quiet-search-btn svg { width: 14.5px; height: 14.5px; display: block; }
 .back-to-casual-pill {
   display: inline-flex; align-items: center; gap: 3px; padding: 4px 10px 4px 7px; border-radius: 999px;
   background: rgba(255, 252, 248, 0.88); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -198,21 +201,68 @@ button { cursor: pointer; }
 }
 .back-to-casual-pill:hover { background: #ffffff; transform: translateX(-2px); }
 .journal-folio-whisper {
-  display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-family: var(--font-serif);
-  font-size: 12.5px; letter-spacing: 0.08em; color: var(--ink-taupe);
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; font-family: var(--font-serif);
+  font-size: 13px; letter-spacing: 0.04em; color: var(--ink-taupe);
 }
-.folio-subject { font-weight: 600; color: var(--ink-warm-brown); letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.folio-subject-btn {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 132px;
+  padding: 4px 9px; border-radius: 999px; transition: background 0.2s ease, transform 0.2s var(--ease-spring);
+}
+.folio-subject-btn.is-interactive:hover { background: rgba(255, 253, 248, 0.82); }
+.folio-subject-btn.is-interactive:active { transform: scale(0.97); }
+.folio-subject-btn[disabled] { cursor: default; padding-left: 4px; }
+.folio-subject {
+  font-family: var(--font-serif); font-size: 15px; font-weight: 700; color: var(--ink-espresso);
+  letter-spacing: 0.05em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.folio-month-btn {
+  display: inline-flex; align-items: center; gap: 2px; padding: 4px 8px; border-radius: 999px; flex-shrink: 0;
+  max-width: 116px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-family: var(--font-serif); font-size: 12px; font-weight: 600; color: var(--ink-taupe);
+  background: rgba(255, 252, 248, 0.45); transition: color 0.18s ease, background 0.18s ease;
+}
+.folio-month-btn:hover { color: var(--ink-espresso); background: rgba(255, 253, 248, 0.88); }
+.folio-month-caret { font-size: 9px; opacity: 0.72; }
+
+/* ---- Floating frosted Spotlight Search bar ---- */
+.spotlight-bar {
+  position: absolute; top: calc(var(--top-pad) + 50px); left: 16px; right: 94px; z-index: 34;
+  display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 7px 0 12px; border-radius: 999px;
+  background: rgba(255, 253, 249, 0.92); backdrop-filter: blur(22px) saturate(155%); -webkit-backdrop-filter: blur(22px) saturate(155%);
+  border: 1px solid rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 28px rgba(42, 26, 14, 0.12), inset 0 1px 0 #ffffff;
+  animation: spotlightDrop 0.22s var(--ease-spring) both;
+}
+@keyframes spotlightDrop {
+  from { opacity: 0; transform: translateY(-8px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.spotlight-icon { width: 14px; height: 14px; color: var(--ink-taupe); display: inline-flex; flex-shrink: 0; }
+.spotlight-icon svg { width: 100%; height: 100%; }
+.spotlight-input {
+  flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink-espresso); outline: none;
+  user-select: text; -webkit-user-select: text;
+}
+.spotlight-input::placeholder { color: var(--ink-faint); }
+.spotlight-input::-webkit-search-cancel-button { display: none; }
+.spotlight-count { font-size: 11px; font-weight: 600; color: var(--ink-taupe); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.spotlight-close {
+  width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  color: var(--ink-taupe); background: rgba(38, 25, 21, 0.05); transition: background 0.18s ease, color 0.18s ease;
+}
+.spotlight-close:hover { background: rgba(38, 25, 21, 0.1); color: var(--ink-espresso); }
+.spotlight-close svg { width: 12px; height: 12px; }
 
 /* --------------------------------------------------------------------------
    Top-right tactile arrow pushpin (gold / silver / crystal)
    -------------------------------------------------------------------------- */
 .top-right-arrow-pin-anchor {
   position: absolute; top: var(--top-pad); right: 12px; z-index: 58;
-  display: flex; flex-direction: column; align-items: flex-end;
+  display: flex; flex-direction: column; align-items: flex-end; pointer-events: none;
   transition: opacity 0.24s ease, transform 0.24s ease;
 }
 .mw-viewport[data-view-mode="casual-directory"] .top-right-arrow-pin-anchor { opacity: 0; pointer-events: none; transform: scale(0.88); }
-.pinned-arrow-tack-btn { position: relative; width: 78px; height: 78px; display: flex; align-items: center; justify-content: center; transition: transform 0.24s var(--ease-spring); }
+.pinned-arrow-tack-btn { position: relative; width: 78px; height: 78px; display: flex; align-items: center; justify-content: center; pointer-events: auto; transition: transform 0.24s var(--ease-spring); }
 .pinned-arrow-tack-btn:hover { transform: scale(1.06) translate(-1px, 1px); }
 .pinned-arrow-tack-btn.is-striking { animation: arrowPinStrike 0.48s var(--ease-spring); }
 @keyframes arrowPinStrike {

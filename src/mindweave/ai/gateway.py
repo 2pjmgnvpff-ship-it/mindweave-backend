@@ -43,6 +43,7 @@ from mindweave.ai.schemas.contracts import (
     TranscribeInput,
     TranscribeOutput,
 )
+from mindweave.ai.validators.asr_postprocess import postprocess_asr_transcript
 from mindweave.ai.validators.citations import (
     StreamingCitationProcessor,
     enforce_companion_citations,
@@ -166,6 +167,7 @@ def _mask_extract_payload(payload: ExtractRecordInput) -> ExtractRecordInput:
         p.model_copy(
             update={
                 "role_tag": mask_hard_pii(p.role_tag).masked_text,
+                "recent_facts": [mask_hard_pii(rf).masked_text for rf in p.recent_facts[:6]],
             }
         )
         for p in payload.known_persons
@@ -174,6 +176,57 @@ def _mask_extract_payload(payload: ExtractRecordInput) -> ExtractRecordInput:
         update={
             "text": mask_hard_pii(payload.text).masked_text,
             "known_persons": masked_persons,
+            "recent_history_hints": [
+                mask_hard_pii(h).masked_text for h in payload.recent_history_hints
+            ],
+        }
+    )
+
+
+def _sanitize_extract_output(
+    out: ExtractRecordOutput,
+    payload: ExtractRecordInput,
+) -> ExtractRecordOutput:
+    """Strip any hallucinated person_id not present in `payload.known_persons`."""
+    valid_ids = {p.person_id for p in payload.known_persons}
+    hallucinated_any = False
+
+    clean_persons = []
+    for p in out.persons:
+        matched = p.matched_person_id
+        if matched is not None and matched not in valid_ids:
+            matched = None
+            hallucinated_any = True
+        cands = [cid for cid in p.candidate_person_ids if cid in valid_ids]
+        if len(cands) != len(p.candidate_person_ids):
+            hallucinated_any = True
+        clean_persons.append(
+            p.model_copy(
+                update={
+                    "matched_person_id": matched,
+                    "candidate_person_ids": cands,
+                }
+            )
+        )
+
+    clean_facts = []
+    for f in out.facts:
+        pid = f.person_id
+        if pid is not None and pid not in valid_ids:
+            pid = None
+            hallucinated_any = True
+        clean_facts.append(f.model_copy(update={"person_id": pid}))
+
+    if not hallucinated_any:
+        return out
+
+    return out.model_copy(
+        update={
+            "persons": clean_persons,
+            "facts": clean_facts,
+            "needs_disambiguation": (
+                True if not out.scoped_person_locked else out.needs_disambiguation
+            ),
         }
     )
 
@@ -303,16 +356,28 @@ class ModelGateway(ModelGatewayPort):
             self._assert_provider_allowed(provider_name)
         return chain
 
+    def _provider_chain_for_task(self, task: str) -> list[str]:
+        base_chain = self._provider_chain()
+        if task == "transcribe" and self._settings.ai_asr_provider != "inherit":
+            asr_provider = self._settings.ai_asr_provider
+            self._assert_provider_allowed(asr_provider)
+            chain: list[str] = [asr_provider]
+            for provider_name in base_chain:
+                if provider_name not in chain:
+                    chain.append(provider_name)
+            return chain
+        return base_chain
+
     def _resolve_model(self, task: str, provider: str) -> str:
         s = self._settings
         if provider == "gemini":
             return s.gemini_model_chat if task == "ask_relationship" else s.gemini_model_fast
         if provider == "dashscope":
-            return (
-                s.dashscope_vision_model
-                if task == "parse_screenshot"
-                else s.dashscope_extract_model
-            )
+            if task == "parse_screenshot":
+                return s.dashscope_vision_model
+            if task == "transcribe":
+                return s.dashscope_asr_model
+            return s.dashscope_extract_model
         if provider == "ark":
             return s.ark_chat_model
         if provider == "deepseek":
@@ -380,7 +445,7 @@ class ModelGateway(ModelGatewayPort):
         timeout_sec = self._resolve_timeout(task)
         last_error_code = "all_providers_failed"
 
-        for provider_name in self._provider_chain():
+        for provider_name in self._provider_chain_for_task(task):
             adapter = self._adapters.get(provider_name)
             if adapter is None:
                 continue
@@ -570,11 +635,25 @@ class ModelGateway(ModelGatewayPort):
         session: AsyncSession | None = None,
     ) -> TranscribeOutput:
         masked_names = [mask_hard_pii(n).masked_text for n in payload.known_person_names]
-        masked_payload = payload.model_copy(update={"known_person_names": masked_names})
+        masked_active = (
+            mask_hard_pii(payload.active_person_name).masked_text
+            if payload.active_person_name
+            else None
+        )
+        masked_snippets = [mask_hard_pii(s).masked_text for s in payload.recent_context_snippets]
+        masked_payload = payload.model_copy(
+            update={
+                "known_person_names": masked_names,
+                "active_person_name": masked_active,
+                "recent_context_snippets": masked_snippets,
+            }
+        )
         rendered = self._prompts.render(
             "transcribe_audio",
             language=masked_payload.language,
+            active_person_name=masked_active,
             known_person_names_json=masked_names,
+            recent_context_json=masked_snippets,
         )
         out, _, _ = await self._execute_structured(
             scope=scope,
@@ -586,7 +665,22 @@ class ModelGateway(ModelGatewayPort):
             media_mime_type=masked_payload.mime_type,
             session=session,
         )
-        return out
+        raw_clean = out.raw_transcript.strip()
+        corr_seed = out.corrected_transcript.strip()
+        if not raw_clean and not corr_seed:
+            return out.model_copy(update={"raw_transcript": "", "corrected_transcript": ""})
+        polished = postprocess_asr_transcript(
+            corr_seed or raw_clean,
+            active_person_name=masked_active,
+            known_person_names=masked_names,
+            recent_context_snippets=masked_snippets,
+        )
+        return out.model_copy(
+            update={
+                "raw_transcript": raw_clean,
+                "corrected_transcript": polished,
+            }
+        )
 
     async def parse_screenshot(
         self,
@@ -631,6 +725,7 @@ class ModelGateway(ModelGatewayPort):
                 "aliases": p.aliases,
                 "tier": p.tier.value,
                 "role_tag": p.role_tag,
+                "recent_facts": p.recent_facts[:6],
             }
             for p in masked_payload.known_persons
         ]
@@ -650,9 +745,10 @@ class ModelGateway(ModelGatewayPort):
                 else None
             ),
             known_persons_json=known_json,
+            recent_history_json=masked_payload.recent_history_hints,
             user_input=masked_payload.text,
         )
-        return await self._execute_structured(
+        raw_out, prompt_ver, model_profile = await self._execute_structured(
             scope=scope,
             task="extract_record",
             rendered_prompt=rendered,
@@ -660,6 +756,8 @@ class ModelGateway(ModelGatewayPort):
             structured_context={"payload": masked_payload.model_dump(mode="json")},
             session=session,
         )
+        sanitized = _sanitize_extract_output(raw_out, masked_payload)
+        return sanitized, prompt_ver, model_profile
 
     async def generate_companion_reply(
         self,

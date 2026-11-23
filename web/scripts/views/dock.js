@@ -1,5 +1,5 @@
 // dock.js — centre capsule: who's page am I on, tap/scrub to switch between core people and 记繁琐.
-// Silver (记恨) people only ever show a neutral monogram seal — never a photo.
+// Silver (记恨) people strictly show a neutral monogram seal — never a photo — in all states.
 import { h, clear, svg, $ } from '../dom.js';
 import { store } from '../store.js';
 import { monogramOf, sealStyle } from '../decor.js';
@@ -9,15 +9,25 @@ import { actions } from '../actions.js';
 
 const MAX_CORE = 6;
 let expanded = false;
-let scrub = null; // { pointerId, moved }
+let scrub = null; // { pointerId, moved, wasExpanded, x, y, lastTarget }
 let lastKey = '';
+let scrubTipEl = null;
+
+function isSilverCloaked(person) {
+  return (person?.tier || 'crystal') === 'silver';
+}
+
+function canShowAvatarPhoto(person) {
+  return !isSilverCloaked(person) && Boolean(person?.avatarUrl);
+}
 
 function face(person, cls) {
   const tier = person.tier || 'crystal';
-  const usePhoto = tier !== 'silver' && person.avatarUrl;
+  const cloaked = isSilverCloaked(person);
+  const usePhoto = canShowAvatarPhoto(person);
   const el = h('span', {
-    class: [cls, tier === 'silver' && 'is-cloaked'],
-    style: usePhoto || tier === 'silver' ? {} : sealStyle(person),
+    class: [cls, cloaked && 'is-cloaked'],
+    style: usePhoto || cloaked ? {} : sealStyle(person),
     dataset: { tier },
   });
   if (usePhoto) el.appendChild(h('img', { src: person.avatarUrl, alt: '', draggable: 'false' }));
@@ -46,17 +56,20 @@ function expandedItems(s) {
   const core = s.coreIds.map((id) => s.people[id]).filter(Boolean).slice(0, MAX_CORE);
   const wrap = h('div', { class: 'capsule-expanded-items' });
   for (const p of core) {
+    const tier = p.tier || 'crystal';
+    const cloaked = isSilverCloaked(p);
+    const usePhoto = canShowAvatarPhoto(p);
     const selected = s.view === 'journal' && s.activePersonId === p.id;
     const btn = h('button', {
       type: 'button',
-      class: ['capsule-obj-avatar', selected && 'is-selected', p.tier === 'silver' && 'is-cloaked'],
-      dataset: { tier: p.tier, personId: p.id },
-      style: p.tier === 'silver' || (p.avatarUrl && p.tier !== 'silver') ? {} : sealStyle(p),
-      'aria-label': `${p.nameCn}（${TIER_LABEL[p.tier]?.short || ''}）`,
+      class: ['capsule-obj-avatar', selected && 'is-selected', cloaked && 'is-cloaked'],
+      dataset: { tier, personId: p.id, scrubName: p.nameCn },
+      style: usePhoto || cloaked ? {} : sealStyle(p),
+      'aria-label': `${p.nameCn}（${TIER_LABEL[tier]?.short || ''}）`,
       'aria-pressed': String(selected),
       tabindex: expanded ? '0' : '-1',
     });
-    if (p.tier !== 'silver' && p.avatarUrl) btn.appendChild(h('img', { src: p.avatarUrl, alt: '', draggable: 'false' }));
+    if (usePhoto) btn.appendChild(h('img', { src: p.avatarUrl, alt: '', draggable: 'false' }));
     else btn.textContent = monogramOf(p);
     wrap.appendChild(btn);
   }
@@ -66,7 +79,7 @@ function expandedItems(s) {
       {
         type: 'button',
         class: ['capsule-obj-avatar', 'is-casual-icon', s.view === 'directory' && 'is-selected'],
-        dataset: { tier: 'crystal', directory: 'true' },
+        dataset: { tier: 'crystal', directory: 'true', scrubName: '记繁琐' },
         'aria-label': `记繁琐名册（${s.casualIds.length} 位）`,
         'aria-pressed': String(s.view === 'directory'),
         tabindex: expanded ? '0' : '-1',
@@ -77,9 +90,34 @@ function expandedItems(s) {
   return { wrap, count: core.length + 1 };
 }
 
+function personKey(p) {
+  return p ? `${p.tier}:${p.nameCn}:${isSilverCloaked(p) ? 'cloak' : p.avatarUrl || ''}` : '';
+}
+
+function updateScrubTip(capsule, target) {
+  if (!scrubTipEl) return;
+  const label = target?.dataset?.scrubName;
+  if (!label || !expanded) {
+    scrubTipEl.classList.remove('is-visible');
+    return;
+  }
+  const capRect = capsule.getBoundingClientRect();
+  const itemRect = target.getBoundingClientRect();
+  const centerX = itemRect.left + itemRect.width / 2 - capRect.left;
+  scrubTipEl.textContent = label;
+  scrubTipEl.style.left = `${centerX}px`;
+  scrubTipEl.classList.add('is-visible');
+}
+
+function clearScrubFocus(capsule) {
+  capsule?.querySelectorAll('.is-scrub-focus').forEach((n) => n.classList.remove('is-scrub-focus'));
+  scrubTipEl?.classList.remove('is-visible');
+}
+
 function render(s) {
   const capsule = $('#capsule');
-  const key = [expanded, s.view, s.activePersonId, s.coreIds.join(), s.casualIds.length, ...s.coreIds.map((id) => `${s.people[id]?.tier}${s.people[id]?.nameCn}`)].join('|');
+  const active = s.people[s.activePersonId];
+  const key = [expanded, s.view, s.activePersonId, personKey(active), s.coreIds.join(), s.casualIds.length, ...s.coreIds.map((id) => personKey(s.people[id]))].join('|');
   if (key === lastKey) return;
   lastKey = key;
   clear(capsule);
@@ -88,21 +126,23 @@ function render(s) {
   capsule.classList.toggle('is-expanded', expanded);
   const { wrap, count } = expandedItems(s);
   capsule.style.setProperty('--expanded-capsule-w', `${Math.max(150, count * 48 + 16)}px`);
-  capsule.append(h('div', { class: 'capsule-landscape-bg', 'aria-hidden': 'true' }), h('div', { class: 'capsule-glass-sheen', 'aria-hidden': 'true' }), collapsed(s), wrap);
-  const active = s.people[s.activePersonId];
+  scrubTipEl = h('span', { class: 'capsule-scrub-tip', 'aria-hidden': 'true' });
+  capsule.append(h('div', { class: 'capsule-landscape-bg', 'aria-hidden': 'true' }), h('div', { class: 'capsule-glass-sheen', 'aria-hidden': 'true' }), collapsed(s), wrap, scrubTipEl);
   capsule.setAttribute('aria-label', s.view === 'directory' ? '正在看记繁琐名册，点一下切换人物' : active ? `正在看「${active.nameCn}」，点一下切换人物` : '切换人物');
 }
 
 function setExpanded(on) {
   if (expanded === on) return;
   expanded = on;
-  $('#capsule').setAttribute('aria-expanded', String(on));
+  const capsule = $('#capsule');
+  capsule.setAttribute('aria-expanded', String(on));
   render(store.get());
   if (on) {
     document.addEventListener('pointerdown', outside, true);
     $('#capsule .capsule-obj-avatar.is-selected')?.focus({ preventScroll: true });
   } else {
     document.removeEventListener('pointerdown', outside, true);
+    clearScrubFocus(capsule);
   }
 }
 
@@ -130,7 +170,7 @@ export function initDock() {
   capsule.addEventListener('pointerdown', (e) => {
     const s = store.get();
     if (!s.coreIds.length && !s.casualIds.length) return;
-    scrub = { pointerId: e.pointerId, moved: false, wasExpanded: expanded, x: e.clientX, y: e.clientY };
+    scrub = { pointerId: e.pointerId, moved: false, wasExpanded: expanded, x: e.clientX, y: e.clientY, lastTarget: null };
     if (!expanded) setExpanded(true);
     try {
       capsule.setPointerCapture(e.pointerId);
@@ -144,15 +184,30 @@ export function initDock() {
     const target = itemAt(e.clientX, e.clientY);
     capsule.querySelectorAll('.is-scrub-focus').forEach((n) => n !== target && n.classList.remove('is-scrub-focus'));
     target?.classList.add('is-scrub-focus');
+    if (target !== scrub.lastTarget) {
+      scrub.lastTarget = target;
+      updateScrubTip(capsule, target);
+      if (target && scrub.moved) {
+        try {
+          navigator.vibrate?.(5);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   });
   capsule.addEventListener('pointerup', (e) => {
     if (!scrub || scrub.pointerId !== e.pointerId) return;
     const target = itemAt(e.clientX, e.clientY);
     const { moved, wasExpanded } = scrub;
     scrub = null;
+    clearScrubFocus(capsule);
     if (target && (moved || wasExpanded)) choose(target);
   });
-  capsule.addEventListener('pointercancel', () => (scrub = null));
+  capsule.addEventListener('pointercancel', () => {
+    scrub = null;
+    clearScrubFocus(capsule);
+  });
   capsule.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       const hadInnerFocus = capsule.contains(document.activeElement);

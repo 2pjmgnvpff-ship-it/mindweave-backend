@@ -29,6 +29,9 @@ _MODEL_PRICE_CNY_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-2.5-pro": (9.00, 72.00),
     "qwen-plus": (0.80, 2.00),
     "qwen-vl-max": (3.00, 9.00),
+    "qwen-audio-turbo": (0.40, 1.20),
+    "qwen-omni-turbo": (0.40, 1.20),
+    "qwen2.5-omni-7b": (0.30, 0.90),
     "doubao-1-5-pro-32k": (0.80, 2.00),
     "deepseek-chat": (2.00, 8.00),
 }

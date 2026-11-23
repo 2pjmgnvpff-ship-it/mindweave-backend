@@ -35,6 +35,9 @@ export const store = createStore({
   materials: {}, // personId → { items, nextCursor, hasMore, loading, loaded }
   pending: [], // optimistic slips: { id, personId|null, text, state }
   draftCount: 0,
+  journalFilter: 'all', // all | pinned
+  searchOpen: false,
+  searchQuery: '',
 });
 
 export function applyBootstrap(data) {
@@ -93,6 +96,17 @@ export function setMaterials(personId, page, { append = false } = {}) {
       [personId]: { items, nextCursor: page.nextCursor || null, hasMore: Boolean(page.hasMore), loaded: true, loading: false },
     },
   });
+}
+
+export function upsertMaterial(personId, material) {
+  if (!personId || !material?.id) return;
+  const s = store.get();
+  const prev = s.materials[personId] || { items: [], nextCursor: null, hasMore: false, loaded: true, loading: false };
+  const exists = prev.items.some((m) => m.id === material.id);
+  const items = exists
+    ? prev.items.map((m) => (m.id === material.id ? { ...m, ...material } : m))
+    : [material, ...prev.items];
+  store.set({ materials: { ...s.materials, [personId]: { ...prev, items } } });
 }
 
 export function patchMaterial(personId, materialId, patch) {

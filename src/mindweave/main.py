@@ -64,6 +64,31 @@ class ReadinessStatusResponse(CamelModel):
     database: str = Field(default="ok")
 
 
+class AiRuntimeStatusResponse(CamelModel):
+    environment: str
+    ai_primary_provider: str
+    ai_fallback_provider: str
+    live_model_configured: bool
+    voice_asr_ready: bool = Field(default=True)
+
+
+_LIVE_PROVIDER_KEY_ATTRS: dict[str, str] = {
+    "gemini": "gemini_api_key",
+    "dashscope": "dashscope_api_key",
+    "ark": "ark_api_key",
+    "deepseek": "deepseek_api_key",
+}
+
+
+def _is_live_model_configured(settings: Settings) -> bool:
+    """Return True iff an active non-fake AI provider has a non-blank API key configured."""
+    for provider in (settings.ai_primary_provider, settings.ai_fallback_provider):
+        key_attr = _LIVE_PROVIDER_KEY_ATTRS.get(provider)
+        if key_attr is not None and bool(str(getattr(settings, key_attr, "")).strip()):
+            return True
+    return False
+
+
 def _resolve_request_id(raw_header: str | None) -> str:
     if raw_header:
         candidate = raw_header.strip()
@@ -237,6 +262,35 @@ def create_app(
             return HTMLResponse(content=workbench_path.read_text(encoding="utf-8"))
 
     canonical_prefix = resolved_settings.api_prefix.rstrip("/") or "/v1"
+
+    async def meta_ai_status(request: Request) -> AiRuntimeStatusResponse:
+        active_settings = get_container(request).settings
+        return AiRuntimeStatusResponse(
+            environment=active_settings.environment,
+            ai_primary_provider=active_settings.ai_primary_provider,
+            ai_fallback_provider=active_settings.ai_fallback_provider,
+            live_model_configured=_is_live_model_configured(active_settings),
+            voice_asr_ready=True,
+        )
+
+    app.add_api_route(
+        f"{canonical_prefix}/meta/ai-status",
+        meta_ai_status,
+        methods=["GET"],
+        response_model=AiRuntimeStatusResponse,
+        tags=["ops"],
+        include_in_schema=False,
+    )
+    if canonical_prefix != "/api/v1":
+        app.add_api_route(
+            "/api/v1/meta/ai-status",
+            meta_ai_status,
+            methods=["GET"],
+            response_model=AiRuntimeStatusResponse,
+            tags=["ops"],
+            include_in_schema=False,
+        )
+
     for module_router in _ALL_MODULE_ROUTERS:
         app.include_router(module_router, prefix=canonical_prefix)
         # V10 frontend compatibility alias (`/api/v1/...`), omitted from canonical OpenAPI snapshot

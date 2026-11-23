@@ -24,6 +24,7 @@ class KnownPersonRef(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     tier: Tier = Tier.CRYSTAL
     role_tag: str = ""
+    recent_facts: list[str] = Field(default_factory=list)
 
 
 class TranscribeInput(BaseModel):
@@ -33,6 +34,8 @@ class TranscribeInput(BaseModel):
     mime_type: str = "audio/webm"
     known_person_names: list[str] = Field(default_factory=list)
     language: str = "zh-CN"
+    active_person_name: str | None = None
+    recent_context_snippets: list[str] = Field(default_factory=list)
 
 
 class TranscribeOutput(BaseModel):
@@ -85,6 +88,7 @@ class ExtractedFactItem(BaseModel):
     lunar_month: int | None = None
     lunar_day: int | None = None
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+    event_group: str | None = None
 
 
 class ExtractRecordInput(BaseModel):
@@ -97,6 +101,7 @@ class ExtractRecordInput(BaseModel):
     scoped_person_tier: Tier | None = None
     input_source: str = "text"  # voice | text | image | chat
     known_persons: list[KnownPersonRef] = Field(default_factory=list)
+    recent_history_hints: list[str] = Field(default_factory=list)
 
 
 class ExtractRecordOutput(BaseModel):
