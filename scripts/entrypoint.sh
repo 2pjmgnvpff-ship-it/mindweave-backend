@@ -76,4 +76,9 @@ if [ "${MINDWEAVE_MIGRATE_ON_BOOT:-false}" = "true" ]; then
   alembic upgrade head
 fi
 
+if [ "${MINDWEAVE_AUTO_SEED_DEMO:-true}" = "true" ] && [ "${MINDWEAVE_ENVIRONMENT:-dev}" = "dev" ] && [ -f "/app/scripts/seed_demo.py" ]; then
+  echo "[mindweave] Ensuring demo@mindweave.app showcase workspace is seeded..."
+  python /app/scripts/seed_demo.py --email demo@mindweave.app || echo "[mindweave] WARN: demo seed skipped" >&2
+fi
+
 exec uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}"

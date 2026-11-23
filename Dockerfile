@@ -57,6 +57,7 @@ COPY --from=builder --chown=mindweave:mindweave /app/migrations /app/migrations
 # Product PWA served same-origin at `/` (`web/_v10_reference` & `web/tests` are excluded via .dockerignore)
 COPY --chown=mindweave:mindweave web /app/web
 COPY --chown=mindweave:mindweave scripts/entrypoint.sh /app/scripts/entrypoint.sh
+COPY --chown=mindweave:mindweave scripts/seed_demo.py /app/scripts/seed_demo.py
 RUN chmod +x /app/scripts/entrypoint.sh
 
 USER mindweave:mindweave
