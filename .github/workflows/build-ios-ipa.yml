@@ -36,15 +36,15 @@ concurrency:
 
 jobs:
   build-ipa:
-    name: Build arm64 MindWeave.ipa (Xcode 16)
-    runs-on: macos-15
+    name: Build arm64 MindWeave.ipa
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16 toolchain
+      - name: Select Xcode toolchain
         run: |
           set -euo pipefail
           XCODE_16_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
