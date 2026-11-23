@@ -38,7 +38,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>MWDefaultAPIBaseURL</key>
-	<string>https://mindweave-backend.run.app</string>
+	<string>https://mindweave-backend-kou46qyjxa-de.a.run.app</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

@@ -91,7 +91,7 @@ struct ServerConfigSheet: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Self.mutedInk)
 
-            TextField("https://mindweave-backend.run.app", text: $draftURL)
+            TextField("https://mindweave-backend-kou46qyjxa-de.a.run.app", text: $draftURL)
                 .keyboardType(.URL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)

@@ -28,7 +28,8 @@ final class LockedValue<T>: @unchecked Sendable {
 @MainActor
 final class ServerConfigStore: ObservableObject {
     static let storageKey = "app.mindweave.apiBaseURL"
-    static let fallbackBaseURLString = "https://mindweave-backend.run.app"
+    static let fallbackBaseURLString = "https://mindweave-backend-kou46qyjxa-de.a.run.app"
+    private static let legacyPlaceholderURLString = "https://mindweave-backend.run.app"
 
     /// Build-time default URL from Info.plist (`MWDefaultAPIBaseURL`), falling back to Cloud Run.
     static var defaultBaseURLString: String {
@@ -73,8 +74,16 @@ final class ServerConfigStore: ObservableObject {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        let saved = userDefaults.string(forKey: Self.storageKey)
-        let resolvedString = saved.flatMap(Self.normalizeURLString) ?? Self.defaultBaseURLString
+        let saved = userDefaults.string(forKey: Self.storageKey).flatMap(Self.normalizeURLString)
+        let resolvedString: String
+        if let saved, saved != Self.legacyPlaceholderURLString {
+            resolvedString = saved
+        } else {
+            resolvedString = Self.defaultBaseURLString
+            if saved == Self.legacyPlaceholderURLString {
+                userDefaults.removeObject(forKey: Self.storageKey)
+            }
+        }
         let resolvedURL = URL(string: resolvedString) ?? URL(string: Self.fallbackBaseURLString)!
         self.apiBaseURLString = resolvedString
         self.urlBox = LockedValue(resolvedURL)
