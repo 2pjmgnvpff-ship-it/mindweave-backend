@@ -28,7 +28,7 @@ on:
       - ".github/workflows/build-ios-ipa.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ios-ipa-${{ github.ref }}
@@ -280,3 +280,24 @@ jobs:
           path: ios/build/MindWeave.ipa
           retention-days: 30
           if-no-files-found: error
+
+      - name: Publish MindWeave.ipa to GitHub Release
+        if: github.event_name != 'pull_request' && (github.ref_name == 'ios-ipa-build' || github.ref_name == 'main')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v1.0.0-ios"
+          SHA="$(shasum -a 256 ios/build/MindWeave.ipa | awk '{print $1}')"
+          NOTES="MindWeave (心络) arm64 iOS IPA (Xcode Release build, SHA-256: \`${SHA}\`)."
+          if gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" ios/build/MindWeave.ipa -R "${GITHUB_REPOSITORY}" --clobber
+            gh release edit "${TAG}" -R "${GITHUB_REPOSITORY}" --notes "${NOTES}"
+          else
+            gh release create "${TAG}" ios/build/MindWeave.ipa \
+              -R "${GITHUB_REPOSITORY}" \
+              --target "${GITHUB_REF_NAME}" \
+              --title "MindWeave iOS v1.0.0" \
+              --notes "${NOTES}"
+          fi
+          gh release view "${TAG}" -R "${GITHUB_REPOSITORY}" --json url,assets --jq '{releaseUrl: .url, ipaUrl: .assets[0].url, size: .assets[0].size}'
