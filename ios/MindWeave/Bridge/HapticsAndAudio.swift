@@ -103,10 +103,15 @@ enum NativeAudioSession {
     static func activateForVoiceAndPlayback() {
         let session = AVAudioSession.sharedInstance()
         do {
+            #if compiler(>=6.2)
+            let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers]
+            #else
+            let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+            #endif
             try session.setCategory(
                 .playAndRecord,
                 mode: .default,
-                options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+                options: options
             )
             try session.setActive(true, options: [])
         } catch {

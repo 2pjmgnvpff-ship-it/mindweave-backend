@@ -309,7 +309,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             proxyResponse = URLResponse(
                 url: originalURL,
                 mimeType: response.mimeType,
-                expectedContentLength: response.expectedContentLength,
+                expectedContentLength: Int(clamping: response.expectedContentLength),
                 textEncodingName: response.textEncodingName
             )
         }
