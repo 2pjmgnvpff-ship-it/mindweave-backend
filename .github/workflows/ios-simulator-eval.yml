@@ -228,14 +228,14 @@ jobs:
             -derivedDataPath "$PWD/ios/DerivedDataSim" \
             build-for-testing 2>&1 | tee sim_eval_out/xcodebuild_build.log
 
-          # Start continuous real iOS Simulator H.264 video capture
+          # Start continuous real iOS Simulator H.264 video capture & record exact UTC epoch for frame-accurate markers
+          python3 -c "import time; print(f'{time.time():.3f}')" > sim_eval_out/video_start_epoch.txt
           xcrun simctl io "${UDID}" recordVideo --codec=h264 --force sim_eval_out/real_ios_simulator_walkthrough.mp4 > sim_eval_out/record_video.log 2>&1 &
           REC_PID=$!
-          sleep 1.5
+          sleep 1.2
 
-          # Run real XCUITest hands-on walkthrough on the booted iOS Simulator
+          # Run real XCUITest hands-on walkthrough on the booted iOS Simulator (zero IOSurface screenshot lock contention!)
           set +e
-          rm -rf sim_eval_out/MindWeaveSimEval.xcresult
           xcodebuild \
             -project ios/MindWeave.xcodeproj \
             -scheme MindWeave \
@@ -243,7 +243,7 @@ jobs:
             -sdk iphonesimulator \
             -destination "id=${UDID}" \
             -derivedDataPath "$PWD/ios/DerivedDataSim" \
-            -resultBundlePath "$PWD/sim_eval_out/MindWeaveSimEval.xcresult" \
+            -enableCodeCoverage NO \
             -only-testing:MindWeaveUITests/MindWeaveSimulatorEvalTests/testFullRealIOSSimulatorWalkthrough \
             test-without-building 2>&1 | tee sim_eval_out/xcodebuild_test.log
           TEST_STATUS=${PIPESTATUS[0]}
@@ -254,51 +254,12 @@ jobs:
           wait "${REC_PID}" || true
           sleep 1
 
-          echo "=== Raw Video Artifact ==="
+          echo "=== Real iOS Simulator Video Artifact ==="
           ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4 || true
-          if command -v ffmpeg >/dev/null 2>&1 && [[ -f sim_eval_out/real_ios_simulator_walkthrough.mp4 ]]; then
-            ffmpeg -y -i sim_eval_out/real_ios_simulator_walkthrough.mp4 \
-              -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -r 30 \
-              -vf "scale=586:-2" -movflags +faststart \
-              sim_eval_out/real_ios_simulator_walkthrough_compact.mp4 && \
-            mv sim_eval_out/real_ios_simulator_walkthrough_compact.mp4 sim_eval_out/real_ios_simulator_walkthrough.mp4
-            ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4
-          fi
-
-          # Extract ONLY our lossless numbered Retina PNG screenshots (`01_sim_*.png`, ...) from .xcresult
-          xcrun xcresulttool export attachments \
-            --path "$PWD/sim_eval_out/MindWeaveSimEval.xcresult" \
-            --output-path "$PWD/sim_eval_out/raw_attachments" || true
-
-          python3 - <<'PY'
-          import json, os, re, shutil
-          raw_dir = "sim_eval_out/raw_attachments"
-          out_dir = "sim_eval_out/screenshots"
-          os.makedirs(out_dir, exist_ok=True)
-          manifest_path = os.path.join(raw_dir, "manifest.json")
-          exported = 0
-          if os.path.exists(manifest_path):
-              data = json.load(open(manifest_path))
-              for entry in data:
-                  for att in entry.get("attachments", []):
-                      src = os.path.join(raw_dir, att.get("exportedFileName", ""))
-                      human = att.get("suggestedHumanReadableName", "") or att.get("exportedFileName", "")
-                      base = os.path.basename(human)
-                      if not re.match(r"^\d{2}_sim_", base):
-                          continue
-                      clean_name = re.sub(r"_\d+_[0-9A-F-]+\.png$", ".png", base, flags=re.IGNORECASE)
-                      if not clean_name.lower().endswith(".png"):
-                          clean_name = f"{clean_name}.png"
-                      if os.path.exists(src):
-                          shutil.copy2(src, os.path.join(out_dir, clean_name))
-                          exported += 1
-          print(f"Exported {exported} lossless Retina Simulator screenshots to {out_dir}")
-          for f in sorted(os.listdir(out_dir)):
-              print(" -", f)
-          PY
+          grep "MW_STEP_MARK|" sim_eval_out/xcodebuild_test.log | tee sim_eval_out/step_marks.txt || true
 
           echo "=== Backend HTTP Error Check ==="
-          grep -E '" (4[0-9]{2}|5[0-9]{2}) ' sim_eval_out/backend.log || echo "ZERO 4xx/5xx backend HTTP errors!"
+          grep -E "status_code=[45]" sim_eval_out/backend.log || echo "ZERO 4xx/5xx backend HTTP errors!"
 
           # Shut down simulator cleanly
           xcrun simctl shutdown "${UDID}" || true
@@ -308,14 +269,15 @@ jobs:
 
           exit "${TEST_STATUS}"
 
-      - name: Upload Real iOS Simulator Video, Retina Screenshots & Logs
+      - name: Upload Real iOS Simulator Video, Step Markers & Logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: MindWeave-Real-iOS-Simulator-Eval
           path: |
             sim_eval_out/real_ios_simulator_walkthrough.mp4
-            sim_eval_out/screenshots/*.png
+            sim_eval_out/video_start_epoch.txt
+            sim_eval_out/step_marks.txt
             sim_eval_out/backend.log
             sim_eval_out/xcodebuild_test.log
             sim_eval_out/record_video.log
