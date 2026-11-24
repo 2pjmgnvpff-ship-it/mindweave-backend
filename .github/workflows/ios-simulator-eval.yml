@@ -106,6 +106,7 @@ jobs:
           export MINDWEAVE_ENVIRONMENT="dev"
           export MINDWEAVE_EMAIL_PROVIDER="noop"
           export MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE="true"
+          export MINDWEAVE_OTP_RESEND_COOLDOWN_SECONDS="0"
           export MINDWEAVE_AI_PRIMARY_PROVIDER="fake"
           export MINDWEAVE_AI_FALLBACK_PROVIDER="none"
           export MINDWEAVE_EMBED_WORKER_IN_API="true"
@@ -129,13 +130,15 @@ jobs:
 
           # Upload one real photographic slip to 妈妈 so Scale-1 & Scale-2 render real photo cards
           python3 - <<'PY'
-          import json, subprocess, urllib.request
+          import json, subprocess, urllib.request, uuid
 
           def api_json(method, path, payload=None, token=None):
               data = json.dumps(payload).encode() if payload is not None else None
               headers = {"content-type": "application/json"}
               if token:
                   headers["authorization"] = f"Bearer {token}"
+              if method in ("POST", "PATCH", "DELETE"):
+                  headers["idempotency-key"] = str(uuid.uuid4())
               req = urllib.request.Request(f"http://127.0.0.1:8766{path}", data=data, headers=headers, method=method)
               with urllib.request.urlopen(req, timeout=15) as r:
                   return json.loads(r.read().decode())
@@ -143,16 +146,18 @@ jobs:
           ch = api_json("POST", "/v1/auth/email/otp:request", {"email": "demo@mindweave.app"})
           auth = api_json("POST", "/v1/auth/email/otp:verify", {
               "challengeId": ch["challengeId"],
+              "email": "demo@mindweave.app",
               "code": ch["devOtpCode"],
           })
           token = auth["accessToken"]
-          persons = api_json("GET", "/v1/persons", token=token).get("items", [])
+          boot = api_json("GET", "/v1/bootstrap", token=token)
+          persons = list((boot.get("people") or {}).values())
           mom = next((p for p in persons if p.get("nameCn") == "妈妈"), persons[0])
           subprocess.run([
               "curl", "-fsS", "-X", "POST",
               f"http://127.0.0.1:8766/v1/persons/{mom['id']}/materials",
               "-H", f"Authorization: Bearer {token}",
-              "-H", "Idempotency-Key: sim-seed-photo-01",
+              "-H", f"Idempotency-Key: {uuid.uuid4()}",
               "-F", "photo=@web/assets/gleb/lake_bench_clean.jpg;type=image/jpeg",
               "-F", "kind=photo",
               "-F", "title=周末陪妈妈在湖边晒太阳",
