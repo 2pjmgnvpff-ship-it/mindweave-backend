@@ -34,14 +34,14 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             Thread.sleep(forTimeInterval: seconds)
         }
 
-        func firstButton(containing text: String, timeout: TimeInterval = 8) -> XCUIElement {
+        func firstButton(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
             let el = app.buttons.matching(pred).firstMatch
             _ = el.waitForExistence(timeout: timeout)
             return el
         }
 
-        func firstStaticText(containing text: String, timeout: TimeInterval = 8) -> XCUIElement {
+        func firstStaticText(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
             let el = app.staticTexts.matching(pred).firstMatch
             _ = el.waitForExistence(timeout: timeout)
@@ -49,7 +49,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         }
 
         @discardableResult
-        func tapButton(containing text: String, timeout: TimeInterval = 8, settle: TimeInterval = 0.85) -> Bool {
+        func tapButton(containing text: String, timeout: TimeInterval = 22, settle: TimeInterval = 0.9) -> Bool {
             let btn = firstButton(containing: text, timeout: timeout)
             guard btn.exists else { return false }
             if btn.isHittable {
@@ -61,7 +61,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             return true
         }
 
-        func tapBackdropTop(settle: TimeInterval = 0.8) {
+        func tapBackdropTop(settle: TimeInterval = 0.85) {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.085)).tap()
             pause(settle)
         }
@@ -85,7 +85,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         /// so English-default iOS Simulator keyboards never crash trying to synthesize CJK keycodes.
         @discardableResult
         func enterText(_ text: String, into element: XCUIElement) -> Bool {
-            guard element.waitForExistence(timeout: 6) else { return false }
+            guard element.waitForExistence(timeout: 12) else { return false }
             element.tap()
             pause(0.55)
             if text.allSatisfy({ $0.isASCII }) {
@@ -97,7 +97,6 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             pause(0.2)
             element.tap()
             pause(0.35)
-            // Try real iOS edit callout menu ("粘贴" / "Paste") first
             for pasteLabel in ["粘贴", "Paste"] {
                 let item = app.menuItems[pasteLabel]
                 if item.waitForExistence(timeout: 1.4) {
@@ -106,7 +105,6 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                     return true
                 }
             }
-            // Fallback: long-press to invoke callout menu
             element.press(forDuration: 0.65)
             pause(0.35)
             for pasteLabel in ["粘贴", "Paste"] {
@@ -133,8 +131,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
 
         func loginWithEmail(_ email: String, snapSplash: Bool) {
             let emailField = app.textFields.firstMatch
-            XCTAssertTrue(emailField.waitForExistence(timeout: 20), "Auth email input should appear on splash")
-            // Allow boot veil fade-out animation to complete cleanly so lakeside glass splash is crystal clear
+            XCTAssertTrue(emailField.waitForExistence(timeout: 30), "Auth email input should appear on splash")
             pause(1.8)
             if snapSplash {
                 snap("sim_splash_lakeside")
@@ -156,12 +153,16 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             emailField.typeText(email)
             pause(0.5)
 
-            XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 10, settle: 1.6), "Should tap 获取验证码")
+            XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 15, settle: 1.0), "Should tap 获取验证码")
+            let verifyBtn = firstButton(containing: "翻开手帐", timeout: 30)
+            XCTAssertTrue(verifyBtn.exists, "OTP step 翻开手帐 button should appear")
+            pause(0.5)
             if snapSplash {
                 snap("sim_otp_step")
             }
 
-            XCTAssertTrue(tapButton(containing: "翻开手帐", timeout: 12, settle: 2.2), "Should tap 翻开手帐")
+            verifyBtn.tap()
+            pause(1.5)
         }
 
         // Launch MindWeave.app inside the real Apple iOS Simulator!
@@ -172,44 +173,49 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         // =====================================================================
         loginWithEmail("newuser_sim@example.com", snapSplash: true)
 
-        let step1Heading = firstStaticText(containing: "把重要的人", timeout: 14)
+        let step1Heading = firstStaticText(containing: "把重要的人", timeout: 30)
         XCTAssertTrue(step1Heading.exists, "New user should land on Onboarding Step 1")
         pause(0.6)
         snap("sim_onb_step1")
 
-        let exampleChip = firstButton(containing: "妈妈", timeout: 8)
+        let exampleChip = firstButton(containing: "妈妈", timeout: 15)
         if exampleChip.exists {
             exampleChip.tap()
             pause(0.7)
         }
-        XCTAssertTrue(tapButton(containing: "记下这句", timeout: 8, settle: 1.8), "Should submit Step 1 sentence")
+        XCTAssertTrue(tapButton(containing: "记下这句", timeout: 15, settle: 1.0), "Should submit Step 1 sentence")
 
-        _ = firstStaticText(containing: "关系分类", timeout: 12)
+        // Wait generously for /v1/captures on loaded macOS CI runner before snapping Step 2
+        let goldArrowBtn = firstButton(containing: "金箭", timeout: 35)
+        XCTAssertTrue(goldArrowBtn.exists, "Onboarding Step 2 Gold arrow card should appear")
         pause(0.6)
         snap("sim_onb_step2")
 
-        XCTAssertTrue(tapButton(containing: "金箭", timeout: 8, settle: 2.2), "Should choose Gold arrow tier")
+        goldArrowBtn.tap()
+        pause(1.2)
 
-        let enterJournalBtn = firstButton(containing: "翻开", timeout: 16)
+        // Wait generously for Step 3 live Cupid reply & enter journal CTA
+        let enterJournalBtn = firstButton(containing: "翻开", timeout: 35)
         XCTAssertTrue(enterJournalBtn.exists, "Onboarding Step 3 enter journal button should appear")
-        pause(0.9)
+        pause(0.8)
         snap("sim_onb_step3_cupid")
 
         enterJournalBtn.tap()
-        pause(1.8)
+        _ = firstButton(containing: "设置", timeout: 30)
+        pause(1.2)
         snap("sim_newuser_journal_home")
 
         // Sign out via Settings -> switch to rich multi-year seeded demo user
-        XCTAssertTrue(tapButton(containing: "设置", timeout: 10, settle: 0.95), "Should open Settings")
-        XCTAssertTrue(tapButton(containing: "退出登录", timeout: 8, settle: 1.8), "Should sign out to splash")
+        XCTAssertTrue(tapButton(containing: "设置", timeout: 15, settle: 1.0), "Should open Settings")
+        XCTAssertTrue(tapButton(containing: "退出登录", timeout: 15, settle: 1.5), "Should sign out to splash")
 
         // =====================================================================
         // PART 2: RICH MULTI-YEAR DEMO USER DAILY LIFE (7 Personas, Gold/Silver/Crystal, Photos, Reminders, Pencil Drafts)
         // =====================================================================
         loginWithEmail("demo@mindweave.app", snapSplash: false)
 
-        _ = firstButton(containing: "人物档案", timeout: 18)
-        pause(1.3)
+        _ = firstButton(containing: "人物档案", timeout: 35)
+        pause(1.5)
         snap("sim_demo_journal_home")
 
         // Real iOS finger scroll through photo slip, voice memo, pencil draft, then back up
@@ -260,101 +266,109 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         }
 
         // Peek + Edit + Stacked Chinese Lunar Date Wheel ABOVE Peek (P0-03 & P1-10)
-        let slipCandidate = app.webViews.firstMatch.otherElements.matching(
-            NSPredicate(format: "label CONTAINS[c] '妈妈' OR label CONTAINS[c] '核磁' OR label CONTAINS[c] '膝盖' OR label CONTAINS[c] '桂花'")
+        // Note: WKWebView exposes <article role="button"> slips as `app.buttons`!
+        let slipCandidate = app.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] '湖边' OR label CONTAINS[c] '桂花' OR label CONTAINS[c] '膝盖' OR label CONTAINS[c] 'osmanthus'")
         ).firstMatch
-        if slipCandidate.waitForExistence(timeout: 6) {
+        if slipCandidate.waitForExistence(timeout: 12) {
             slipCandidate.tap()
-            pause(1.0)
+            _ = firstButton(containing: "编辑", timeout: 12)
+            pause(0.8)
             snap("sim_peek_open")
-            if tapButton(containing: "编辑", timeout: 6, settle: 0.85) {
+            if tapButton(containing: "编辑", timeout: 10, settle: 0.9) {
                 snap("sim_peek_edit_mode")
-                if tapButton(containing: "202", timeout: 6, settle: 0.95) {
+                if tapButton(containing: "202", timeout: 10, settle: 1.0) {
                     snap("sim_date_wheel_stacked_above_peek")
-                    _ = tapButton(containing: "取消", timeout: 5, settle: 0.6)
+                    _ = tapButton(containing: "取消", timeout: 8, settle: 0.7)
                 }
-                _ = tapButton(containing: "取消", timeout: 5, settle: 0.6)
+                _ = tapButton(containing: "取消", timeout: 8, settle: 0.7)
             }
-            tapBackdropTop(settle: 0.85)
+            tapBackdropTop(settle: 0.9)
         }
 
         // Vellum Pocket + Lead Days PATCH (`提前 7 天`, P0-04) + Stacked Edit Person (P0-07)
-        if tapButton(containing: "人物档案", timeout: 8, settle: 1.1) {
+        if tapButton(containing: "人物档案", timeout: 12, settle: 1.0) {
+            _ = firstButton(containing: "编辑资料", timeout: 18)
+            pause(0.8)
             snap("sim_vellum_pocket")
-            if tapButton(containing: "提前 7 天", timeout: 5, settle: 0.95) {
+            if tapButton(containing: "提前 7 天", timeout: 8, settle: 1.2) {
                 snap("sim_vellum_lead7_patched")
             }
-            if tapButton(containing: "编辑资料", timeout: 6, settle: 0.95) {
+            if tapButton(containing: "编辑资料", timeout: 10, settle: 1.0) {
                 snap("sim_edit_person_stacked")
-                _ = tapButton(containing: "返回", timeout: 5, settle: 0.65)
+                _ = tapButton(containing: "返回", timeout: 8, settle: 0.7)
             }
-            tapBackdropTop(settle: 0.85)
+            tapBackdropTop(settle: 0.9)
         }
 
         // Scale-2 Monthly Gallery + Scale-3 Multi-Year Concentric 12-Month Rings (P1-11 & P1-12)
-        if tapButton(containing: "月册", timeout: 8, settle: 1.0) {
+        if tapButton(containing: "月册", timeout: 12, settle: 1.5) {
             snap("sim_scale2_monthly_gallery")
         }
-        if tapButton(containing: "年轮", timeout: 8, settle: 1.0) {
+        if tapButton(containing: "年轮", timeout: 12, settle: 1.5) {
             snap("sim_scale3_yearly_rings")
         }
-        _ = tapButton(containing: "纸页", timeout: 8, settle: 0.95)
+        _ = tapButton(containing: "纸页", timeout: 12, settle: 1.2)
 
         // Inner-4 Frosted Tray + Silver Tier Privacy Veil + People Directory + Recent Archive
-        if tapButton(containing: "轻点展开人物栏", timeout: 8, settle: 0.9) {
+        if tapButton(containing: "轻点展开人物栏", timeout: 12, settle: 1.0) {
             snap("sim_inner4_frosted_tray")
-            if tapButton(containing: "陈经理", timeout: 6, settle: 1.1) {
+            if tapButton(containing: "陈经理", timeout: 10, settle: 2.0) {
                 snap("sim_silver_tier_veil")
             }
-            if tapButton(containing: "轻点展开人物栏", timeout: 8, settle: 0.85) {
-                if tapButton(containing: "全部人物", timeout: 6, settle: 1.0) {
+            if tapButton(containing: "轻点展开人物栏", timeout: 12, settle: 1.0) {
+                if tapButton(containing: "全部人物", timeout: 10, settle: 1.2) {
                     snap("sim_people_directory")
-                    if !tapButton(containing: "妈妈", timeout: 5, settle: 1.0) {
+                    if !tapButton(containing: "妈妈", timeout: 10, settle: 1.6) {
                         tapBackdropTop()
                     }
                 }
             }
-            if tapButton(containing: "轻点展开人物栏", timeout: 8, settle: 0.85) {
-                if tapButton(containing: "最近归档", timeout: 6, settle: 1.0) {
+            if tapButton(containing: "轻点展开人物栏", timeout: 12, settle: 1.0) {
+                if tapButton(containing: "最近归档", timeout: 10, settle: 1.6) {
                     snap("sim_recent_archive")
-                    tapBackdropTop(settle: 0.85)
+                    tapBackdropTop(settle: 0.9)
                 }
             }
         }
 
         // Cupid Companion Chat + REAL Apple iOS Keyboard + Reply & Citations + Right-Edge Drawer + New Thread
-        if tapButton(containing: "丘比特聊聊", timeout: 8, settle: 1.1) {
+        if tapButton(containing: "丘比特聊聊", timeout: 12, settle: 1.0) {
+            _ = firstButton(containing: "新对话", timeout: 18)
+            pause(0.9)
             snap("sim_cupid_chat_empty")
 
             let chatInput = app.textViews.firstMatch
-            if chatInput.waitForExistence(timeout: 6) {
+            if chatInput.waitForExistence(timeout: 12) {
                 chatInput.tap()
-                pause(0.85)
+                pause(1.0)
                 snap("sim_cupid_chat_real_ios_keyboard")
                 let pasted = enterText("最近关于妈妈有哪些需要提前留心的小事？", into: chatInput)
                 if pasted {
                     pause(0.5)
-                    _ = tapButton(containing: "发送", timeout: 5, settle: 2.8)
+                    _ = tapButton(containing: "发送", timeout: 10, settle: 1.5)
                 } else {
                     dismissKeyboardIfNeeded()
-                    _ = tapButton(containing: "最近有哪些", timeout: 6, settle: 2.8)
+                    _ = tapButton(containing: "最近有哪些", timeout: 10, settle: 1.5)
                 }
                 dismissKeyboardIfNeeded()
-                pause(0.7)
+                // Wait for streaming reply citation button to appear cleanly
+                _ = firstButton(containing: "核对手帐出处", timeout: 25)
+                pause(1.0)
                 snap("sim_cupid_chat_reply_citations")
             }
 
-            if tapButton(containing: "拉出手帐抽屉", timeout: 6, settle: 0.95) {
+            if tapButton(containing: "拉出手帐抽屉", timeout: 10, settle: 1.2) {
                 snap("sim_cupid_right_drawer")
                 app.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).tap()
-                pause(0.75)
+                pause(0.8)
             }
 
-            if tapButton(containing: "新对话", timeout: 6, settle: 0.85) {
+            if tapButton(containing: "新对话", timeout: 10, settle: 1.0) {
                 snap("sim_cupid_new_thread")
             }
 
-            _ = tapButton(containing: "回到手帐", timeout: 6, settle: 0.95)
+            _ = tapButton(containing: "回到手帐", timeout: 10, settle: 1.0)
         }
 
         // Settings + All 3 Distinct Pure Gleb Atmospheres (`晨光白瓷` / `素雅细格` / `柔光珠瓷`)

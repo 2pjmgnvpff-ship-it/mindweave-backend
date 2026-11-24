@@ -202,6 +202,10 @@ html.is-kb-open .splash-bottom-content { gap: 8px; }
       rgba(250, 245, 238, 0.72) 56%,
       rgba(250, 246, 240, 0.96) 76%,
       #FAF6F0 100%);
+  transition: background-color var(--mw-kb-dur, 250ms) ease;
+}
+html.is-kb-open .splash-bokeh-foreground {
+  background-color: rgba(250, 246, 240, 0.46);
 }
 .splash-warm-gradient {
   position: absolute; inset: 0; pointer-events: none; z-index: 1;
