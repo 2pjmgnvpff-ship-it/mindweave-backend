@@ -7,6 +7,7 @@
   padding: calc(var(--safe-top) + 56px) var(--pad-x) calc(var(--safe-bottom) + 124px);
 }
 .journal-virtual-stage, .journal-river-stage { position: relative; width: 100%; min-height: 120px; }
+.journal-river-stage.is-inflow { display: flex; flex-direction: column; gap: 12px; }
 .vr-row { position: absolute; left: 0; right: 0; top: 0; }
 
 /* ==================== EDITORIAL TWO-TONE GLEB HERO & SCALE BAR ==================== */
@@ -97,9 +98,11 @@
   background: var(--bg-soft); border: 1px solid var(--ink-rim);
 }
 .vellum-row-main { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.vellum-rem-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .vellum-line {
   flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; text-align: left; line-height: 1.5;
 }
+.vellum-line.is-reminder { width: 100%; display: block; }
 .vellum-line .mw-dot { align-self: center; }
 .vellum-line-when { font-size: 12px; font-weight: 600; color: var(--ink-accent); white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .vellum-line-text { font-size: 14px; font-weight: 500; color: var(--ink-primary); flex: 1; min-width: 0; word-break: break-word; }

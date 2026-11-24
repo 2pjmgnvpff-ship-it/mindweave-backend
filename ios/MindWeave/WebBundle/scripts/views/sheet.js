@@ -249,7 +249,7 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus, clas
     if (!sheetStack.includes(entry)) return;
     host.classList.add('is-open');
     syncBottomFade();
-    const target = initialFocus || sheet.querySelector('textarea, input:not([type="hidden"]), button:not(.sheet-grabber)') || sheet;
+    const target = initialFocus || sheet;
     if (target) {
       entry.focusTimerId = setTimeout(() => {
         entry.focusTimerId = 0;

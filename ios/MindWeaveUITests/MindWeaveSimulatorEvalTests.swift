@@ -229,7 +229,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         }
 
         // Peek + Edit + Stacked Chinese Lunar Date Wheel ABOVE Peek (P0-03 & P1-10)
-        let slipPred = NSPredicate(format: "label CONTAINS[c] '湖边' OR label CONTAINS[c] '桂花' OR label CONTAINS[c] '膝盖' OR label CONTAINS[c] 'osmanthus'")
+        let slipPred = NSPredicate(format: "label CONTAINS[c] '湖边长椅' OR label CONTAINS[c] '湖边'")
         let slipCandidate = app.buttons.matching(slipPred).firstMatch.waitForExistence(timeout: 4)
             ? app.buttons.matching(slipPred).firstMatch
             : app.webViews.firstMatch.descendants(matching: .any).matching(slipPred).firstMatch
@@ -254,23 +254,23 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         if tapButton(containing: "人物档案", timeout: 12, settle: 0.9) {
             _ = firstButton(containing: "编辑资料", timeout: 18)
             pause(0.7)
-            mark("sim_vellum_pocket", hold: 1.0)
+            mark("sim_vellum_pocket", hold: 1.8)
             if tapButton(containing: "提前 7 天", timeout: 8, settle: 1.0) {
-                mark("sim_vellum_lead7_patched", hold: 0.9)
+                mark("sim_vellum_lead7_patched", hold: 1.2)
             }
             if tapButton(containing: "编辑资料", timeout: 10, settle: 0.9) {
-                mark("sim_edit_person_stacked", hold: 1.0)
+                mark("sim_edit_person_stacked", hold: 1.2)
                 _ = tapButton(containing: "返回", timeout: 8, settle: 0.65)
             }
             tapBackdropTop(settle: 0.85)
         }
 
         // Scale-2 Monthly Gallery + Scale-3 Multi-Year Concentric 12-Month Rings (P1-11 & P1-12)
-        if tapButton(containing: "月册", timeout: 12, settle: 1.2) {
-            mark("sim_scale2_monthly_gallery", hold: 1.1)
+        if tapButton(containing: "月册", timeout: 12, settle: 1.4) {
+            mark("sim_scale2_monthly_gallery", hold: 1.8)
         }
-        if tapButton(containing: "年轮", timeout: 12, settle: 1.2) {
-            mark("sim_scale3_yearly_rings", hold: 1.1)
+        if tapButton(containing: "年轮", timeout: 12, settle: 1.4) {
+            mark("sim_scale3_yearly_rings", hold: 1.6)
         }
         _ = tapButton(containing: "纸页", timeout: 12, settle: 1.0)
 
@@ -309,8 +309,15 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                 mark("sim_cupid_chat_real_ios_keyboard", hold: 1.0)
                 let pasted = enterText("最近关于妈妈有哪些需要提前留心的小事？", into: chatInput)
                 if pasted {
-                    pause(0.45)
-                    _ = tapButton(containing: "发送", timeout: 10, settle: 1.4)
+                    pause(0.55)
+                    let exactSend = app.buttons.matching(NSPredicate(format: "label == %@", "发送")).firstMatch
+                    if exactSend.waitForExistence(timeout: 8) {
+                        exactSend.tap()
+                        pause(1.4)
+                    } else {
+                        dismissKeyboardIfNeeded()
+                        _ = tapButton(containing: "最近有哪些", timeout: 10, settle: 1.4)
+                    }
                 } else {
                     dismissKeyboardIfNeeded()
                     _ = tapButton(containing: "最近有哪些", timeout: 10, settle: 1.4)

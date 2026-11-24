@@ -175,20 +175,38 @@ function buildEditableItems(rawFacts, rawReminders) {
 
 function renderVellumRow(item, person, allReminders, { onJumpToRecord, onRemoved, onMutated }) {
   const tier = person.tier || 'crystal';
-  const lineBtn = h(
-    'button',
-    {
-      type: 'button',
-      class: ['vellum-line', item.pending && 'is-pending', !item.recordId && 'is-static'],
-      onClick: () => item.recordId && onJumpToRecord?.(item.recordId),
-    },
-    item.when ? h('span', { class: 'vellum-line-when', text: item.when }) : h('span', { class: 'mw-dot', 'aria-hidden': 'true' }),
-    h('span', { class: 'vellum-line-text', text: item.text }),
-  );
+  const isRem = item.kind === 'reminder' && Boolean(item.id);
   const ctrl = h('span', { class: 'vellum-rem-controls vellum-row-ctrl' });
-  const rowEl = h('div', { class: 'vellum-rem-row vellum-row' }, h('div', { class: 'vellum-row-main' }, lineBtn, ctrl));
+  const lineBtn = isRem
+    ? h(
+        'button',
+        {
+          type: 'button',
+          class: ['vellum-line', 'is-reminder', item.pending && 'is-pending', !item.recordId && 'is-static'],
+          onClick: () => item.recordId && onJumpToRecord?.(item.recordId),
+        },
+        h('span', { class: 'vellum-line-text', text: item.text }),
+      )
+    : h(
+        'button',
+        {
+          type: 'button',
+          class: ['vellum-line', item.pending && 'is-pending', !item.recordId && 'is-static'],
+          onClick: () => item.recordId && onJumpToRecord?.(item.recordId),
+        },
+        item.when ? h('span', { class: 'vellum-line-when', text: item.when }) : h('span', { class: 'mw-dot', 'aria-hidden': 'true' }),
+        h('span', { class: 'vellum-line-text', text: item.text }),
+      );
+  const rowEl = isRem
+    ? h(
+        'div',
+        { class: 'vellum-rem-row vellum-row' },
+        h('div', { class: 'vellum-rem-head' }, item.when ? h('span', { class: 'vellum-line-when', text: item.when }) : h('span', { class: 'mw-dot', 'aria-hidden': 'true' }), ctrl),
+        lineBtn,
+      )
+    : h('div', { class: 'vellum-rem-row vellum-row' }, h('div', { class: 'vellum-row-main' }, lineBtn, ctrl));
 
-  if (item.kind === 'reminder' && item.id) {
+  if (isRem) {
     const syncBtn = (b) => {
       const on = item.status === 'active';
       b.textContent = on ? '提醒中' : '开启提醒';

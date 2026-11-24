@@ -389,10 +389,12 @@ function renderPage(s) {
   }
 
   const ctx = { query, silverVeiled: isSilverVeiled(person.id), onToggleVeil: (v) => { silverVeilByPerson.set(person.id, v); lastRenderKey = ''; renderJournal(store.get()); }, onContextMenu: (m, cardEl) => handleSlipContextMenu(m, cardEl, person) };
-  if (typeof createVirtualRiver === 'function') {
+  if (typeof createVirtualRiver === 'function' && visible.length > 50) {
     river = createVirtualRiver({ scroller: scroll, stage, headerEl: headerStack, renderItem: (m) => renderMaterial(m, person, ctx), estimateHeight: (m) => (m.type === 'photo' && person.tier !== 'silver' ? 320 : m.type === 'voice' ? 148 : 112) });
     river.setItems(visible);
   } else {
+    river = null;
+    stage.classList.add('is-inflow');
     const frag = document.createDocumentFragment();
     for (const m of visible) frag.appendChild(renderMaterial(m, person, ctx));
     stage.appendChild(frag);

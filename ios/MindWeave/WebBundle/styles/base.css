@@ -69,7 +69,7 @@ span[aria-hidden="true"] > svg,
 .mw-stage { width: 100%; height: 100%; display: flex; justify-content: center; background: var(--bg-canvas); }
 .mw-viewport {
   position: relative; width: 100%; max-width: 440px; height: 100%;
-  overflow: hidden; contain: layout style paint; background: var(--bg-canvas); color: var(--ink-primary);
+  overflow: hidden; background: var(--bg-canvas); color: var(--ink-primary);
 }
 @media (min-width: 520px) {
   .mw-stage {

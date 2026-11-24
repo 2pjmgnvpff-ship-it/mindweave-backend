@@ -240,6 +240,7 @@ html.is-kb-open .muse-composer-wrap, html.is-kb-open .ai-chat-composer-wrap { pa
   background: rgba(255, 253, 250, 0.92); box-shadow: var(--shadow-float); border: 1px solid var(--glass-border);
   display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-secondary);
 }
+html.is-kb-open .b4-tipkit-popover { display: none; }
 .chat-voice-live-bar, .chat-voice-live-chip {
   display: none; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 15px; border-radius: 20px;
   background: rgba(255, 253, 250, 0.94); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
