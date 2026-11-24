@@ -1,8 +1,10 @@
-// offline-queue.js — local draft queue for captures that could not reach the server.
-// Storage is abstracted (IndexedDB in the browser, memory in tests). Audio blobs are
-// stored as ArrayBuffer + type for broad Safari compatibility.
+// offline-queue.js — IDB v2 offline write-ahead draft queue with Safari UnknownError auto-heal,
+// inFlightIds lease guard, 401 pause-until-relogin, and quarantined zero-silent-delete (<= 240L).
 
 import { isRetryableError } from './api/client.js';
+
+const IDB_VERSION = 2;
+const SAFARI_HEAL_DELAY_MS = 120;
 
 export async function toStorable(draft) {
   const rec = { ...draft };
@@ -10,6 +12,12 @@ export async function toStorable(draft) {
     rec.audio = { bytes: await draft.blob.arrayBuffer(), type: draft.blob.type || draft.mimeType || '' };
   }
   delete rec.blob;
+  if (draft.clientTranscript != null) rec.clientTranscript = String(draft.clientTranscript);
+  if (draft.speechEngine != null) rec.speechEngine = String(draft.speechEngine);
+  if (draft.audioDurationMs != null && Number.isFinite(Number(draft.audioDurationMs))) {
+    rec.audioDurationMs = Math.round(Number(draft.audioDurationMs));
+  }
+  if (!rec.status) rec.status = 'queued';
   return rec;
 }
 
@@ -26,43 +34,65 @@ export function memoryStorage() {
   const map = new Map();
   const clone = (v) => (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
   return {
-    async put(rec) {
-      map.set(rec.id, clone(rec));
-    },
-    async getAll() {
-      return Array.from(map.values()).map(clone);
-    },
-    async delete(id) {
-      map.delete(id);
-    },
+    async put(rec) { map.set(rec.id, clone(rec)); },
+    async getAll() { return Array.from(map.values()).map(clone); },
+    async delete(id) { map.delete(id); },
   };
+}
+
+function isSafariIdbCorruptErr(err) {
+  const name = String(err?.name || '');
+  const msg = String(err?.message || '');
+  return name === 'UnknownError' || name === 'InvalidStateError' || /connection is closing|backing store/i.test(msg);
 }
 
 export function idbStorage(dbName = 'mindweave-drafts', storeName = 'drafts') {
   let dbp = null;
+  const resetDb = () => {
+    if (dbp) {
+      dbp.then((db) => { try { db.close(); } catch { /* ignore */ } }).catch(() => {});
+      dbp = null;
+    }
+  };
   const open = () => {
     if (!dbp) {
       dbp = new Promise((resolve, reject) => {
-        const req = indexedDB.open(dbName, 1);
+        const req = indexedDB.open(dbName, IDB_VERSION);
         req.onupgradeneeded = () => {
-          if (!req.result.objectStoreNames.contains(storeName)) req.result.createObjectStore(storeName, { keyPath: 'id' });
+          const db = req.result;
+          const store = db.objectStoreNames.contains(storeName)
+            ? req.transaction.objectStore(storeName)
+            : db.createObjectStore(storeName, { keyPath: 'id' });
+          if (!store.indexNames.contains('by_status')) store.createIndex('by_status', 'status', { unique: false });
         };
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+          const db = req.result;
+          db.onversionchange = () => resetDb();
+          db.onclose = () => { dbp = null; };
+          resolve(db);
+        };
+        req.onerror = () => { dbp = null; reject(req.error); };
       });
     }
     return dbp;
   };
-  const tx = async (mode, fn) => {
+  const runTx = async (mode, fn) => {
     const db = await open();
     return new Promise((resolve, reject) => {
       const t = db.transaction(storeName, mode);
-      const store = t.objectStore(storeName);
-      const req = fn(store);
+      const req = fn(t.objectStore(storeName));
       t.oncomplete = () => resolve(req ? req.result : undefined);
       t.onerror = () => reject(t.error);
       t.onabort = () => reject(t.error);
     });
+  };
+  const tx = async (mode, fn) => {
+    try { return await runTx(mode, fn); } catch (err) {
+      if (!isSafariIdbCorruptErr(err)) throw err;
+      resetDb();
+      await new Promise((r) => setTimeout(r, SAFARI_HEAL_DELAY_MS));
+      return runTx(mode, fn);
+    }
   };
   return {
     put: (rec) => tx('readwrite', (s) => s.put(rec)),
@@ -71,12 +101,10 @@ export function idbStorage(dbName = 'mindweave-drafts', storeName = 'drafts') {
   };
 }
 
-/**
- * @param {{put, getAll, delete}} storage
- * @param {{send: (draft) => Promise<any>}} opts  send() must reuse draft.idemKey
- */
 export function createDraftQueue(storage, { send }) {
   let flushing = null;
+  let pausedForAuth = false;
+  const inFlightIds = new Set();
 
   async function add(draft) {
     if (!draft || !draft.id || !draft.idemKey) throw new Error('draft needs id and idemKey');
@@ -84,48 +112,95 @@ export function createDraftQueue(storage, { send }) {
       kind: draft.blob ? 'voice' : 'text',
       createdAt: new Date().toISOString(),
       attempts: 0,
+      status: 'queued',
       ...draft,
     });
     await storage.put(rec);
     return rec;
   }
 
-  async function list() {
+  async function listAllRaw() {
     const all = await storage.getAll();
-    return all.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt))).map(fromStorable);
+    return all.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
   }
 
-  async function count() {
-    return (await storage.getAll()).length;
+  async function list() { return (await listAllRaw()).filter((r) => r.status !== 'quarantined').map(fromStorable); }
+  async function listQuarantined() { return (await listAllRaw()).filter((r) => r.status === 'quarantined').map(fromStorable); }
+  async function listAll() { return (await listAllRaw()).map(fromStorable); }
+  async function count() { return (await storage.getAll()).filter((r) => r.status !== 'quarantined').length; }
+  async function quarantinedCount() { return (await storage.getAll()).filter((r) => r.status === 'quarantined').length; }
+
+  async function retryDraft(id) {
+    const rec = (await listAllRaw()).find((r) => r.id === id);
+    if (!rec) return false;
+    await storage.put({ ...rec, status: 'queued', lastError: null, attempts: 0 });
+    pausedForAuth = false;
+    return true;
   }
 
-  /** Send drafts oldest-first. Stops at the first retryable failure; drops permanent failures. */
+  async function discardDraft(id) {
+    inFlightIds.delete(id);
+    await storage.delete(id);
+  }
+
+  function pauseForAuth() { pausedForAuth = true; }
+  function resumeAuth() { pausedForAuth = false; return flush(); }
+
   function flush() {
+    if (pausedForAuth) return Promise.resolve({ sent: [], dropped: [], stopped: true, pausedForAuth: true });
     if (flushing) return flushing;
     flushing = (async () => {
       const sent = [];
       const dropped = [];
       let stopped = false;
-      for (const draft of await list()) {
+      const rawQueued = (await listAllRaw()).filter((r) => r.status !== 'quarantined');
+      for (const raw of rawQueued) {
+        if (inFlightIds.has(raw.id)) continue;
+        const draft = fromStorable(raw);
+        inFlightIds.add(raw.id);
         try {
           const result = await send(draft);
-          await storage.delete(draft.id);
+          await storage.delete(raw.id);
           sent.push({ draft, result });
         } catch (err) {
+          if (err && err.status === 401) { pausedForAuth = true; stopped = true; break; }
           if (isRetryableError(err)) {
+            await storage.put({ ...raw, attempts: (raw.attempts || 0) + 1, lastError: err?.message || null });
             stopped = true;
             break;
           }
-          await storage.delete(draft.id);
+          await storage.put({
+            ...raw,
+            status: 'quarantined',
+            attempts: (raw.attempts || 0) + 1,
+            lastError: err?.message || '发送未能完成',
+            quarantinedAt: new Date().toISOString(),
+          });
           dropped.push({ draft, error: err });
+        } finally {
+          inFlightIds.delete(raw.id);
         }
       }
-      return { sent, dropped, stopped };
-    })().finally(() => {
-      flushing = null;
-    });
+      return { sent, dropped, stopped, pausedForAuth };
+    })().finally(() => { flushing = null; });
     return flushing;
   }
 
-  return { add, list, count, flush };
+  return {
+    add,
+    list,
+    listAll,
+    listQuarantined,
+    count,
+    quarantinedCount,
+    flush,
+    retryDraft,
+    retryQuarantined: retryDraft,
+    discardDraft,
+    remove: discardDraft,
+    pauseForAuth,
+    resumeAuth,
+    resumePaused: resumeAuth,
+    isPausedForAuth: () => pausedForAuth,
+  };
 }

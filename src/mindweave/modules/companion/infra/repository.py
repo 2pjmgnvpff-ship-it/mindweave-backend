@@ -242,6 +242,7 @@ class CompanionRepository:
         scope: PersonScope,
         dek: bytes,
         citations: list[HydratedCitation],
+        current_tier: Tier | None = None,
     ) -> HydratedChatMessage:
         tier_snap = Tier.from_any(row.tier_snapshot)
         content = self._cipher.decrypt_str(
@@ -264,7 +265,10 @@ class CompanionRepository:
             )
 
         perspectives: list[str] = []
-        if row.perspectives_enc is not None and tier_snap is Tier.GOLD:
+        tier_allows_perspectives = tier_snap is Tier.GOLD and (
+            current_tier is None or current_tier is Tier.GOLD
+        )
+        if row.perspectives_enc is not None and tier_allows_perspectives:
             raw_p = self._cipher.decrypt_json(
                 dek,
                 row.perspectives_enc,
@@ -317,7 +321,8 @@ class CompanionRepository:
         limit: int = 20,
         order: Literal["asc", "desc"] = "asc",
     ) -> tuple[list[HydratedChatMessage], str | None, bool]:
-        await self.verify_person(session, scope)
+        person_row = await self.verify_person(session, scope)
+        current_tier = Tier.from_any(person_row.tier)
 
         stmt = select(ChatMessageRow).where(
             ChatMessageRow.user_id == scope.user_id,
@@ -432,6 +437,7 @@ class CompanionRepository:
                 scope=scope,
                 dek=dek,
                 citations=citations_by_msg.get(row.id, []),
+                current_tier=current_tier,
             )
             for row in page_rows
         ]

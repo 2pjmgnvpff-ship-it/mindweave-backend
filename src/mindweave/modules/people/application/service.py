@@ -747,7 +747,7 @@ class PeopleService:
             person_row = await self._repo.get_person_row(session, scope, person_id, for_update=True)
             if person_row.tier == Tier.SILVER.value:
                 raise ValidationFailedError(
-                    "银箭人物默认收起照片，不支持上传照片",
+                    "银盾边界页默认不保存照片",
                     extensions={"field": "tier"},
                 )
             dek = await self._container.load_user_dek(session, scope)

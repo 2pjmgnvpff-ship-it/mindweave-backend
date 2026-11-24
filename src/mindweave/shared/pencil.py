@@ -77,7 +77,7 @@ _REASON_HINTS: dict[PencilReason, str] = {
     PencilReason.POLARITY_FLIP: "和之前记的不一样 · 点一下确认",
     PencilReason.EXTRACTION_FAILED: "先替你记下原话 · 点一下整理",
     PencilReason.VENTING: "先替你收在冷静区",
-    PencilReason.NEW_PERSON: "第一次提到 TA · 点一下确认",
+    PencilReason.NEW_PERSON: "第一次提到这位朋友 · 轻点确认",
     PencilReason.AMBIGUOUS_PERSON: "说的是哪一位？点一下选",
     PencilReason.MULTI_PERSON: "说的是哪一位？点一下选",
     PencilReason.DATE_GLANCE: "点一下确认日期",

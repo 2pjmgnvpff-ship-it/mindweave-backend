@@ -4,17 +4,27 @@ set -eu
 PG_BIN_DIR="/usr/lib/postgresql/15/bin"
 LOCAL_PGDATA="${MINDWEAVE_LOCAL_PGDATA:-/tmp/mindweave-pgdata}"
 LOCAL_PGPORT="${MINDWEAVE_LOCAL_PGPORT:-55432}"
+EMBEDDED_PG_STARTED="false"
 
 mkdir -p "${MINDWEAVE_BLOB_STORAGE_DIR:-/tmp/mindweave-blobs}"
 
-# Auto-enable Gemini adapter when MINDWEAVE_GEMINI_API_KEY is provided
-if [ -n "${MINDWEAVE_GEMINI_API_KEY:-}" ] && [ -z "${MINDWEAVE_AI_PRIMARY_PROVIDER:-}" ]; then
-  export MINDWEAVE_AI_PRIMARY_PROVIDER="gemini"
-  export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-fake}"
-  export MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED="${MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED:-true}"
+# Auto-detect live AI provider only when MINDWEAVE_AI_PRIMARY_PROVIDER is unset.
+# Never silently inject `fake` as fallback outside explicit dev override.
+if [ -z "${MINDWEAVE_AI_PRIMARY_PROVIDER:-}" ]; then
+  if [ -n "${MINDWEAVE_GEMINI_API_KEY:-}" ]; then
+    export MINDWEAVE_AI_PRIMARY_PROVIDER="gemini"
+    export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-none}"
+    export MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED="${MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED:-true}"
+  elif [ -n "${MINDWEAVE_DEEPSEEK_API_KEY:-}" ]; then
+    export MINDWEAVE_AI_PRIMARY_PROVIDER="deepseek"
+    export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-none}"
+  elif [ -n "${MINDWEAVE_DASHSCOPE_API_KEY:-}" ]; then
+    export MINDWEAVE_AI_PRIMARY_PROVIDER="dashscope"
+    export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-none}"
+  fi
 fi
 
-# Zero-config standalone Cloud Run mode:
+# Mode B (Embedded PostgreSQL 15):
 # When MINDWEAVE_APP_DATABASE_URL is not configured externally, automatically boot an embedded
 # PostgreSQL 15 instance inside the container with full FORCE RLS roles & Alembic schema.
 if [ -z "${MINDWEAVE_APP_DATABASE_URL:-}" ] && [ -x "$PG_BIN_DIR/initdb" ]; then
@@ -27,6 +37,7 @@ if [ -z "${MINDWEAVE_APP_DATABASE_URL:-}" ] && [ -x "$PG_BIN_DIR/initdb" ]; then
     fi
     rm -f "$LOCAL_PGDATA/postmaster.pid"
     "$PG_BIN_DIR/postgres" -D "$LOCAL_PGDATA" -p "$LOCAL_PGPORT" -h 127.0.0.1 -k /tmp -c dynamic_shared_memory_type=mmap -c shared_buffers=64MB &
+    EMBEDDED_PG_STARTED="true"
 
     i=0
     while ! "$PG_BIN_DIR/pg_isready" -h 127.0.0.1 -p "$LOCAL_PGPORT" >/dev/null 2>&1; do
@@ -67,8 +78,12 @@ SQL
   export MINDWEAVE_MIGRATION_DATABASE_URL="postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:${LOCAL_PGPORT}/mindweave"
   export MINDWEAVE_MIGRATE_ON_BOOT="true"
   export MINDWEAVE_EMBED_WORKER_IN_API="${MINDWEAVE_EMBED_WORKER_IN_API:-true}"
+  export MINDWEAVE_CORS_ORIGINS="${MINDWEAVE_CORS_ORIGINS:-[\"mindweave://app\"]}"
+fi
+
+# Only expose dev OTP in response when explicitly running dev + noop email provider.
+if [ "${MINDWEAVE_ENVIRONMENT:-dev}" = "dev" ] && [ "${MINDWEAVE_EMAIL_PROVIDER:-noop}" = "noop" ]; then
   export MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE="${MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE:-true}"
-  export MINDWEAVE_CORS_ORIGINS="${MINDWEAVE_CORS_ORIGINS:-[\"*\"]}"
 fi
 
 if [ "${MINDWEAVE_MIGRATE_ON_BOOT:-false}" = "true" ]; then
@@ -81,4 +96,11 @@ if [ "${MINDWEAVE_AUTO_SEED_DEMO:-true}" = "true" ] && [ "${MINDWEAVE_ENVIRONMEN
   python /app/scripts/seed_demo.py --email demo@mindweave.app || echo "[mindweave] WARN: demo seed skipped" >&2
 fi
 
-exec uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+if [ "$EMBEDDED_PG_STARTED" = "true" ]; then
+  uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --no-access-log &
+  UVICORN_PID=$!
+  trap 'kill -TERM "$UVICORN_PID" 2>/dev/null || true; wait "$UVICORN_PID" 2>/dev/null || true; "$PG_BIN_DIR/pg_ctl" -D "$LOCAL_PGDATA" -m fast stop || true; exit 0' TERM INT
+  wait "$UVICORN_PID"
+else
+  exec uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --no-access-log
+fi

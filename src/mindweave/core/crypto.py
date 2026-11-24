@@ -19,6 +19,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
@@ -133,6 +134,13 @@ class EnvelopeCipher:
         self._max_entries = cache_max_entries
         self._lock = threading.Lock()
         self._cache: OrderedDict[UUID, _CachedDek] = OrderedDict()
+        self._eviction_hooks: list[Callable[[UUID | None], Any]] = []
+
+    def register_eviction_hook(self, hook: Callable[[UUID | None], Any]) -> None:
+        """Register a callback invoked on `evict_user_dek(uid)` and `clear_cache()` (`None`)."""
+        with self._lock:
+            if hook not in self._eviction_hooks:
+                self._eviction_hooks.append(hook)
 
     @property
     def kek_id(self) -> str:
@@ -176,12 +184,18 @@ class EnvelopeCipher:
             cached = self._cache.pop(user_id, None)
             if cached is not None:
                 cached.zeroize()
+            hooks = list(self._eviction_hooks)
+        for hook in hooks:
+            hook(user_id)
 
     def clear_cache(self) -> None:
         with self._lock:
             for cached in self._cache.values():
                 cached.zeroize()
             self._cache.clear()
+            hooks = list(self._eviction_hooks)
+        for hook in hooks:
+            hook(None)
 
     def _put_cache(self, user_id: UUID, dek: bytes) -> None:
         subkey = _derive_blind_subkey(dek, user_id)

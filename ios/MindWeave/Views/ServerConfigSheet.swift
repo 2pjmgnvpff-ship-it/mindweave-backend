@@ -1,7 +1,8 @@
+#if DEBUG
 import Foundation
 import SwiftUI
 
-/// Gleb-warm native SwiftUI sheet for configuring and verifying the MindWeave backend server URL.
+/// Gleb-warm native SwiftUI sheet for configuring and verifying the MindWeave backend server URL (Debug builds only).
 @MainActor
 struct ServerConfigSheet: View {
     private enum ConnectionTestState: Equatable {
@@ -381,3 +382,4 @@ struct ServerConfigSheet: View {
         return nil
     }
 }
+#endif

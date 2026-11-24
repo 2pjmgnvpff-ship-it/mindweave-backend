@@ -102,8 +102,8 @@ def test_expanded_ai_schemas_keep_backward_compatibility_and_forbid_extras() -> 
     [
         ("audio/webm", "webm"),
         ("audio/webm;codecs=opus", "webm"),
-        ("audio/mp4", "mp4"),
-        ("audio/m4a", "mp4"),
+        ("audio/mp4", "m4a"),
+        ("audio/m4a", "m4a"),
         ("audio/mpeg", "mp3"),
         ("audio/mp3", "mp3"),
         ("audio/wav", "wav"),
@@ -120,37 +120,42 @@ async def test_openai_compatible_adapter_supports_multimodal_input_audio_formats
     async def _handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
         captured_bodies.append(body)
+        sse_lines = [
+            "data: "
+            + json.dumps(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "content": '{"raw_transcript":"程经理约了周五","corrected_transcript":"陈经理约了周五","duration_ms":2100}'
+                            }
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            "data: "
+            + json.dumps({"choices": [], "usage": {"prompt_tokens": 90, "completion_tokens": 30}}),
+            "data: [DONE]",
+        ]
         return httpx.Response(
             200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": '{"raw_transcript":"程经理约了周五","corrected_transcript":"陈经理约了周五","duration_ms":2100}',
-                                }
-                            ]
-                        }
-                    }
-                ],
-                "usage": {"prompt_tokens": 90, "completion_tokens": 30},
-            },
+            headers={"content-type": "text/event-stream"},
+            content=("\n\n".join(sse_lines) + "\n\n").encode("utf-8"),
         )
 
     adapter = OpenAICompatibleAdapter(
         provider_name="dashscope",
         api_key="sk-dashscope-test",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        default_model="qwen-audio-turbo",
+        default_model="qwen3-omni-flash",
         transport=httpx.MockTransport(_handler),
     )
 
     resp = await adapter.complete(
         AdapterCallRequest(
             task="transcribe",
-            model="qwen-audio-turbo",
+            model="qwen3-omni-flash",
             prompt="请转写音频",
             temperature=0.0,
             response_schema=TranscribeOutput,
@@ -158,14 +163,18 @@ async def test_openai_compatible_adapter_supports_multimodal_input_audio_formats
             media_mime_type=mime_type,
         )
     )
-    assert resp.model == "qwen-audio-turbo"
+    assert resp.model == "qwen3-omni-flash"
     assert '"corrected_transcript":"陈经理约了周五"' in resp.text
+    assert resp.input_tokens == 90
+    assert resp.output_tokens == 30
     assert len(captured_bodies) == 1
+    assert captured_bodies[0]["stream"] is True
+    assert captured_bodies[0]["modalities"] == ["text"]
     user_content = captured_bodies[0]["messages"][-1]["content"]
     assert user_content[0] == {
         "type": "input_audio",
         "input_audio": {
-            "data": base64.b64encode(raw_audio).decode("ascii"),
+            "data": f"data:;base64,{base64.b64encode(raw_audio).decode('ascii')}",
             "format": expected_format,
         },
     }
@@ -177,13 +186,13 @@ async def test_openai_compatible_adapter_rejects_unsupported_non_image_audio_med
         provider_name="dashscope",
         api_key="sk-test",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        default_model="qwen-audio-turbo",
+        default_model="qwen3-omni-flash",
     )
     with pytest.raises(AdapterPermanentError, match="image/\\* or audio/\\*"):
         await adapter.complete(
             AdapterCallRequest(
                 task="transcribe",
-                model="qwen-audio-turbo",
+                model="qwen3-omni-flash",
                 prompt="hi",
                 media_bytes=b"%PDF-1.7",
                 media_mime_type="application/pdf",
@@ -248,7 +257,7 @@ async def test_gemini_adapter_normalizes_audio_mime_types_for_part_from_bytes(
 async def test_dedicated_asr_provider_routing_and_prod_cn_guardrails() -> None:
     routing = load_routing_config()
     assert routing.semantic_cache_enabled is False
-    assert routing.tasks["transcribe"].models["dashscope"] == "qwen-audio-turbo"
+    assert routing.tasks["transcribe"].models["dashscope"] == "qwen3-omni-flash"
 
     # prod_cn strictly forbids gemini & fake for ai_asr_provider too!
     strong_kek = "a" * 64
@@ -293,7 +302,7 @@ async def test_dedicated_asr_provider_routing_and_prod_cn_guardrails() -> None:
         settings,
         adapters={"dashscope": spy_dashscope, "deepseek": spy_deepseek},
     )
-    assert gw._resolve_model("transcribe", "dashscope") == "qwen-audio-turbo"
+    assert gw._resolve_model("transcribe", "dashscope") == "qwen3-omni-flash"
     assert gw._provider_chain_for_task("extract_record") == ["deepseek"]
     assert gw._provider_chain_for_task("transcribe") == ["dashscope", "deepseek"]
 
@@ -306,7 +315,7 @@ async def test_dedicated_asr_provider_routing_and_prod_cn_guardrails() -> None:
     )
     assert out.corrected_transcript == "陈经理说周五前发报价单"
     assert len(spy_dashscope.recorded_requests) == 1
-    assert spy_dashscope.recorded_requests[0].model == "qwen-audio-turbo"
+    assert spy_dashscope.recorded_requests[0].model == "qwen3-omni-flash"
     assert len(spy_deepseek.recorded_requests) == 0
 
     # Runtime M6 guard blocks bypassed prod_cn + ai_asr_provider="gemini"
@@ -457,7 +466,7 @@ async def test_extract_record_recent_facts_implicit_resolution_and_ambiguity() -
             recent_history_hints=["妈妈11月提到右膝盖疼"],
         ),
     )
-    assert ver == "extract_record@1.2.0"
+    assert ver == "extract_record@1.3.0"
     assert out_unique.needs_disambiguation is False
     assert len(out_unique.facts) == 1
     assert out_unique.facts[0].person_id == mom_id
@@ -673,7 +682,7 @@ async def test_fake_companion_keyword_grounded_demo_queries_do_not_dump_unrelate
             user_message="想给妈妈买条围巾，有什么讲究？",
         ),
     )
-    assert chat_ver == "ask_relationship@1.3.0"
+    assert chat_ver == "ask_relationship@1.4.0"
     assert out_scarf.cited_record_ids == [rec_scarf]
     assert "纯羊绒围巾" in out_scarf.reply_text
     assert "糖醋排骨" not in out_scarf.reply_text

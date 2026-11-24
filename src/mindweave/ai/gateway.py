@@ -44,10 +44,7 @@ from mindweave.ai.schemas.contracts import (
     TranscribeOutput,
 )
 from mindweave.ai.validators.asr_postprocess import postprocess_asr_transcript
-from mindweave.ai.validators.citations import (
-    StreamingCitationProcessor,
-    enforce_companion_citations,
-)
+from mindweave.ai.validators.citations import enforce_companion_citations
 from mindweave.ai.validators.json_repair import (
     StructuredOutputValidationError,
     build_json_repair_prompt,
@@ -105,6 +102,8 @@ class TaskRouteSpec:
     temperature: float
     timeout_seconds: float
     models: dict[str, str]
+    thinking_level: str | None = None
+    max_output_tokens: int | None = None
 
 
 _PROD_CN_FORBIDDEN_PROVIDERS: frozenset[str] = frozenset({"gemini", "fake"})
@@ -142,11 +141,15 @@ def load_routing_config(routing_path: Path | None = None) -> RoutingConfig:
     tasks_raw = raw.get("tasks") or {}
     tasks: dict[str, TaskRouteSpec] = {}
     for task_name, t_cfg in tasks_raw.items():
+        tl_raw = t_cfg.get("thinking_level")
+        mot_raw = t_cfg.get("max_output_tokens")
         tasks[str(task_name)] = TaskRouteSpec(
             prompt_id=str(t_cfg["prompt_id"]),
             temperature=float(t_cfg.get("temperature", 0.2)),
             timeout_seconds=float(t_cfg.get("timeout_seconds", 18.0)),
             models={str(k): str(v) for k, v in (t_cfg.get("models") or {}).items()},
+            thinking_level=str(tl_raw).strip().upper() if tl_raw else None,
+            max_output_tokens=int(mot_raw) if mot_raw is not None else None,
         )
 
     return RoutingConfig(
@@ -249,6 +252,10 @@ def _mask_companion_payload(payload: CompanionChatInput) -> CompanionChatInput:
                 )
                 for m in payload.referenced_materials
             ],
+            "upcoming_reminders": [
+                r.model_copy(update={"title": mask_hard_pii(r.title).masked_text})
+                for r in payload.upcoming_reminders
+            ],
             "rolling_summary": (
                 mask_hard_pii(payload.rolling_summary).masked_text
                 if payload.rolling_summary
@@ -258,6 +265,7 @@ def _mask_companion_payload(payload: CompanionChatInput) -> CompanionChatInput:
                 ConversationTurn(
                     role=turn.role,
                     content=mask_hard_pii(turn.content).masked_text,
+                    created_at=turn.created_at,
                 )
                 for turn in payload.recent_turns
             ],
@@ -278,11 +286,14 @@ class ModelGateway(ModelGatewayPort):
         clock: Clock | None = None,
         adapters: dict[str, ProviderAdapter] | None = None,
         routing_path: Path | None = None,
+        db: Any | None = None,
     ) -> None:
         self._settings = settings
         self._clock = clock or SystemClock()
         self._prompts = prompts or PromptRegistry(settings.prompts_dir)
-        self._meter = meter or AiCallMeter()
+        self._meter = meter or AiCallMeter(db=db)
+        if db is not None:
+            self._meter.bind_db(db)
         self._routing = load_routing_config(routing_path)
 
         default_adapters: dict[str, ProviderAdapter] = {
@@ -358,24 +369,78 @@ class ModelGateway(ModelGatewayPort):
 
     def _provider_chain_for_task(self, task: str) -> list[str]:
         base_chain = self._provider_chain()
-        if task == "transcribe" and self._settings.ai_asr_provider != "inherit":
+        if task != "transcribe":
+            return base_chain
+
+        raw_chain: list[str] = []
+        if self._settings.ai_asr_provider != "inherit":
             asr_provider = self._settings.ai_asr_provider
             self._assert_provider_allowed(asr_provider)
-            chain: list[str] = [asr_provider]
-            for provider_name in base_chain:
-                if provider_name not in chain:
-                    chain.append(provider_name)
-            return chain
-        return base_chain
+            raw_chain.append(asr_provider)
+        for provider_name in base_chain:
+            if provider_name not in raw_chain:
+                raw_chain.append(provider_name)
+
+        # Preserve explicit offline fake mode for unit tests when primary+asr are both fake
+        if self._settings.ai_primary_provider == "fake" and self._settings.ai_asr_provider in (
+            "inherit",
+            "fake",
+        ):
+            return ["fake"]
+
+        # Real-provider mode: NEVER fall back silently to fake, and skip text-only adapters (e.g. DeepSeek)
+        filtered: list[str] = []
+        for provider_name in raw_chain:
+            if provider_name == "fake":
+                continue
+            adapter = self._adapters.get(provider_name)
+            if adapter is None:
+                continue
+            model_name = self._resolve_model("transcribe", provider_name)
+            if isinstance(adapter, (GeminiAdapter, OpenAICompatibleAdapter)):
+                if not adapter.supports_audio_input(model_name):
+                    continue
+            filtered.append(provider_name)
+        return filtered
+
+    def has_audio_asr_provider(self) -> bool:
+        """Return True iff at least one real audio-capable ASR provider is configured."""
+        for provider_name in self._provider_chain_for_task("transcribe"):
+            if provider_name == "fake":
+                continue
+            adapter = self._adapters.get(provider_name)
+            if adapter is None:
+                continue
+            model_name = self._resolve_model("transcribe", provider_name)
+            if isinstance(adapter, GeminiAdapter):
+                if (adapter._api_key or "").strip() or adapter._client is not None:
+                    return True
+                continue
+            if isinstance(adapter, OpenAICompatibleAdapter):
+                if adapter.supports_audio_input(model_name) and (
+                    (adapter._api_key or "").strip() or adapter._transport is not None
+                ):
+                    return True
+                continue
+            # Custom injected test adapter under a real provider slot
+            return True
+        return False
 
     def _resolve_model(self, task: str, provider: str) -> str:
         s = self._settings
+        spec = self._routing.tasks.get(task)
         if provider == "gemini":
-            return s.gemini_model_chat if task == "ask_relationship" else s.gemini_model_fast
+            if task in ("safety_classify", "summarize_thread"):
+                return getattr(s, "gemini_model_lite", "gemini-3.5-flash-lite")
+            if task == "ask_relationship":
+                return s.gemini_model_chat
+            return s.gemini_model_fast
         if provider == "dashscope":
             if task == "parse_screenshot":
                 return s.dashscope_vision_model
             if task == "transcribe":
+                if s.dashscope_asr_model == "qwen-audio-turbo" and spec and "dashscope" in spec.models:
+                    return spec.models["dashscope"]
                 return s.dashscope_asr_model
             return s.dashscope_extract_model
         if provider == "ark":
@@ -383,7 +448,6 @@ class ModelGateway(ModelGatewayPort):
         if provider == "deepseek":
             return s.deepseek_chat_model
 
-        spec = self._routing.tasks.get(task)
         if spec and provider in spec.models:
             return spec.models[provider]
         return f"{provider}-default"
@@ -480,6 +544,8 @@ class ModelGateway(ModelGatewayPort):
                 media_bytes=media_bytes,
                 media_mime_type=media_mime_type,
                 structured_context=structured_context,
+                thinking_level=spec.thinking_level,
+                max_output_tokens=spec.max_output_tokens,
             )
 
             t0 = time.perf_counter()
@@ -641,11 +707,17 @@ class ModelGateway(ModelGatewayPort):
             else None
         )
         masked_snippets = [mask_hard_pii(s).masked_text for s in payload.recent_context_snippets]
+        masked_hint = (
+            mask_hard_pii(payload.client_transcript_hint).masked_text
+            if payload.client_transcript_hint and payload.client_transcript_hint.strip()
+            else ""
+        )
         masked_payload = payload.model_copy(
             update={
                 "known_person_names": masked_names,
                 "active_person_name": masked_active,
                 "recent_context_snippets": masked_snippets,
+                "client_transcript_hint": masked_hint or None,
             }
         )
         rendered = self._prompts.render(
@@ -654,6 +726,7 @@ class ModelGateway(ModelGatewayPort):
             active_person_name=masked_active,
             known_person_names_json=masked_names,
             recent_context_json=masked_snippets,
+            client_transcript_hint=masked_hint,
         )
         out, _, _ = await self._execute_structured(
             scope=scope,
@@ -767,7 +840,7 @@ class ModelGateway(ModelGatewayPort):
         session: AsyncSession | None = None,
     ) -> tuple[CompanionChatOutput, str, str]:
         masked_payload = _mask_companion_payload(payload)
-        rendered = self._render_companion_prompt(masked_payload)
+        rendered = self._render_companion_prompt(masked_payload, streaming=False)
         raw_out, prompt_ver, model_profile = await self._execute_structured(
             scope=scope,
             task="ask_relationship",
@@ -783,7 +856,7 @@ class ModelGateway(ModelGatewayPort):
 
     @staticmethod
     def _build_streaming_companion_prompt(rendered_text: str, *, tier_value: str) -> str:
-        """Append streaming XML wire-format override ONLY for streaming companion responses."""
+        """Fallback streaming XML override used only if `ask_relationship_stream` template is absent."""
         perspectives_rule = (
             "3. `<perspectives>可选，仅在用户表达委屈或冲突时输出 1-2 条温和第三方视角，每行一条；无冲突时省略本标签</perspectives>`"
             if tier_value == "gold"
@@ -794,10 +867,10 @@ class ModelGateway(ModelGatewayPort):
             "## 流式输出协议覆盖指令（仅本次流式输出生效，优先级高于前文 JSON 格式要求）\n"
             "本次为实时流式响应：**严禁**输出 JSON 对象、`{...}` 或 Markdown 代码块包裹（如 ```json）。\n"
             "请严格按以下 XML 标签顺序直接输出：\n"
-            "1. `<reply>主回复正文（自然中文，严格遵守层级语气、安全红线与 [rec_<record_id>] 引用规范）</reply>`\n"
-            "2. `<whisper>一句简短私密耳语提示（<= 28 字，零技术术语）</whisper>`\n"
+            "1. `<reply>主回复正文（自然中文，严格遵守层级语气、安全红线与 [S1] 引用规范）</reply>`\n"
+            "2. `<whisper>一句简短私密耳语提示（<= 24 字，零技术术语）</whisper>`\n"
             f"{perspectives_rule}\n"
-            "4. `<suggestions>1-2 条可直接复制发送给对方的自然中文消息草稿（每行一条，严禁输出元指令或空泛建议）</suggestions>`\n"
+            "4. `<suggestions>1-2 条可直接复制发送给对方的自然中文消息草稿（每行一条）</suggestions>`\n"
         )
         return rendered_text + override
 
@@ -809,14 +882,18 @@ class ModelGateway(ModelGatewayPort):
         session: AsyncSession | None = None,
     ) -> AsyncIterator[str]:
         masked_payload = _mask_companion_payload(payload)
-        rendered = self._render_companion_prompt(masked_payload)
-        stream_prompt = self._build_streaming_companion_prompt(
-            rendered.rendered_text,
-            tier_value=masked_payload.tier.value,
-        )
+        try:
+            rendered = self._render_companion_prompt(masked_payload, streaming=True)
+            stream_prompt = rendered.rendered_text
+        except KeyError:
+            rendered = self._render_companion_prompt(masked_payload, streaming=False)
+            stream_prompt = self._build_streaming_companion_prompt(
+                rendered.rendered_text,
+                tier_value=masked_payload.tier.value,
+            )
+
         spec = self._routing.tasks["ask_relationship"]
         timeout_sec = self._resolve_timeout("ask_relationship")
-        allowed_ids = self._allowed_record_ids(masked_payload)
 
         last_err: Exception | None = None
         for provider_name in self._provider_chain():
@@ -837,23 +914,29 @@ class ModelGateway(ModelGatewayPort):
                 temperature=spec.temperature,
                 timeout_seconds=timeout_sec,
                 structured_context={"payload": masked_payload.model_dump(mode="json")},
+                thinking_level=spec.thinking_level,
+                max_output_tokens=spec.max_output_tokens,
             )
-            processor = StreamingCitationProcessor(allowed_record_ids=allowed_ids)
+            # Single-source-of-truth citation processing runs downstream in
+            # `companion.domain.citation_processor.StreamingCitationProcessor`
+            # (supporting [S1], [S1, S2], [rec_<u1>, rec_<u2>], and [记录#<u1>]).
             emitted_chars = 0
             t0 = time.perf_counter()
             try:
                 async for raw_chunk in adapter.stream(req):
-                    safe_chunk = processor.feed(raw_chunk)
-                    if safe_chunk:
-                        emitted_chars += len(safe_chunk)
-                        yield safe_chunk
-                tail = processor.flush()
-                if tail:
-                    emitted_chars += len(tail)
-                    yield tail
+                    if raw_chunk:
+                        emitted_chars += len(raw_chunk)
+                        yield raw_chunk
 
                 breaker.record_success()
                 lat_ms = int((time.perf_counter() - t0) * 1000)
+                stream_usage = getattr(adapter, "last_stream_usage", None) or {}
+                in_toks = int(stream_usage.get("input_tokens") or 0) or estimate_token_count(
+                    stream_prompt
+                )
+                out_toks = int(stream_usage.get("output_tokens") or 0) or max(
+                    1, (emitted_chars + 1) // 2
+                )
                 await self._meter.record(
                     scope=scope,
                     task="ask_relationship",
@@ -862,8 +945,8 @@ class ModelGateway(ModelGatewayPort):
                     prompt_id=rendered.prompt_id,
                     prompt_version=rendered.version,
                     prompt_hash=rendered.sha256,
-                    input_tokens=estimate_token_count(stream_prompt),
-                    output_tokens=max(1, (emitted_chars + 1) // 2),
+                    input_tokens=in_toks,
+                    output_tokens=out_toks,
                     latency_ms=lat_ms,
                     outcome="stream_ok",
                     session=session,
@@ -883,7 +966,7 @@ class ModelGateway(ModelGatewayPort):
                     prompt_id=rendered.prompt_id,
                     prompt_version=rendered.version,
                     prompt_hash=rendered.sha256,
-                    input_tokens=estimate_token_count(rendered.rendered_text),
+                    input_tokens=estimate_token_count(stream_prompt),
                     output_tokens=max(0, emitted_chars // 2),
                     latency_ms=lat_ms,
                     outcome="stream_error",
@@ -957,6 +1040,8 @@ class ModelGateway(ModelGatewayPort):
                     "previous_summary": masked_prev,
                     "turns_text": masked_turns,
                 },
+                thinking_level=spec.thinking_level,
+                max_output_tokens=spec.max_output_tokens,
             )
             t0 = time.perf_counter()
             try:
@@ -1005,7 +1090,12 @@ class ModelGateway(ModelGatewayPort):
 
         raise UpstreamAIError("Thread summarization failed across configured providers")
 
-    def _render_companion_prompt(self, masked_payload: CompanionChatInput) -> RenderedPrompt:
+    def _render_companion_prompt(
+        self,
+        masked_payload: CompanionChatInput,
+        *,
+        streaming: bool = False,
+    ) -> RenderedPrompt:
         person_obj = {
             "person_id": str(masked_payload.person_id),
             "display_name": masked_payload.person_name,
@@ -1015,6 +1105,8 @@ class ModelGateway(ModelGatewayPort):
         }
         facts_arr = [
             {
+                **({"alias": f.alias} if f.alias else {}),
+                **({"is_unlinked_fact": True} if f.is_unlinked_fact else {}),
                 "record_id": str(f.record_id),
                 "fact_id": str(f.fact_id),
                 "fact_type": f.fact_type.value,
@@ -1025,6 +1117,7 @@ class ModelGateway(ModelGatewayPort):
         ]
         mats_arr = [
             {
+                **({"alias": m.alias} if m.alias else {}),
                 "record_id": str(m.record_id),
                 "kind": m.kind,
                 "title": m.title,
@@ -1033,20 +1126,52 @@ class ModelGateway(ModelGatewayPort):
             }
             for m in masked_payload.referenced_materials
         ]
-        turns_arr = [{"role": t.role, "content": t.content} for t in masked_payload.recent_turns]
-        return self._prompts.render(
-            "ask_relationship",
-            person_json=person_obj,
-            confirmed_facts_json=facts_arr,
-            referenced_materials_json=mats_arr,
-            rolling_summary=masked_payload.rolling_summary,
-            recent_turns_json=turns_arr,
-            safety_override=masked_payload.safety_override.value,
-            user_query=masked_payload.user_message,
-        )
+        reminders_arr = [
+            {
+                "title": r.title,
+                "trigger_date": r.trigger_date,
+                "days_until": r.days_until,
+                "is_lunar": r.is_lunar,
+                **({"source_alias": r.source_alias} if r.source_alias else {}),
+            }
+            for r in masked_payload.upcoming_reminders
+        ]
+        turns_arr = [
+            {
+                "role": t.role,
+                "content": f"[{t.created_at}] {t.content}" if t.created_at else t.content,
+            }
+            for t in masked_payload.recent_turns
+        ]
+        common_kwargs: dict[str, Any] = {
+            "local_date": masked_payload.local_date or "",
+            "weekday_zh": masked_payload.weekday_zh or "",
+            "local_time": masked_payload.local_time or "",
+            "timezone_name": masked_payload.timezone_name or "Asia/Shanghai",
+            "person_json": person_obj,
+            "upcoming_reminders_json": reminders_arr,
+            "confirmed_facts_json": facts_arr,
+            "referenced_materials_json": mats_arr,
+            "rolling_summary": masked_payload.rolling_summary,
+            "recent_turns_json": turns_arr,
+            "safety_override": masked_payload.safety_override.value,
+            "user_query": masked_payload.user_message,
+        }
+        if streaming:
+            perspectives_tag_rule = (
+                "`<perspectives>可选：仅在用户表达委屈或冲突时输出 1-2 条温和第三方视角，每行一条；日常对话或无冲突时省略本标签</perspectives>`"
+                if masked_payload.tier.value == "gold"
+                else "**严禁**输出 `<perspectives>` 标签（非金质层级绝不输出替对方辩解或换位视角）。"
+            )
+            return self._prompts.render(
+                "ask_relationship_stream",
+                perspectives_tag_rule=perspectives_tag_rule,
+                **common_kwargs,
+            )
+        return self._prompts.render("ask_relationship", **common_kwargs)
 
     @staticmethod
     def _allowed_record_ids(payload: CompanionChatInput) -> set[UUID]:
-        allowed = {f.record_id for f in payload.confirmed_facts}
+        allowed = {f.record_id for f in payload.confirmed_facts if not f.is_unlinked_fact}
         allowed.update(m.record_id for m in payload.referenced_materials)
         return allowed

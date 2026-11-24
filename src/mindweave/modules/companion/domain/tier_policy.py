@@ -87,17 +87,17 @@ def default_crisis_card_for(category: SafetyCategory) -> CrisisCardPayload:
 # ============================================================================
 
 ILLEGAL_INTENT_ALLY_PULLBACK = (
-    "我完全懂你现在有多恨、多委屈，但千万别冲动做伤害身体或违法的事——"
-    "为了这种人搭上你自己的前途太不值了！"
+    "我完全懂你现在有多难受、多委屈，但千万别冲动做伤害身体或违法的事——"
+    "为了这种人搭上你自己的前途太不值了。"
     "我们已经把过往客观记录都封存好了，咱们用合法留痕反击、正式举证或书面申诉的方式，"
-    "既能让他付出代价，又能百分百保护好你自己。"
+    "既能维护自身权益，又能稳妥保护好你自己。"
 )
 
 PUBLIC_SHAMING_BOUNDARY_GUIDANCE = (
-    "我百分百理解你想出口恶气的心情！在咱们这个私密手帐树洞里你怎么骂都没问题，"
+    "你现在感到委屈和生气完全正常，这里只属于你，先按时间冷静留存客观事实再一步步处理，"
     "但我不能帮你生成发朋友圈、小红书或大群的实名挂人曝光卡片——"
     "一旦公开传播对方真名和职务，反而可能让你自己惹上名誉权侵权的麻烦，太不划算了。"
-    "不如我帮你起草一份《职场书面留痕回复》或《客观事实时间线清单》，体面又有力地赢回场面。"
+    "不如我帮你起草一份《职场书面留痕回复》或《客观事实时间线清单》，体面又有力地守住边界。"
 )
 
 THIRD_PARTY_SCORING_REFUSAL = (
@@ -109,12 +109,12 @@ THIRD_PARTY_DISCLAIMER = (
 )
 
 LATE_NIGHT_REST_WHISPER_SILVER = (
-    "今天受了这么多委屈，骂出来痛快多了吧？现在夜深了，先好好睡一觉养足精神，"
-    "你的手账我都帮你锁好了，明天醒来我们再看下一步。"
+    "今天受了这么多委屈，先慢慢缓一缓。现在夜深了，先好好睡一觉养足精神，"
+    "你的手帐我都帮你收好了，明天醒来我们再看下一步。"
 )
 
 LATE_NIGHT_REST_WHISPER_DEFAULT = (
-    "现在夜深了，先好好睡一觉养足精神，你的手账我都帮你锁好了，明天醒来我们再看下一步。"
+    "现在夜深了，先好好睡一觉养足精神，你的手帐我都帮你收好了，明天醒来我们再看下一步。"
 )
 
 
@@ -135,11 +135,11 @@ class TierPolicySpec:
 TIER_POLICIES: dict[Tier, TierPolicySpec] = {
     Tier.GOLD: TierPolicySpec(
         tier=Tier.GOLD,
-        label_cn="金箭 · 记爱",
+        label_cn="金箭 · 珍重",
         allows_perspectives=True,
         allows_public_share_card=False,
         system_prompt_fragment=(
-            "【金箭 · 记爱策略】先细腻共情安抚情绪，调取已确认的过往偏好/付出细节（附 [rec_<id>]）；"
+            "【金箭 · 珍重策略】先细腻共情安抚情绪，调取已确认的过往偏好/付出细节（附 [S1]）；"
             "在 alternative_perspectives 中提供温和不强加的换位思考供前端折叠卡展示，"
             "在 actionable_suggestions 中给出自然得体的沟通或行动草稿（由用户自主复制发送，绝不代发）。"
             "严禁给感情打分或测谎。"
@@ -147,28 +147,28 @@ TIER_POLICIES: dict[Tier, TierPolicySpec] = {
     ),
     Tier.SILVER: TierPolicySpec(
         tier=Tier.SILVER,
-        label_cn="银箭 · 记恨",
+        label_cn="银盾 · 边界",
         allows_perspectives=False,
         allows_public_share_card=False,
         system_prompt_fragment=(
-            "【银箭 · 记恨策略】100% 站在用户立场的坚定同盟与私密树洞！绝不搞理客中，绝不替对方找借口辩解！"
+            "【银盾 · 边界策略】坚定站在用户立场，冷静留存客观时间线与书面留痕，绝不劝和，绝不替对方开脱。"
             "alternative_perspectives 必须强制返回空数组 []。"
-            "按时间线条理清晰地梳理已记录的越界/甩锅客观事实（附 [rec_<id>]），"
-            "情绪 100% 站用户这边、事实 100% 诚实：只复述已记录事实，绝不为附和而夸大或编造；"
-            "若用户此刻说法与其本人之前的记录矛盾，平静地原样提一句那条记录（附 [rec_<id>]），"
+            "按时间线条理清晰地梳理已记录的越界/甩锅客观事实（附 [S1]），"
+            "情绪站用户这边、事实保持诚实：只复述已记录事实，绝不为附和而夸大或编造；"
+            "若用户此刻说法与其本人之前的记录矛盾，平静地原样提一句那条记录（附 [S1]），"
             "不评判、不追问、不借此劝和说教。"
             "可起草体面有力的职场书面留痕回复或边界防雷话术；"
-            "严禁生成发朋友圈/小红书的公网挂人曝光长图；若遇线下违法冲动，站在护主立场温和拉住并引导合法留痕反击。"
+            "严禁生成发朋友圈/小红书的公网挂人曝光长图；若遇线下违法冲动，温和拉住并引导合法留痕维权。"
         ),
     ),
     Tier.CRYSTAL: TierPolicySpec(
         tier=Tier.CRYSTAL,
-        label_cn="水晶箭 · 记繁琐",
+        label_cn="水晶 · 日常",
         allows_perspectives=False,
         allows_public_share_card=False,
         system_prompt_fragment=(
-            "【水晶箭 · 记繁琐策略】清爽干练、讲礼数与分寸。聚焦检索该对象的忌口、档期偏好、"
-            "借还记录与待办承诺（附 [rec_<id>]），给出最省心不内耗的得体沟通话术。"
+            "【水晶 · 日常策略】清爽干练、讲礼数与分寸。聚焦检索该对象的忌口、档期偏好、"
+            "借还记录与待办承诺（附 [S1]），给出最省心不内耗的得体沟通话术。"
             "alternative_perspectives 强制返回空数组 []。"
         ),
     ),
@@ -298,61 +298,26 @@ def derive_stream_supplements(
     verified_record_ids: Sequence[UUID],
     safety_category: SafetyCategory = SafetyCategory.NORMAL,
 ) -> CompanionChatOutput:
-    """Build a complete `CompanionChatOutput` after streaming `reply_text` chunks."""
+    """Build a complete `CompanionChatOutput` after streaming `reply_text` chunks.
+
+    BC3 BUG-CC-8a: Never fabricate canned winter-sweater or corporate-email fallback
+    strings when the LLM intentionally omits `<whisper>` or `<suggestions>`.
+    """
     has_any_context = bool(chat_input.confirmed_facts or chat_input.referenced_materials)
     has_gap = detect_unrecorded_gap(cleaned_reply, has_any_context=has_any_context)
-
-    tier = chat_input.tier
-    if tier is Tier.GOLD:
-        whisper = "把在乎的小细节留在手帐里，每次回应都有迹可循。"
-        perspectives = (
-            ["也许对方当下正忙于手头事务，找个轻松的时机温和确认彼此想法会更安心。"]
-            if any(
-                k in chat_input.user_message
-                for k in ("委屈", "吵架", "冷淡", "没回", "生气", "敷衍")
-            )
-            else []
-        )
-        suggestions = (
-            []
-            if has_gap or safety_category is not SafetyCategory.NORMAL
-            else [
-                f"「{chat_input.person_name}，最近降温了记得多照顾自己呀，有空咱们一起吃顿饭慢慢聊～」"
-            ]
-        )
-    elif tier is Tier.SILVER:
-        whisper = "把每一次越界事实冷静记清，就是保护自己最硬的底气。"
-        perspectives = []
-        suggestions = (
-            []
-            if has_gap or safety_category is not SafetyCategory.NORMAL
-            else [
-                "「关于本次事项与时间节点，烦请回复邮件书面确认最新安排，方便双方按记录对齐，谢谢。」"
-            ]
-        )
-    else:
-        whisper = "礼数周全、边界清晰，日常往来就能既得体又省心。"
-        perspectives = []
-        suggestions = (
-            []
-            if has_gap or safety_category is not SafetyCategory.NORMAL
-            else [
-                f"「{chat_input.person_name}您好，跟您确认一下接下来的时间与事项细节，方便的话烦请文字回复确认，谢谢！」"
-            ]
-        )
 
     base = CompanionChatOutput(
         safety_flag=safety_category,
         reply_text=cleaned_reply,
-        whisper_note=whisper,
+        whisper_note=None,
         cited_record_ids=list(verified_record_ids),
         has_unrecorded_gap=has_gap,
-        alternative_perspectives=perspectives,
-        actionable_suggestions=suggestions,
+        alternative_perspectives=[],
+        actionable_suggestions=[],
     )
     return apply_tier_policy(
         base,
-        tier=tier,
+        tier=chat_input.tier,
         user_message=chat_input.user_message,
         safety_category=safety_category,
     )
@@ -431,7 +396,7 @@ def append_late_night_whisper(existing_whisper: str | None, care_whisper: str | 
 
 
 # ============================================================================
-# Token-Budget Trimming for Confirmed Facts (Master Plan §3.3)
+# Token-Budget Trimming for Confirmed Facts (Master Plan §3.3, BC3 BUG-CC-7)
 # ============================================================================
 
 PRIORITY_FACT_TYPES: frozenset[FactType] = frozenset(
@@ -446,6 +411,8 @@ class BudgetCandidateFact:
     fact_type: FactType
     content: str
     happened_on: str | None = None
+    is_expired_one_off: bool = False
+    is_unlinked: bool = False
 
 
 def estimate_fact_tokens(fact: BudgetCandidateFact) -> int:
@@ -459,21 +426,60 @@ def trim_facts_to_token_budget(
     *,
     max_tokens: int = 4000,
     max_chars: int = 6000,
+    priority_token_cap: int | None = None,
+    priority_char_cap: int | None = None,
 ) -> list[BudgetCandidateFact]:
-    """Always include `taboo`, `date`, and `promise` facts first; fill remaining budget newest-first."""
-    priority = [f for f in facts_newest_first if f.fact_type in PRIORITY_FACT_TYPES]
-    secondary = [f for f in facts_newest_first if f.fact_type not in PRIORITY_FACT_TYPES]
+    """Include active `taboo`/`date`/`promise` facts up to a guarded cap so preferences never starve.
+
+    BC3 BUG-CC-7:
+    - Expired one-off past `DATE` facts (`is_expired_one_off=True`) are demoted below active
+      preferences/wishes so years of old appointment dates never crowd out timeless facts.
+    - Active priority facts (`TABOO`, active `DATE`, `PROMISE`) are capped at `priority_token_cap`
+      (default 55% of `max_tokens`, e.g. 2200/4000 or 1200/2500) so `PREFERENCE`/`WISH` facts
+      ALWAYS receive guaranteed prompt budget even on 3-year heavy journals.
+    """
+    active_priority = [
+        f
+        for f in facts_newest_first
+        if f.fact_type in PRIORITY_FACT_TYPES and not f.is_expired_one_off
+    ]
+    active_secondary = [
+        f
+        for f in facts_newest_first
+        if f.fact_type not in PRIORITY_FACT_TYPES and not f.is_expired_one_off
+    ]
+    expired_secondary = [f for f in facts_newest_first if f.is_expired_one_off]
+
+    eff_pri_tokens = (
+        priority_token_cap
+        if priority_token_cap is not None
+        else max(256, int(max_tokens * 0.55))
+    )
+    eff_pri_chars = (
+        priority_char_cap
+        if priority_char_cap is not None
+        else max(400, int(max_chars * 0.55))
+    )
 
     selected: list[BudgetCandidateFact] = []
+    overflow_priority: list[BudgetCandidateFact] = []
     used_tokens = 0
     used_chars = 0
 
-    for fact in priority:
+    for fact in active_priority:
+        ftok = estimate_fact_tokens(fact)
+        fchars = len(fact.content)
+        if (
+            selected
+            and (used_tokens + ftok > eff_pri_tokens or used_chars + fchars > eff_pri_chars)
+        ):
+            overflow_priority.append(fact)
+            continue
         selected.append(fact)
-        used_tokens += estimate_fact_tokens(fact)
-        used_chars += len(fact.content)
+        used_tokens += ftok
+        used_chars += fchars
 
-    for fact in secondary:
+    for fact in (*active_secondary, *overflow_priority, *expired_secondary):
         ftok = estimate_fact_tokens(fact)
         fchars = len(fact.content)
         if used_tokens + ftok > max_tokens or used_chars + fchars > max_chars:

@@ -271,9 +271,9 @@ def test_package_export_zip_gb45438_metadata_and_warm_journal_markdown() -> None
         assert len(aigc["contentSha256"]) == 64
 
         journal_text = zf.read("journal.md").decode("utf-8")
-        assert "## 金箭 · 记爱" in journal_text
-        assert "## 银箭 · 记恨" in journal_text
-        assert "## 水晶箭 · 记繁琐" in journal_text
+        assert "## 金箭 · 珍重" in journal_text
+        assert "## 银盾 · 边界" in journal_text
+        assert "## 水晶 · 日常" in journal_text
         assert "沈清秋" in journal_text
         assert "张主管" in journal_text
         assert "陈教授" in journal_text

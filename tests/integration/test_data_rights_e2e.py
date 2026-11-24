@@ -916,9 +916,9 @@ async def test_export_e2e_step_up_reauth_aad_decryption_gb45438_and_one_time_tok
             assert "房东老顾" not in raw_data_str
 
             journal_md = zf.read("journal.md").decode("utf-8")
-            assert "## 金箭 · 记爱" in journal_md
-            assert "## 银箭 · 记恨" in journal_md
-            assert "## 水晶箭 · 记繁琐" in journal_md
+            assert "## 金箭 · 珍重" in journal_md
+            assert "## 银盾 · 边界" in journal_md
+            assert "## 水晶 · 日常" in journal_md
             assert "沈清秋" in journal_md
             assert "张主管" in journal_md
             assert "陈教授" in journal_md

@@ -1,0 +1,292 @@
+/* tokens.css — MindWeave V2 Gleb Warm Porcelain Single Source of Truth (<= 295L)
+   Verified 9-surface WCAG AA/AAA matrix, lifted sunrise auras, jewel-refraction 5-layer Orb,
+   2x hue-tinted elevation shadows, safe-area & iOS keyboard spring sync, 16px input floor. */
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-serif: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;
+
+  /* Safe Areas, Dynamic Type & iOS Keyboard Spring Bridge */
+  --safe-top: max(env(safe-area-inset-top, 0px), 12px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  --pad-x: 20px;
+  --dock-bottom: calc(var(--safe-bottom) + 8px);
+  --dock-gap: 12px;
+  --topbar-h: 52px;
+  --mw-kb-inset: 0px;
+  --mw-kb-dur: 250ms;
+  --mw-kb-curve: cubic-bezier(0.38, 0.7, 0.125, 1);
+  --mw-dynamic-type-scale: 1;
+
+  /* Concentric Radii */
+  --r-sheet: 32px;
+  --r-card: 24px;
+  --r-card-sm: 18px;
+  --r-photo: 18px;
+  --r-pill: 9999px;
+  --r-chip: 12px;
+
+  /* Default Tier: Gold (金箭 · 珍重 — WCAG AA/AAA Verified) */
+  --ink-primary: #231E1B;
+  --ink-secondary: #695F58;
+  --ink-tertiary: #726860;
+  --ink-accent: #9A4E24;
+  --ink-pinned: #8A6518;
+  --ink-danger: #B83E35;
+  --ink-crisis: #2F5241;
+  --aura-accent: #D98A5C;
+  --aura-gold: #C49B45;
+  --ink-rim: rgba(138, 108, 84, 0.068);
+  --ink-rim-strong: rgba(138, 108, 84, 0.14);
+  --shadow-rgb: 124, 92, 68;
+  --bg-pinned-tint: #FDF9F0;
+  --bg-evidence: #F9FAFC;
+  --bg-crisis: #F7FAF8;
+  --bg-chip: rgba(154, 78, 36, 0.088);
+  --bg-chip-hover: rgba(154, 78, 36, 0.15);
+  --bg-user-msg: #F4EDE4;
+  --dot-empty: rgba(124, 92, 68, 0.15);
+  --dot-l1: #E7C3A4;
+  --dot-l2: #DC9F74;
+  --dot-l3: #C57947;
+  --dot-l4: #9A4E24;
+
+  /* Default Atmosphere: Cotton (晨光白瓷 / Gold — Lifted 0.50 Sunrise Aura) */
+  --bg-canvas: #FCFBF9;
+  --bg-canvas-zero: rgba(252, 251, 249, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #FAF7F3;
+  --bg-dock: rgba(255, 253, 250, 0.80);
+  --canvas-bg-image:
+    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(252, 214, 180, 0.50) 0%, rgba(252, 224, 198, 0.22) 42%, rgba(252, 251, 249, 0) 74%),
+    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(247, 228, 206, 0.34) 0%, rgba(252, 251, 249, 0) 72%);
+  --canvas-bg-size: 100% 100%;
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+
+  /* Exact 2x Hue-Tinted Elevation Shadows */
+  --shadow-card: var(--card-extra-rim), 0 0 0 1px var(--ink-rim), 0 1px 2px rgba(var(--shadow-rgb), 0.035), 0 10px 20px rgba(var(--shadow-rgb), 0.055);
+  --shadow-float: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 0 0 1px var(--ink-rim), 0 2px 4px rgba(var(--shadow-rgb), 0.05), 0 14px 28px rgba(var(--shadow-rgb), 0.095);
+  --shadow-sheet: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 0 0 1px var(--ink-rim), 0 -2px 4px rgba(var(--shadow-rgb), 0.045), 0 -16px 32px rgba(var(--shadow-rgb), 0.10);
+
+  /* Jewel-Refraction 5-Layer Living Pearlescent Orb (Gold) */
+  --orb-c0: #FFFDF9;
+  --orb-c1: #FBD3AE;
+  --orb-c2: #E48554;
+  --orb-c3: #B95830;
+  --orb-caustic-a: rgba(255, 248, 240, 0.86);
+  --orb-caustic-b: rgba(248, 176, 126, 0.78);
+  --orb-caustic-c: rgba(210, 108, 66, 0.58);
+  --orb-caustic-d: rgba(242, 198, 152, 0.76);
+  --orb-limb: rgba(140, 62, 26, 0.30);
+  --orb-halo: rgba(217, 138, 92, 0.26);
+  --orb-send-bg: #231E1B;
+  --orb-send-fg: #FCFBF9;
+}
+
+@media (max-width: 378px) {
+  :root { --pad-x: 16px; --dock-gap: 10px; --dock-bottom: max(env(safe-area-inset-bottom, 0px), 12px); }
+}
+
+/* ==================== TIER SEMANTIC OVERRIDES ==================== */
+#app[data-arrow-tier="silver"] {
+  --ink-primary: #1B2129;
+  --ink-secondary: #586372;
+  --ink-tertiary: #616D7D;
+  --ink-accent: #415C80;
+  --ink-pinned: #415C80;
+  --aura-accent: #617996;
+  --aura-gold: #788CA6;
+  --ink-rim: rgba(74, 92, 118, 0.072);
+  --ink-rim-strong: rgba(74, 92, 118, 0.15);
+  --shadow-rgb: 56, 72, 96;
+  --bg-pinned-tint: #F4F7FA;
+  --bg-chip: rgba(65, 92, 128, 0.09);
+  --bg-chip-hover: rgba(65, 92, 128, 0.15);
+  --bg-user-msg: #ECEFF5;
+  --dot-empty: rgba(74, 92, 118, 0.15);
+  --dot-l1: #C7D2DF;
+  --dot-l2: #9EB0C6;
+  --dot-l3: #6D85A3;
+  --dot-l4: #415C80;
+  --orb-c0: #FFFFFF;
+  --orb-c1: #D0E0F2;
+  --orb-c2: #7D9CBE;
+  --orb-c3: #496588;
+  --orb-caustic-a: rgba(255, 255, 255, 0.88);
+  --orb-caustic-b: rgba(168, 194, 224, 0.80);
+  --orb-caustic-c: rgba(84, 114, 152, 0.60);
+  --orb-caustic-d: rgba(196, 214, 236, 0.78);
+  --orb-limb: rgba(42, 62, 90, 0.28);
+  --orb-halo: rgba(97, 121, 150, 0.26);
+  --orb-send-bg: #1B2129;
+  --orb-send-fg: #F8F9FB;
+}
+
+#app[data-arrow-tier="crystal"] {
+  --ink-primary: #1E2430;
+  --ink-secondary: #5A6578;
+  --ink-tertiary: #606C7F;
+  --ink-accent: #335D96;
+  --ink-pinned: #335D96;
+  --aura-accent: #5C89C6;
+  --aura-gold: #6A94CC;
+  --ink-rim: rgba(68, 96, 138, 0.068);
+  --ink-rim-strong: rgba(68, 96, 138, 0.14);
+  --shadow-rgb: 62, 86, 126;
+  --bg-pinned-tint: #F4F8FD;
+  --bg-chip: rgba(51, 93, 150, 0.088);
+  --bg-chip-hover: rgba(51, 93, 150, 0.15);
+  --bg-user-msg: #EDF3FA;
+  --dot-empty: rgba(68, 96, 138, 0.15);
+  --dot-l1: #C2D8F2;
+  --dot-l2: #8FB8E6;
+  --dot-l3: #5C89C6;
+  --dot-l4: #335D96;
+  --orb-c0: #FFFFFF;
+  --orb-c1: #CCE3FC;
+  --orb-c2: #7AAAE5;
+  --orb-c3: #4978C4;
+  --orb-caustic-a: rgba(255, 255, 255, 0.88);
+  --orb-caustic-b: rgba(164, 204, 250, 0.82);
+  --orb-caustic-c: rgba(88, 132, 214, 0.60);
+  --orb-caustic-d: rgba(190, 218, 252, 0.80);
+  --orb-limb: rgba(48, 78, 134, 0.26);
+  --orb-halo: rgba(92, 137, 198, 0.28);
+  --orb-send-bg: #1E2430;
+  --orb-send-fg: #FAFBFD;
+}
+
+/* ==================== 9-SURFACE A2 PORCELAIN ATMOSPHERE MATRIX ==================== */
+#app[data-journal-edition="cotton"][data-arrow-tier="silver"] {
+  --bg-canvas: #F8F9FB;
+  --bg-canvas-zero: rgba(248, 249, 251, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #F1F4F8;
+  --bg-dock: rgba(250, 252, 255, 0.82);
+  --canvas-bg-image:
+    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(204, 220, 238, 0.44) 0%, rgba(214, 226, 240, 0.18) 42%, rgba(248, 249, 251, 0) 74%),
+    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(220, 230, 242, 0.32) 0%, rgba(248, 249, 251, 0) 72%);
+}
+#app[data-journal-edition="cotton"][data-arrow-tier="crystal"] {
+  --bg-canvas: #FAFBFD;
+  --bg-canvas-zero: rgba(250, 251, 253, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #F3F6FA;
+  --bg-dock: rgba(252, 253, 255, 0.82);
+  --canvas-bg-image:
+    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(202, 224, 252, 0.46) 0%, rgba(212, 230, 252, 0.20) 42%, rgba(250, 251, 253, 0) 74%),
+    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(220, 234, 252, 0.32) 0%, rgba(250, 251, 253, 0) 72%);
+}
+
+#app[data-journal-edition="hobonichi"][data-arrow-tier="gold"] {
+  --bg-canvas: #FBF8F3;
+  --bg-canvas-zero: rgba(251, 248, 243, 0);
+  --bg-card: #FFFDFB;
+  --bg-soft: #F6F1EA;
+  --bg-dock: rgba(255, 252, 247, 0.82);
+  --canvas-bg-image:
+    linear-gradient(to right, rgba(128, 102, 78, 0.038) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(128, 102, 78, 0.038) 1px, transparent 1px),
+    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(248, 224, 198, 0.24) 0%, rgba(251, 248, 243, 0) 72%);
+  --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
+}
+#app[data-journal-edition="hobonichi"][data-arrow-tier="silver"] {
+  --bg-canvas: #F6F8FA;
+  --bg-canvas-zero: rgba(246, 248, 250, 0);
+  --bg-card: #FEFFFF;
+  --bg-soft: #EEF2F7;
+  --bg-dock: rgba(248, 250, 253, 0.84);
+  --canvas-bg-image:
+    linear-gradient(to right, rgba(68, 86, 110, 0.042) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(68, 86, 110, 0.042) 1px, transparent 1px),
+    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(212, 224, 238, 0.22) 0%, rgba(246, 248, 250, 0) 72%);
+  --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
+}
+#app[data-journal-edition="hobonichi"][data-arrow-tier="crystal"] {
+  --bg-canvas: #F8FAFC;
+  --bg-canvas-zero: rgba(248, 250, 252, 0);
+  --bg-card: #FEFFFF;
+  --bg-soft: #EFF4FA;
+  --bg-dock: rgba(250, 252, 255, 0.84);
+  --canvas-bg-image:
+    linear-gradient(to right, rgba(68, 96, 138, 0.036) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(68, 96, 138, 0.036) 1px, transparent 1px),
+    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(210, 228, 250, 0.25) 0%, rgba(248, 250, 252, 0) 72%);
+  --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
+}
+
+#app[data-journal-edition="museglass"][data-arrow-tier="gold"] {
+  --bg-canvas: #FBF7F4;
+  --bg-canvas-zero: rgba(251, 247, 244, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #F7F1EC;
+  --bg-dock: rgba(255, 252, 249, 0.82);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --canvas-bg-image:
+    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(252, 212, 186, 0.42) 0%, rgba(252, 212, 186, 0.14) 48%, rgba(251, 247, 244, 0) 78%),
+    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(244, 224, 232, 0.32) 0%, rgba(251, 247, 244, 0) 74%),
+    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(246, 228, 206, 0.34) 0%, rgba(251, 247, 244, 0) 72%);
+}
+#app[data-journal-edition="museglass"][data-arrow-tier="silver"] {
+  --bg-canvas: #F7F7FB;
+  --bg-canvas-zero: rgba(247, 247, 251, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #EFF0F7;
+  --bg-dock: rgba(250, 251, 255, 0.84);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --canvas-bg-image:
+    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(212, 224, 242, 0.42) 0%, rgba(212, 224, 242, 0.14) 48%, rgba(247, 247, 251, 0) 78%),
+    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(226, 224, 242, 0.30) 0%, rgba(247, 247, 251, 0) 74%),
+    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(218, 228, 242, 0.30) 0%, rgba(247, 247, 251, 0) 72%);
+}
+#app[data-journal-edition="museglass"][data-arrow-tier="crystal"] {
+  --bg-canvas: #F9F9FD;
+  --bg-canvas-zero: rgba(249, 249, 253, 0);
+  --bg-card: #FFFFFF;
+  --bg-soft: #F1F3FA;
+  --bg-dock: rgba(252, 253, 255, 0.84);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --canvas-bg-image:
+    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(206, 228, 254, 0.44) 0%, rgba(206, 228, 254, 0.14) 48%, rgba(249, 249, 253, 0) 78%),
+    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(228, 224, 250, 0.32) 0%, rgba(249, 249, 253, 0) 74%),
+    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(212, 232, 252, 0.32) 0%, rgba(249, 249, 253, 0) 72%);
+}
+
+/* ==================== 5-LAYER 0-BLUR LIVING PEARLESCENT ORB ==================== */
+.mw-orb {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; flex-shrink: 0; user-select: none; -webkit-tap-highlight-color: transparent;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+}
+.mw-orb[data-orb-size="header"]  { width: 24px; height: 24px; padding: 0; }
+.mw-orb[data-orb-size="voice"]   { width: 32px; height: 32px; padding: 2px; background: rgba(255, 255, 255, 0.88); box-shadow: 0 0 0 1px var(--ink-rim), 0 4px 10px rgba(var(--shadow-rgb), 0.14); }
+.mw-orb[data-orb-size="dock"]    { width: 52px; height: 52px; padding: 3px; background: rgba(255, 255, 255, 0.90); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 1px var(--ink-rim), 0 2px 6px rgba(var(--shadow-rgb), 0.08), 0 12px 24px var(--orb-halo); }
+.mw-orb[data-orb-size="starter"] { width: 56px; height: 56px; padding: 3px; background: rgba(255, 255, 255, 0.92); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 1px var(--ink-rim), 0 3px 8px rgba(var(--shadow-rgb), 0.10), 0 14px 28px var(--orb-halo); }
+
+.mw-orb-vessel { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; isolation: isolate; box-shadow: inset 0 -2px 5px var(--orb-limb); transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
+.mw-orb-base { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 34% 28%, var(--orb-c0) 0%, var(--orb-c1) 34%, var(--orb-c2) 72%, var(--orb-c3) 100%); transition: opacity 280ms ease; }
+.mw-orb-caustic { position: absolute; inset: -24%; border-radius: 50%; background: conic-gradient(from 18deg at 52% 48%, var(--orb-caustic-a) 0deg, var(--orb-caustic-b) 95deg, var(--orb-caustic-c) 190deg, var(--orb-caustic-d) 285deg, var(--orb-caustic-a) 360deg); opacity: 0.78; animation: mw-caustic-idle 14s linear infinite; transition: opacity 280ms ease; }
+.mw-orb-veil { position: absolute; inset: -10%; border-radius: 50%; background: radial-gradient(circle at 46% 42%, rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.42) 32%, rgba(255, 255, 255, 0) 54%); opacity: 0.30; transform: scale3d(0.92, 0.92, 1); animation: mw-veil-idle 6.2s ease-in-out infinite; transition: opacity 220ms ease; }
+.mw-orb-specular { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; background: radial-gradient(ellipse 38% 18% at 33% 18%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.22) 55%, rgba(255, 255, 255, 0) 100%), radial-gradient(ellipse 40% 15% at 66% 88%, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0) 100%); box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.90), inset 0 -1.5px 3.5px var(--orb-limb); }
+
+.mw-orb[data-orb-state="listening"] .mw-orb-caustic { animation: mw-caustic-listen 6.5s linear infinite; opacity: 0.88; }
+.mw-orb[data-orb-state="listening"] .mw-orb-veil { animation: none; }
+.mw-orb[data-orb-state="thinking"] .mw-orb-base { opacity: 0.72; }
+.mw-orb[data-orb-state="thinking"] .mw-orb-caustic { animation: mw-caustic-think 3.2s linear infinite; opacity: 0.44; }
+.mw-orb[data-orb-state="thinking"] .mw-orb-veil { animation: mw-veil-think 2.4s ease-in-out infinite; background: radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.76) 46%, rgba(255, 255, 255, 0.08) 76%); }
+.mw-orb[data-orb-state="speaking"] .mw-orb-caustic { animation: mw-caustic-speak 4.4s ease-in-out infinite; opacity: 0.92; }
+.mw-orb[data-orb-state="speaking"] .mw-orb-veil { animation: mw-veil-speak 1.9s ease-in-out infinite; }
+.mw-orb[data-orb-state="done"] .mw-orb-vessel { transform: scale3d(0.95, 0.95, 1); }
+.mw-orb[data-orb-state="done"] .mw-orb-caustic { animation: none; opacity: 0.22; }
+.mw-orb[data-orb-state="done"] .mw-orb-veil { animation: none; opacity: 0.94; transform: scale3d(1.06, 1.06, 1); }
+
+html.is-bg-paused .mw-orb *, html.mw-reduce-motion .mw-orb * { animation-play-state: paused !important; }
+
+@keyframes mw-caustic-idle { 0% { transform: rotate(0deg) scale3d(1, 1, 1); } 50% { transform: rotate(180deg) scale3d(1.06, 1.06, 1); } 100% { transform: rotate(360deg) scale3d(1, 1, 1); } }
+@keyframes mw-veil-idle { 0%, 100% { transform: scale3d(0.88, 0.88, 1); opacity: 0.24; } 50% { transform: scale3d(1, 1, 1); opacity: 0.38; } }
+@keyframes mw-caustic-listen { 0% { transform: rotate(0deg) scale3d(1.04, 1.04, 1); } 100% { transform: rotate(360deg) scale3d(1.04, 1.04, 1); } }
+@keyframes mw-caustic-think { 0% { transform: rotate(0deg) scale3d(0.94, 0.94, 1); } 100% { transform: rotate(360deg) scale3d(0.94, 0.94, 1); } }
+@keyframes mw-veil-think { 0%, 100% { transform: scale3d(0.84, 0.84, 1); opacity: 0.78; } 50% { transform: scale3d(0.98, 0.98, 1); opacity: 0.95; } }
+@keyframes mw-caustic-speak { 0% { transform: rotate(0deg) scale3d(1.02, 1.02, 1); } 50% { transform: rotate(180deg) scale3d(1.12, 1.12, 1); } 100% { transform: rotate(360deg) scale3d(1.02, 1.02, 1); } }
+@keyframes mw-veil-speak { 0%, 100% { transform: scale3d(0.86, 0.86, 1); opacity: 0.54; } 45% { transform: scale3d(1.12, 1.12, 1); opacity: 0.86; } 75% { transform: scale3d(0.96, 0.96, 1); opacity: 0.66; } }

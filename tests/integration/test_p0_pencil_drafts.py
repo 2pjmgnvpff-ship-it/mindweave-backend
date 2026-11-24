@@ -395,7 +395,7 @@ async def test_fake_provider_onboarding_mom_becomes_question_then_gold_person(
         assert split["personName"] == "妈妈"
         assert split["isNewPerson"] is True
         assert split["presentation"] == "question"
-        assert split["glanceHint"] == "第一次提到 TA · 点一下确认"
+        assert split["glanceHint"] == "第一次提到这位朋友 · 轻点确认"
         assert split["inboxItemId"] is not None
 
         boot = await client.get("/v1/bootstrap", headers=_auth(token))

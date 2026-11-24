@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,7 @@ from mindweave.core.crypto import EnvelopeCipher, normalize_alias_for_index
 from mindweave.core.dto import decode_cursor, encode_cursor, strip_forbidden_dev_jargon
 from mindweave.core.errors import NotFoundError, ValidationFailedError
 from mindweave.core.ids import new_id
+from mindweave.core.logging import get_logger
 from mindweave.core.orm import (
     CaptureRow,
     FactRow,
@@ -43,9 +45,12 @@ from mindweave.shared.enums import (
     Polarity,
     RecordReviewState,
     Tier,
+    TimeStatus,
 )
 from mindweave.shared.lexorank import initial_rank, rank_after
 from mindweave.shared.scopes import UserScope
+
+logger = get_logger(__name__)
 
 
 def parse_created_cursor(cursor: str) -> tuple[datetime, UUID]:
@@ -64,6 +69,79 @@ def parse_created_cursor(cursor: str) -> tuple[datetime, UUID]:
 
 def build_created_cursor(created_at: datetime, row_id: UUID) -> str:
     return encode_cursor({"ts": created_at.isoformat(), "id": str(row_id)})
+
+
+def parse_happened_cursor(cursor: str) -> tuple[date, datetime, UUID]:
+    data = decode_cursor(cursor)
+    try:
+        d_raw = str(data["d"])
+        ts_raw = str(data["ts"])
+        id_raw = str(data["id"])
+        happened_d = date.fromisoformat(d_raw)
+        dt = datetime.fromisoformat(ts_raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        uid = UUID(id_raw)
+        return happened_d, dt, uid
+    except Exception as exc:
+        raise ValidationFailedError("Invalid pagination cursor") from exc
+
+
+def build_happened_cursor(happened_on: date, created_at: datetime, row_id: UUID) -> str:
+    return encode_cursor(
+        {
+            "d": happened_on.isoformat(),
+            "ts": created_at.isoformat(),
+            "id": str(row_id),
+        }
+    )
+
+
+def parse_month_bounds(month: str) -> tuple[date, date]:
+    """Parse `YYYY-MM` into half-open sargable bounds `[start_date, next_month_start)`."""
+    cleaned = month.strip()
+    parts = cleaned.split("-")
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        raise ValidationFailedError("month must follow YYYY-MM format")
+    yr, mo = int(parts[0]), int(parts[1])
+    if yr < 1900 or yr > 2100 or mo < 1 or mo > 12:
+        raise ValidationFailedError("month must follow YYYY-MM format")
+    start = date(yr, mo, 1)
+    end_excl = date(yr + 1, 1, 1) if mo == 12 else date(yr, mo + 1, 1)
+    return start, end_excl
+
+
+def year_bounds(year: int) -> tuple[date, date]:
+    """Return half-open sargable bounds `[YYYY-01-01, (YYYY+1)-01-01)`."""
+    if year < 1900 or year > 2100:
+        raise ValidationFailedError("year must be between 1900 and 2100")
+    return date(year, 1, 1), date(year + 1, 1, 1)
+
+
+def resolve_local_today(now: datetime, tz_name: str) -> date:
+    """Resolve user's local calendar date safely with Asia/Shanghai fallback."""
+    aware = now if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    try:
+        return aware.astimezone(ZoneInfo(tz_name)).date()
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        return aware.astimezone(ZoneInfo("Asia/Shanghai")).date()
+
+
+def visible_records_conditions(
+    scope: UserScope,
+    person_id: UUID,
+    *,
+    include_held: bool = False,
+) -> list[Any]:
+    """Single Source of Truth visibility predicate shared across buckets, materials & search."""
+    conds: list[Any] = [
+        RecordRow.user_id == scope.user_id,
+        RecordRow.person_id == person_id,
+        RecordRow.deleted_at.is_(None),
+    ]
+    if not include_held:
+        conds.append(RecordRow.review_state != RecordReviewState.HELD.value)
+    return conds
 
 
 async def get_user_timezone(session: AsyncSession, scope: UserScope) -> str:
@@ -121,6 +199,53 @@ def decrypt_person_role_tag(
         column="role_tag_enc",
         row_id=row.id,
     )
+
+
+def decrypt_person_distinguishing_cue(
+    cipher: EnvelopeCipher,
+    dek: bytes,
+    row: PersonRow,
+) -> str | None:
+    """Build compact disambiguation cue (e.g., '产品部 · 同事') from role_tag + first trait."""
+    parts: list[str] = []
+    role_tag = strip_forbidden_dev_jargon(decrypt_person_role_tag(cipher, dek, row)).strip()
+    if role_tag:
+        parts.append(role_tag)
+    if row.traits_enc is not None:
+        try:
+            raw_traits = cipher.decrypt_json(
+                dek,
+                row.traits_enc,
+                user_id=row.user_id,
+                table="persons",
+                column="traits_enc",
+                row_id=row.id,
+            )
+            if isinstance(raw_traits, list):
+                for item in raw_traits:
+                    cleaned = strip_forbidden_dev_jargon(str(item)).strip()
+                    if cleaned and cleaned not in parts:
+                        parts.append(cleaned)
+                        break
+        except Exception as exc:
+            logger.debug("person.traits_decrypt_skipped", error_type=type(exc).__name__)
+    if not parts and row.context_sub_enc is not None:
+        try:
+            sub = strip_forbidden_dev_jargon(
+                cipher.decrypt_str(
+                    dek,
+                    row.context_sub_enc,
+                    user_id=row.user_id,
+                    table="persons",
+                    column="context_sub_enc",
+                    row_id=row.id,
+                )
+            ).strip()
+            if sub:
+                parts.append(sub[:24])
+        except Exception as exc:
+            logger.debug("person.context_sub_decrypt_skipped", error_type=type(exc).__name__)
+    return " · ".join(parts) if parts else None
 
 
 def decrypt_record_fields(
@@ -647,3 +772,53 @@ def apply_created_cursor_filter(
         return stmt
     cursor_dt, cursor_id = parse_created_cursor(cursor)
     return stmt.where(tuple_(model.created_at, model.id) < (cursor_dt, cursor_id))
+
+
+def apply_happened_cursor_filter(
+    stmt: Any,
+    cursor: str | None,
+) -> Any:
+    if not cursor:
+        return stmt
+    cursor_date, cursor_dt, cursor_id = parse_happened_cursor(cursor)
+    return stmt.where(
+        tuple_(RecordRow.happened_on, RecordRow.created_at, RecordRow.id)
+        < (cursor_date, cursor_dt, cursor_id)
+    )
+
+
+async def restore_superseded_facts(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    superseding_fact_ids: Sequence[UUID],
+    now: datetime,
+) -> list[UUID]:
+    """Bi-temporally restore older facts that were invalidated by moved or deleted facts."""
+    ids = list(superseding_fact_ids)
+    if not ids:
+        return []
+    rows = list(
+        (
+            await session.scalars(
+                select(FactRow)
+                .where(
+                    FactRow.user_id == user_id,
+                    FactRow.superseded_by_id.in_(ids),
+                )
+                .with_for_update()
+            )
+        ).all()
+    )
+    restored: list[UUID] = []
+    for old_fact in rows:
+        old_fact.invalid_at = None
+        old_fact.superseded_by_id = None
+        old_fact.time_status = TimeStatus.CURRENT.value
+        old_fact.updated_at = now
+        old_fact.version += 1
+        restored.append(old_fact.id)
+    if restored:
+        await session.flush()
+    return restored
+

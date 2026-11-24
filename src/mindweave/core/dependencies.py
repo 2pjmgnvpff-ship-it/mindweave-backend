@@ -23,7 +23,7 @@ from mindweave.core.errors import (
 )
 from mindweave.core.idempotency import IdempotencyService
 from mindweave.core.orm import UserKeyRow, UserRow
-from mindweave.core.ratelimit import QuotaService, TokenBucketRateLimiter
+from mindweave.core.ratelimit import QuotaService, TokenBucketRateLimiter, UserConcurrencyLimiter
 from mindweave.core.security import TokenService
 from mindweave.core.storage import LocalEncryptedBlobStore, ObjectStoragePort
 from mindweave.shared.events import EventBus
@@ -74,8 +74,14 @@ class AppContainer:
         rate_limiter = TokenBucketRateLimiter()
         quotas = QuotaService(
             clk,
+            db=db,
             daily_chat_quota=settings.daily_chat_quota,
             daily_voice_minutes_quota=settings.daily_voice_minutes_quota,
+            daily_capture_quota=settings.daily_capture_quota,
+            daily_image_quota=settings.daily_image_quota,
+            daily_ai_cost_micros_cny_per_user=settings.daily_ai_cost_micros_cny_per_user,
+            daily_global_ai_cost_micros_cny=settings.daily_global_ai_cost_micros_cny,
+            global_budget_cache_ttl_seconds=0.0 if settings.environment == "test" else 30.0,
         )
         events = EventBus()
         return cls(
@@ -89,6 +95,7 @@ class AppContainer:
             rate_limiter=rate_limiter,
             quotas=quotas,
             events=events,
+            extras={"concurrency_limiter": UserConcurrencyLimiter(max_concurrent_per_user=2)},
         )
 
     async def load_user_dek(self, session: AsyncSession, scope: UserScope) -> bytes:

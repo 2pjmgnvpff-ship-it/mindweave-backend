@@ -62,18 +62,19 @@ FORBIDDEN_DEV_JARGON_PHRASES: tuple[str, ...] = (
     "【rec_",
 )
 
-# ADR-005 #3: Neutral preaching / excusing phrases strictly banned in Tier.SILVER (银箭 · 记恨)
+# ADR-005 #3: Neutral preaching / excusing phrases strictly banned in Tier.SILVER (银盾 · 边界)
 _SILVER_EXCUSING_RE = re.compile(
-    r"[^。！？!\?\n\x01\x02]*(?:"
+    r"[，,；;]?[^，,；;。！？!\?\n\x01\x02]*(?:"
     r"换个角度想|换个角度看|换位思考|"
     r"站在(?:他|她|对方|主管|领导|同事)的?(?:角度|立场)|"
-    r"也许(?:他|她|对方|人家)?.{0,10}(?:也有苦衷|也有压力|也有难处|不容易|不是故意的|无心的|太忙了)|"
-    r"(?:他|她|对方)(?:也)?不是故意的|"
+    r"也许(?:他|她|对方|人家)?.{0,10}(?:(?:也?有)?(?:苦衷|压力|难处)|压力(?:很|太)?大|不容易|太累了|不是故意的|无心的|太忙了|没意识到)|"
+    r"(?:他|她|对方)(?:最近|可能|也)?(?:不是故意的|可能没意识到|可能只是太忙了|压力(?:很|太)?大)|"
     r"(?:他|她|对方)也有(?:自己的)?(?:苦衷|难处|压力)|"
     r"(?:你?可以)?试着(?:体谅|理解|包容|原谅)|"
+    r"先冷静想想是不是有误会|是不是有误会|沟通方式可以再温和|没必要闹僵|给(?:他|她|对方)一次机会|"
     r"一个巴掌拍不响|退一步海阔天空|各退一步|"
     r"去见见(?:他|她)吧"
-    r")[^。！？!\?\n\x01\x02]*[。！？!\?]?"
+    r")[^，,；;。！？!\?\n\x01\x02]*[。！？!\?]?"
 )
 
 # Numeric person-scoring assignment pattern (e.g. "渣男分：85", "海王概率 92%", "欺骗指数为0.88")
@@ -93,6 +94,7 @@ _STRAY_CLAUSE_PUNCT_RE = re.compile(
 )
 _DOUBLE_PUNCT_RE = re.compile(r"([，,。；;！!？?])[，,；;、]+")
 _SENTENCE_TERMINATORS = frozenset("。！？\n；!?")
+_CLAUSE_TERMINATORS = frozenset("。！？\n；!?，,：:")
 _MAX_FENCE_BUFFER_LEN = 16_384
 
 ALL_STREAM_SCRUB_PHRASES: tuple[str, ...] = tuple(
@@ -272,9 +274,16 @@ def _tidy_prose_masked(masked: str) -> str:
     return cleaned.strip()
 
 
+def _replace_silver_excusing(match: re.Match[str]) -> str:
+    seg = match.group(0)
+    if seg and seg[0] in "，,；;" and seg[-1] in "。！？!?":
+        return seg[-1]
+    return ""
+
+
 def _scrub_silver_excusing_outside_code(text: str) -> str:
     masked, protected = _stash_code_spans(text)
-    scrubbed = _SILVER_EXCUSING_RE.sub("", masked)
+    scrubbed = _SILVER_EXCUSING_RE.sub(_replace_silver_excusing, masked)
     return _restore_code_spans(scrubbed, protected)
 
 
@@ -438,6 +447,37 @@ _JSON_SIMPLE_ESCAPES: dict[str, str] = {
     "b": "\b",
     "f": "\f",
 }
+
+
+_SIDECAR_STOP_TAGS: tuple[str, ...] = (
+    "</reply>",
+    "<whisper>",
+    "<perspectives>",
+    "<suggestions>",
+    "<action>",
+)
+_MAX_SIDECAR_STOP_LEN: int = max(len(t) for t in _SIDECAR_STOP_TAGS)
+_DETECT_PREAMBLE_LIMIT: int = 48
+_THOUGHT_LINE_RE = re.compile(r"^\s*thought\s*[:：][^\n]*\n?", re.IGNORECASE)
+
+
+def _strip_leading_thought_lines(text: str) -> tuple[str, bool]:
+    """Strip completed leading `THOUGHT: ...\\n` lines; return `(rest, waiting_for_eol)`."""
+    working = text
+    while True:
+        stripped = working.lstrip(" \t\r\n")
+        if not stripped:
+            return "", False
+        low = stripped.lower()
+        if len(low) < 8 and ("thought:".startswith(low) or "thought：".startswith(low)):
+            return stripped, True
+        if low.startswith(("thought:", "thought：")):
+            nl_idx = stripped.find("\n")
+            if nl_idx == -1:
+                return stripped, True
+            working = stripped[nl_idx + 1 :]
+            continue
+        return stripped, False
 
 
 class StreamingReplyExtractor:
@@ -654,19 +694,34 @@ class StreamingReplyExtractor:
 
     def _drain_tagged_body(self) -> str:
         lower_buf = self._buf.lower()
-        close_idx = lower_buf.find("</reply>")
-        if close_idx != -1:
-            body_part = self._buf[:close_idx]
-            self._tail_buf += self._buf[close_idx + 8 :]
+        # Check ALL sidecar stop tags (in case model omitted `</reply>` before `<whisper>`/`<perspectives>`)
+        earliest_idx = -1
+        earliest_tag = ""
+        for tag in _SIDECAR_STOP_TAGS:
+            pos = lower_buf.find(tag)
+            if pos != -1 and (earliest_idx == -1 or pos < earliest_idx):
+                earliest_idx = pos
+                earliest_tag = tag
+
+        if earliest_idx != -1:
+            body_part = self._buf[:earliest_idx]
+            if earliest_tag == "</reply>":
+                self._tail_buf += self._buf[earliest_idx + len(earliest_tag) :]
+            else:
+                # Keep `<whisper>`/`<perspectives>`/`<suggestions>`/`<action>` intact in `_tail_buf`
+                self._tail_buf += self._buf[earliest_idx:]
             self._buf = ""
             self._state = "tagged_tail"
+            self.used_xml_tags = True
             self.reply_closed = True
             return body_part
 
-        # Hold back 1..7 character suffix if it matches a prefix of `"</reply>"`
+        # Hold back suffix matching any prefix of `_SIDECAR_STOP_TAGS`
         hold = 0
-        for k in range(min(7, len(lower_buf)), 0, -1):
-            if "</reply>".startswith(lower_buf[-k:]):
+        max_k = min(_MAX_SIDECAR_STOP_LEN - 1, len(lower_buf))
+        for k in range(max_k, 0, -1):
+            suffix = lower_buf[-k:]
+            if any(tag.startswith(suffix) for tag in _SIDECAR_STOP_TAGS):
                 hold = k
                 break
 
@@ -682,12 +737,17 @@ class StreamingReplyExtractor:
         self._buf = self._buf[emit_len:]
         return emitted
 
+    def _drain_plain_guarded(self) -> str:
+        """Plain fallback mode that STILL intercepts `</reply>`, `<whisper>`, `<perspectives>`, `<suggestions>`, `<action>`."""
+        return self._drain_tagged_body()
+
     def feed(self, chunk: str) -> str:
         if not chunk:
             return ""
 
         if self._state == "plain":
-            return chunk
+            self._buf += chunk
+            return self._drain_plain_guarded()
 
         if self._state == "tagged_tail":
             self._tail_buf += chunk
@@ -699,45 +759,63 @@ class StreamingReplyExtractor:
 
         if self._state == "detect":
             self._buf += chunk
-            lstripped = self._buf.lstrip()
-            if not lstripped:
+            cleaned, waiting_thought = _strip_leading_thought_lines(self._buf)
+            if not cleaned:
+                self._buf = ""
                 return ""
-            lower_start = lstripped.lower()
-            if len(lower_start) < 7 and "<reply>".startswith(lower_start):
+            if waiting_thought:
+                self._buf = cleaned
                 return ""
-            if lower_start.startswith("<reply>"):
+
+            self._buf = cleaned
+            lower_start = cleaned.lower()
+
+            # 1. Scan for `<reply>` ANYWHERE within preamble window (discards "好的！\n" preamble!)
+            reply_open_idx = lower_start.find("<reply>")
+            if reply_open_idx != -1:
                 self.used_xml_tags = True
                 self._state = "tagged_body"
-                self._buf = lstripped[7:]
+                self._buf = cleaned[reply_open_idx + 7 :]
                 return self._drain_tagged_body()
 
-            # Direct JSON object fallback (live provider ignored XML streaming override)
-            if lstripped.startswith("{"):
-                return self._enter_json_mode(lstripped)
+            # 2. Direct JSON object fallback (live provider ignored XML streaming override)
+            if cleaned.startswith("{"):
+                return self._enter_json_mode(cleaned)
 
-            # Markdown-fenced JSON fallback: ```json\n{...} or ```\n{...}
-            if lstripped.startswith("`"):
-                if len(lstripped) < 3 and all(c == "`" for c in lstripped):
+            # 3. Markdown-fenced JSON fallback: ```json\n{...} or ```\n{...}
+            if cleaned.startswith("`"):
+                if len(cleaned) < 3 and all(c == "`" for c in cleaned):
                     return ""
-                if lstripped.startswith("```"):
-                    nl_idx = lstripped.find("\n")
+                if cleaned.startswith("```"):
+                    nl_idx = cleaned.find("\n")
                     if nl_idx == -1:
-                        header = lstripped[3:].strip().lower()
+                        header = cleaned[3:].strip().lower()
                         if len(header) <= 4 and "json".startswith(header):
                             return ""
                     else:
-                        header = lstripped[3:nl_idx].strip().lower()
+                        header = cleaned[3:nl_idx].strip().lower()
                         if header in ("", "json"):
-                            after_fence = lstripped[nl_idx + 1 :].lstrip()
+                            after_fence = cleaned[nl_idx + 1 :].lstrip()
                             if not after_fence:
                                 return ""
                             if after_fence.startswith("{"):
                                 return self._enter_json_mode(after_fence)
 
+            # 4. If buffer ends with a partial `<reply>` prefix or is still within the 48-char
+            #    preamble window without a clear non-preamble sentence, wait briefly before plain mode.
+            ends_with_partial_reply = any(
+                "<reply>".startswith(lower_start[-k:])
+                for k in range(1, min(7, len(lower_start)) + 1)
+            )
+            if ends_with_partial_reply:
+                return ""
+            if len(cleaned) < _DETECT_PREAMBLE_LIMIT and not any(
+                tag in lower_start for tag in _SIDECAR_STOP_TAGS
+            ):
+                return ""
+
             self._state = "plain"
-            emitted = self._buf
-            self._buf = ""
-            return emitted
+            return self._drain_plain_guarded()
 
         # _state == "tagged_body"
         self._buf += chunk
@@ -748,17 +826,38 @@ class StreamingReplyExtractor:
             self.reply_closed = True
             return ""
         if self._state == "detect":
-            rem = self._buf
-            self._buf = ""
+            cleaned, _ = _strip_leading_thought_lines(self._buf)
+            cleaned = _THOUGHT_LINE_RE.sub("", cleaned).strip() if cleaned.lower().startswith(("thought:", "thought：")) else cleaned
+            self._buf = cleaned
+            lower = cleaned.lower()
+            reply_open_idx = lower.find("<reply>")
+            if reply_open_idx != -1:
+                self.used_xml_tags = True
+                self._state = "tagged_body"
+                self._buf = cleaned[reply_open_idx + 7 :]
+                emitted = self._drain_tagged_body()
+                rem = self._buf
+                self._buf = ""
+                self.reply_closed = True
+                if rem and any(tag.startswith(rem.lower()) for tag in _SIDECAR_STOP_TAGS):
+                    return emitted
+                return emitted + rem
             self._state = "plain"
-            return rem
-        if self._state == "tagged_body":
+            emitted = self._drain_plain_guarded()
             rem = self._buf
             self._buf = ""
             self.reply_closed = True
-            if rem and "</reply>".startswith(rem.lower()):
-                return ""
-            return rem
+            if rem and any(tag.startswith(rem.lower()) for tag in _SIDECAR_STOP_TAGS):
+                return emitted
+            return emitted + rem
+        if self._state in ("tagged_body", "plain"):
+            emitted = self._drain_tagged_body()
+            rem = self._buf
+            self._buf = ""
+            self.reply_closed = True
+            if rem and any(tag.startswith(rem.lower()) for tag in _SIDECAR_STOP_TAGS):
+                return emitted
+            return emitted + rem
         return ""
 
 
@@ -766,8 +865,9 @@ def _find_flushable_segments(
     buf: str,
     *,
     starts_at_line_start: bool = True,
+    terminators: frozenset[str] = _SENTENCE_TERMINATORS,
 ) -> tuple[list[str], str]:
-    """Split `buf` into complete sentence segments while keeping fenced/inline code spans intact."""
+    """Split `buf` into complete segments while keeping fenced/inline code spans intact."""
     segments: list[str] = []
     start = 0
     n = len(buf)
@@ -884,9 +984,9 @@ def _find_flushable_segments(
             i = j
             continue
 
-        if ch in _SENTENCE_TERMINATORS:
+        if ch in terminators:
             end = i + 1
-            while end < n and buf[end] in _SENTENCE_TERMINATORS:
+            while end < n and buf[end] in terminators:
                 end += 1
             segments.append(buf[start:end])
             start = end
@@ -899,18 +999,21 @@ def _find_flushable_segments(
 
 
 class SentenceBufferedStreamGuard:
-    """Buffers decoded SSE reply text until sentence terminators (`。！？\\n；!?`) or EOF (`RT-09`, `R2-04`).
+    """Buffers decoded SSE reply text until clause/sentence terminators or EOF (`RT-09`, `R2-04`, `BUG-CC-6a`).
 
+    - Uses clause-level flushing (`，,：:。！？\\n；!?`) on `Tier.GOLD` / `Tier.CRYSTAL` for snappy
+      sub-second TTFT, while preserving full sentence-level buffering (`。！？\\n；!?`) on
+      `Tier.SILVER` so multi-clause Silver excusing sentences are scrubbed atomically before emission.
     - Tracks Markdown ```` ``` ```` / `~~~` fenced code blocks (`N >= 3`) and inline backtick spans so
       multi-line code blocks are NEVER split mid-fence on `\\n`, preserving `[rec_<uuid>]`
       literals and leading code indentation inside fences (Invariant I4).
-    - Applies `enforce_tier_output_constraints` to each complete sentence/block BEFORE yielding
-      `event: delta`, preventing Silver-tier preaching (`_SILVER_EXCUSING_RE`), parasitic phrases,
-      and forbidden jargon from ever reaching the client mid-stream.
     """
 
     def __init__(self, *, tier: Tier | None = None) -> None:
         self._tier = tier
+        self._terminators: frozenset[str] = (
+            _SENTENCE_TERMINATORS if tier is Tier.SILVER else _CLAUSE_TERMINATORS
+        )
         self._buf: str = ""
         self._has_emitted_content: bool = False
         self._trailing_newlines: int = 0
@@ -941,6 +1044,7 @@ class SentenceBufferedStreamGuard:
         raw_segments, remainder = _find_flushable_segments(
             self._buf,
             starts_at_line_start=self._raw_at_line_start,
+            terminators=self._terminators,
         )
         if raw_segments:
             self._raw_at_line_start = raw_segments[-1].endswith("\n")

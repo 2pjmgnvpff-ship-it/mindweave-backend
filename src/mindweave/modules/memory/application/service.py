@@ -5,14 +5,14 @@ from __future__ import annotations
 import base64
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from mindweave.core.crypto import EnvelopeCipher, normalize_alias_for_index
+from mindweave.core.crypto import CryptoError, EnvelopeCipher, normalize_alias_for_index
 from mindweave.core.dependencies import AppContainer
 from mindweave.core.dto import CursorPage, strip_forbidden_dev_jargon
 from mindweave.core.errors import (
@@ -24,12 +24,16 @@ from mindweave.core.errors import (
 )
 from mindweave.core.idempotency import IdempotencyHit, hash_request_payload
 from mindweave.core.ids import new_id
+from mindweave.core.logging import get_logger
 from mindweave.core.orm import (
+    CaptureRow,
+    ChatCitationRow,
     FactRow,
     InboxItemRow,
     PersonAliasRow,
     PersonRow,
     RecordRow,
+    ReminderRow,
 )
 from mindweave.core.security import TokenService
 from mindweave.modules.capture.domain.highlighter import (
@@ -45,14 +49,25 @@ from mindweave.modules.memory.application.dto import (
     InboxItemDto,
     InboxResolveRequest,
     InboxResolveResponse,
+    InferredDateRangeDto,
     MaterialCreateRequest,
     MaterialDto,
     MaterialPatchRequest,
+    PersonSearchHitDto,
+    PersonSearchResponse,
+    TimelineBucketDto,
+    TimelineBucketsResponse,
+    TimelineYearSummaryDto,
 )
 from mindweave.modules.memory.domain.inbox_policy import (
     InboxDomainError,
     InboxResolutionInput,
     validate_inbox_resolution,
+)
+from mindweave.modules.memory.domain.zh_search import (
+    extract_matched_terms_and_snippet,
+    extract_zh_terms,
+    search_inverted_index,
 )
 from mindweave.modules.memory.infra.image_sanitizer import validate_and_strip_image_exif
 from mindweave.modules.memory.infra.pencil_views import (
@@ -67,18 +82,30 @@ from mindweave.modules.memory.infra.reminders_helper import (
 from mindweave.modules.memory.infra.repository import (
     apply_bitemporal_supersession_for_fact,
     apply_created_cursor_filter,
+    apply_happened_cursor_filter,
     build_created_cursor,
+    build_happened_cursor,
     create_person_with_primary_alias,
     decrypt_fact_content,
     decrypt_inbox_payload,
     decrypt_person_display_name,
+    decrypt_person_distinguishing_cue,
     decrypt_person_role_tag,
     decrypt_record_fields,
     get_user_timezone,
     merge_provisional_person_into_target,
     next_rank_for_tier,
+    parse_month_bounds,
     require_person_row,
+    resolve_local_today,
+    restore_superseded_facts,
     sync_capture_status_after_inbox_resolution,
+    visible_records_conditions,
+    year_bounds,
+)
+from mindweave.modules.memory.infra.search_cache import (
+    PersonSearchIndexCache,
+    build_person_search_index,
 )
 from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
@@ -101,6 +128,8 @@ from mindweave.shared.enums import (
 )
 from mindweave.shared.pencil import derive_pencil_state, is_auto_ink_eligible
 from mindweave.shared.scopes import UserScope
+
+logger = get_logger(__name__)
 
 
 def record_row_to_dto(
@@ -308,9 +337,500 @@ async def _cleanup_provisional_person_if_empty(
 class MemoryService:
     container: AppContainer
 
+    def _get_search_cache(self) -> PersonSearchIndexCache:
+        cached = self.container.extras.get("search_index_cache")
+        if isinstance(cached, PersonSearchIndexCache):
+            return cached
+        cache = PersonSearchIndexCache()
+        self.container.extras["search_index_cache"] = cache
+        self.container.cipher.register_eviction_hook(cache.evict_user)
+        return cache
+
+    def _evict_search_cache(self, user_id: UUID, *person_ids: UUID | None) -> None:
+        cached = self.container.extras.get("search_index_cache")
+        if not isinstance(cached, PersonSearchIndexCache):
+            return
+        for pid in person_ids:
+            if pid is not None:
+                cached.evict_person(user_id, pid)
+
     # =========================================================================
-    # Materials (RecordRow)
+    # Timeline Buckets, Encrypted Hybrid Search & Materials (RecordRow)
     # =========================================================================
+
+    async def get_person_timeline_buckets(
+        self,
+        *,
+        scope: UserScope,
+        person_id: UUID,
+        include_held: bool = False,
+        kind: RecordKind | None = None,
+        pinned: bool | None = None,
+        year: int | None = None,
+    ) -> TimelineBucketsResponse:
+        async with self.container.db.user_session(scope) as session:
+            person_row = await require_person_row(session, scope, person_id)
+            is_silver = person_row.tier == Tier.SILVER.value
+            dek = await self.container.load_user_dek(session, scope)
+            now = self.container.clock.now()
+
+            conds = visible_records_conditions(scope, person_id, include_held=include_held)
+            if kind is not None:
+                conds.append(RecordRow.kind == kind.value)
+            if pinned is not None:
+                conds.append(RecordRow.pinned.is_(pinned))
+            if year is not None:
+                y_start, y_end_excl = year_bounds(year)
+                conds.append(RecordRow.happened_on >= y_start)
+                conds.append(RecordRow.happened_on < y_end_excl)
+
+            bucket_expr = func.to_char(RecordRow.happened_on, "YYYY-MM")
+            yr_expr = func.extract("year", RecordRow.happened_on)
+            mo_expr = func.extract("month", RecordRow.happened_on)
+            day_expr = func.extract("day", RecordRow.happened_on)
+
+            # Query 1: Bucket aggregation + 4-week rhythm array (weeklyCounts[4])
+            q1 = (
+                select(
+                    bucket_expr.label("bucket"),
+                    yr_expr.label("yr"),
+                    mo_expr.label("mo"),
+                    func.count(RecordRow.id).label("total_cnt"),
+                    func.count(RecordRow.id)
+                    .filter(
+                        RecordRow.kind == RecordKind.PHOTO.value,
+                        RecordRow.media_object_key.is_not(None),
+                    )
+                    .label("photo_cnt"),
+                    func.count(RecordRow.id)
+                    .filter(RecordRow.kind == RecordKind.VOICE.value)
+                    .label("voice_cnt"),
+                    func.count(RecordRow.id).filter(RecordRow.pinned.is_(True)).label("pinned_cnt"),
+                    func.count(RecordRow.id).filter(day_expr.between(1, 7)).label("w1_cnt"),
+                    func.count(RecordRow.id).filter(day_expr.between(8, 14)).label("w2_cnt"),
+                    func.count(RecordRow.id).filter(day_expr.between(15, 21)).label("w3_cnt"),
+                    func.count(RecordRow.id).filter(day_expr >= 22).label("w4_cnt"),
+                    func.max(RecordRow.happened_on).label("latest_happened_on"),
+                )
+                .where(*conds)
+                .group_by(bucket_expr, yr_expr, mo_expr)
+                .order_by(bucket_expr.desc())
+            )
+            agg_rows = (await session.execute(q1)).all()
+            if not agg_rows:
+                return TimelineBucketsResponse(
+                    person_id=person_id,
+                    total_count=0,
+                    years=[],
+                    buckets=[],
+                )
+
+            # Query 2a: Highlight quote per month (1 row per bucket)
+            q2a = (
+                select(
+                    bucket_expr.label("bucket"),
+                    RecordRow.id,
+                    RecordRow.title_enc,
+                    RecordRow.snippet_enc,
+                    RecordRow.body_enc,
+                )
+                .where(*conds)
+                .distinct(bucket_expr)
+                .order_by(
+                    bucket_expr.desc(),
+                    RecordRow.pinned.desc(),
+                    RecordRow.happened_on.desc(),
+                    RecordRow.created_at.desc(),
+                    RecordRow.id.desc(),
+                )
+            )
+            highlight_by_bucket: dict[str, tuple[UUID, str]] = {}
+            for b_key, rec_id, title_enc, snippet_enc, body_enc in (await session.execute(q2a)).all():
+                if snippet_enc is not None:
+                    raw_quote = self.container.cipher.decrypt_str(
+                        dek,
+                        snippet_enc,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="snippet_enc",
+                        row_id=rec_id,
+                    )
+                else:
+                    raw_quote = self.container.cipher.decrypt_str(
+                        dek,
+                        body_enc,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="body_enc",
+                        row_id=rec_id,
+                    )
+                clean_quote = strip_forbidden_dev_jargon(raw_quote).strip()
+                if not clean_quote:
+                    clean_quote = strip_forbidden_dev_jargon(
+                        self.container.cipher.decrypt_str(
+                            dek,
+                            title_enc,
+                            user_id=scope.user_id,
+                            table="records",
+                            column="title_enc",
+                            row_id=rec_id,
+                        )
+                    ).strip()
+                highlight_by_bucket[str(b_key)] = (rec_id, clean_quote[:80])
+
+            # Query 2b: Cover photo per month — SKIPPED ENTIRELY on Silver tier!
+            cover_by_bucket: dict[str, UUID] = {}
+            if not is_silver:
+                q2b = (
+                    select(
+                        bucket_expr.label("bucket"),
+                        RecordRow.id,
+                    )
+                    .where(
+                        *conds,
+                        RecordRow.kind == RecordKind.PHOTO.value,
+                        RecordRow.media_object_key.is_not(None),
+                    )
+                    .distinct(bucket_expr)
+                    .order_by(
+                        bucket_expr.desc(),
+                        RecordRow.pinned.desc(),
+                        RecordRow.happened_on.desc(),
+                        RecordRow.created_at.desc(),
+                        RecordRow.id.desc(),
+                    )
+                )
+                for b_key, rec_id in (await session.execute(q2b)).all():
+                    cover_by_bucket[str(b_key)] = rec_id
+
+            year_totals: dict[int, int] = defaultdict(int)
+            total_count = 0
+            buckets: list[TimelineBucketDto] = []
+            for row in agg_rows:
+                b_key = str(row.bucket)
+                yr_val = int(row.yr)
+                mo_val = int(row.mo)
+                cnt_val = int(row.total_cnt)
+                total_count += cnt_val
+                year_totals[yr_val] += cnt_val
+
+                cover_rec_id = None if is_silver else cover_by_bucket.get(b_key)
+                cover_url = (
+                    self.container.tokens.sign_media_path(
+                        f"/v1/materials/{cover_rec_id}/media",
+                        user_id=scope.user_id,
+                        now=now,
+                    )
+                    if cover_rec_id is not None
+                    else None
+                )
+                hl = highlight_by_bucket.get(b_key)
+                buckets.append(
+                    TimelineBucketDto(
+                        bucket=b_key,
+                        year=yr_val,
+                        month=mo_val,
+                        count=cnt_val,
+                        weekly_counts=[
+                            int(row.w1_cnt),
+                            int(row.w2_cnt),
+                            int(row.w3_cnt),
+                            int(row.w4_cnt),
+                        ],
+                        photo_count=0 if is_silver else int(row.photo_cnt),
+                        voice_count=int(row.voice_cnt),
+                        pinned_count=int(row.pinned_cnt),
+                        latest_happened_on=row.latest_happened_on,
+                        cover_record_id=cover_rec_id,
+                        cover_photo_url=cover_url,
+                        highlight_record_id=hl[0] if hl is not None else None,
+                        highlight_quote=hl[1] if hl is not None else None,
+                    )
+                )
+
+            years_summary = [
+                TimelineYearSummaryDto(year=yr, count=cnt)
+                for yr, cnt in sorted(year_totals.items(), key=lambda kv: -kv[0])
+            ]
+            return TimelineBucketsResponse(
+                person_id=person_id,
+                total_count=total_count,
+                years=years_summary,
+                buckets=buckets,
+            )
+
+    async def search_person_materials(
+        self,
+        *,
+        scope: UserScope,
+        person_id: UUID,
+        query: str,
+        kind: RecordKind | None = None,
+        pinned: bool | None = None,
+        year: int | None = None,
+        month: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        include_held: bool = False,
+        limit: int = 20,
+    ) -> PersonSearchResponse:
+        cleaned_query = query.strip()
+        if not cleaned_query:
+            raise ValidationFailedError("Search query must not be empty")
+
+        eff_from = date_from
+        eff_to = date_to
+        if year is not None:
+            y_start, y_end_excl = year_bounds(year)
+            y_end_incl = y_end_excl - timedelta(days=1)
+            eff_from = max(eff_from, y_start) if eff_from is not None else y_start
+            eff_to = min(eff_to, y_end_incl) if eff_to is not None else y_end_incl
+        if month is not None:
+            m_start, m_end_excl = parse_month_bounds(month)
+            m_end_incl = m_end_excl - timedelta(days=1)
+            eff_from = max(eff_from, m_start) if eff_from is not None else m_start
+            eff_to = min(eff_to, m_end_incl) if eff_to is not None else m_end_incl
+
+        async with self.container.db.user_session(scope) as session:
+            person_row = await require_person_row(session, scope, person_id)
+            is_silver = person_row.tier == Tier.SILVER.value
+            # Step 1 (MANDATORY): Load live user DEK BEFORE consulting cache (instant multi-instance shred!)
+            dek = await self.container.load_user_dek(session, scope)
+            now = self.container.clock.now()
+            tz_name = await get_user_timezone(session, scope)
+            local_today = resolve_local_today(now, tz_name)
+
+            # Step 2: 1ms index-only watermark query
+            base_conds = visible_records_conditions(scope, person_id, include_held=include_held)
+            wm_row = (
+                await session.execute(
+                    select(func.count(RecordRow.id), func.max(RecordRow.updated_at)).where(
+                        *base_conds
+                    )
+                )
+            ).one()
+            total_count = int(wm_row[0] or 0)
+            max_updated_at: datetime | None = wm_row[1]
+            watermark = (total_count, max_updated_at)
+
+            if total_count == 0 or (eff_from is not None and eff_to is not None and eff_from > eff_to):
+                return PersonSearchResponse(
+                    person_id=person_id,
+                    query=cleaned_query,
+                    search_mode="hybrid_lexical",
+                    inferred_date_range=None,
+                    expanded_terms=[],
+                    total_matched=0,
+                    scanned_count=total_count,
+                    items=[],
+                )
+
+            # Step 3: Lookup or build bounded compact inverted postings cache
+            cache = self._get_search_cache()
+            entry = cache.get(
+                user_id=scope.user_id,
+                person_id=person_id,
+                include_held=include_held,
+                watermark=watermark,
+            )
+            if entry is None:
+                raw_rows = (
+                    await session.execute(
+                        select(
+                            RecordRow.id,
+                            RecordRow.kind,
+                            RecordRow.title_enc,
+                            RecordRow.body_enc,
+                            RecordRow.happened_on,
+                            RecordRow.created_at,
+                            RecordRow.pinned,
+                            RecordRow.review_state,
+                        )
+                        .where(*base_conds)
+                        .order_by(
+                            RecordRow.happened_on.desc(),
+                            RecordRow.created_at.desc(),
+                            RecordRow.id.desc(),
+                        )
+                    )
+                ).all()
+                entry = build_person_search_index(
+                    user_id=scope.user_id,
+                    person_id=person_id,
+                    watermark=watermark,
+                    cipher=self.container.cipher,
+                    dek=dek,
+                    rows=[(r[0], r[1], r[2], r[3], r[4], r[5], bool(r[6]), str(r[7])) for r in raw_rows],
+                )
+                cache.put(
+                    user_id=scope.user_id,
+                    person_id=person_id,
+                    include_held=include_held,
+                    entry=entry,
+                )
+
+            # Step 4: Load target person's own names (self-name downweighting) & confirmed facts cross-match
+            person_names: list[str] = [
+                decrypt_person_display_name(self.container.cipher, dek, person_row)
+            ]
+            alias_rows = (
+                await session.scalars(
+                    select(PersonAliasRow).where(
+                        PersonAliasRow.user_id == scope.user_id,
+                        PersonAliasRow.person_id == person_id,
+                    )
+                )
+            ).all()
+            for ar in alias_rows:
+                try:
+                    person_names.append(
+                        self.container.cipher.decrypt_str(
+                            dek,
+                            ar.alias_enc,
+                            user_id=scope.user_id,
+                            table="person_aliases",
+                            column="alias_enc",
+                            row_id=ar.id,
+                        )
+                    )
+                except CryptoError as exc:
+                    logger.debug(
+                        "search.alias_decrypt_skipped",
+                        error_type=type(exc).__name__,
+                    )
+                    continue
+
+            _q_toks, q_strong = extract_zh_terms(cleaned_query)
+            fact_rows = (
+                await session.scalars(
+                    select(FactRow).where(
+                        FactRow.user_id == scope.user_id,
+                        FactRow.person_id == person_id,
+                        FactRow.status == FactStatus.CONFIRMED.value,
+                        FactRow.invalid_at.is_(None),
+                        FactRow.record_id.is_not(None),
+                    )
+                )
+            ).all()
+            fact_boosts: dict[UUID, float] = {}
+            matched_facts_by_record: dict[UUID, list[str]] = defaultdict(list)
+            for frow in fact_rows:
+                if frow.record_id is None:
+                    continue
+                f_content = decrypt_fact_content(self.container.cipher, dek, frow)
+                _ftoks, f_strong = extract_zh_terms(f_content)
+                overlap = q_strong & f_strong
+                if overlap:
+                    score_add = sum(2.0 if len(t) >= 2 else 0.5 for t in overlap)
+                    fact_boosts[frow.record_id] = fact_boosts.get(frow.record_id, 0.0) + score_add
+                    if f_content not in matched_facts_by_record[frow.record_id]:
+                        matched_facts_by_record[frow.record_id].append(f_content)
+
+            # Step 5: Execute O(matched postings) hybrid ranking
+            hits, expanded_terms, (inf_from, inf_to) = search_inverted_index(
+                vocab=entry.vocab,
+                inv_postings=entry.inv_postings,
+                docs=entry.docs,
+                avgdl=entry.avgdl,
+                query=cleaned_query,
+                today=local_today,
+                person_names=tuple(person_names),
+                top_k=limit,
+                kind=kind.value if kind is not None else None,
+                pinned=pinned,
+                date_from=eff_from,
+                date_to=eff_to,
+                fact_boosts=fact_boosts or None,
+            )
+
+            if not hits:
+                inferred_dto = (
+                    InferredDateRangeDto(from_date=inf_from, to_date=inf_to)
+                    if inf_from is not None and inf_to is not None
+                    else None
+                )
+                return PersonSearchResponse(
+                    person_id=person_id,
+                    query=cleaned_query,
+                    search_mode="hybrid_lexical",
+                    inferred_date_range=inferred_dto,
+                    expanded_terms=expanded_terms[:16],
+                    total_matched=0,
+                    scanned_count=len(entry.docs),
+                    items=[],
+                )
+
+            # Step 6: Re-decrypt ONLY the top `limit <= 50` winning RecordRows
+            win_ids = [h.record_id for h in hits]
+            win_rows = (
+                await session.scalars(
+                    select(RecordRow).where(
+                        RecordRow.user_id == scope.user_id,
+                        RecordRow.person_id == person_id,
+                        RecordRow.id.in_(win_ids),
+                        RecordRow.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+            row_by_id = {r.id: r for r in win_rows}
+
+            ordered_dtos: list[MaterialDto] = []
+            valid_hits = []
+            for hit in hits:
+                r = row_by_id.get(hit.record_id)
+                if r is None:
+                    continue
+                ordered_dtos.append(
+                    record_row_to_dto(
+                        self.container.cipher,
+                        dek,
+                        r,
+                        tokens=self.container.tokens,
+                        now=now,
+                        cloak_photo_media=is_silver,
+                    )
+                )
+                valid_hits.append(hit)
+
+            ordered_dtos = await self._attach_pencil_states(
+                session, scope=scope, dek=dek, items=ordered_dtos
+            )
+
+            items: list[PersonSearchHitDto] = []
+            for hit, dto in zip(valid_hits, ordered_dtos, strict=True):
+                matched_terms, hl_snippet = extract_matched_terms_and_snippet(
+                    title=dto.title,
+                    body=dto.body,
+                    query=cleaned_query,
+                    expanded_terms=expanded_terms,
+                    person_names=tuple(person_names),
+                )
+                items.append(
+                    PersonSearchHitDto(
+                        material=dto,
+                        score=hit.score,
+                        match_kind=hit.match_kind,
+                        matched_terms=matched_terms,
+                        highlight_snippet=hl_snippet,
+                        matched_fact_snippets=matched_facts_by_record.get(dto.id, [])[:3],
+                    )
+                )
+
+            inferred_dto = (
+                InferredDateRangeDto(from_date=inf_from, to_date=inf_to)
+                if inf_from is not None and inf_to is not None
+                else None
+            )
+            return PersonSearchResponse(
+                person_id=person_id,
+                query=cleaned_query,
+                search_mode="hybrid_lexical",
+                inferred_date_range=inferred_dto,
+                expanded_terms=expanded_terms[:16],
+                total_matched=len(items),
+                scanned_count=len(entry.docs),
+                items=items,
+            )
 
     async def list_person_materials(
         self,
@@ -321,6 +841,12 @@ class MemoryService:
         limit: int = 20,
         include_held: bool = False,
         kind: RecordKind | None = None,
+        month: str | None = None,
+        year: int | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        pinned: bool | None = None,
+        sort: Literal["happened", "created"] = "happened",
     ) -> CursorPage[MaterialDto]:
         async with self.container.db.user_session(scope) as session:
             person_row = await require_person_row(session, scope, person_id)
@@ -328,27 +854,52 @@ class MemoryService:
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
 
-            stmt = select(RecordRow).where(
-                RecordRow.user_id == scope.user_id,
-                RecordRow.person_id == person_id,
-                RecordRow.deleted_at.is_(None),
-            )
-            if not include_held:
-                stmt = stmt.where(RecordRow.review_state != RecordReviewState.HELD.value)
+            conds = visible_records_conditions(scope, person_id, include_held=include_held)
             if kind is not None:
-                stmt = stmt.where(RecordRow.kind == kind.value)
+                conds.append(RecordRow.kind == kind.value)
+            if pinned is not None:
+                conds.append(RecordRow.pinned.is_(pinned))
+            if month is not None:
+                m_start, m_end_excl = parse_month_bounds(month)
+                conds.append(RecordRow.happened_on >= m_start)
+                conds.append(RecordRow.happened_on < m_end_excl)
+            if year is not None:
+                y_start, y_end_excl = year_bounds(year)
+                conds.append(RecordRow.happened_on >= y_start)
+                conds.append(RecordRow.happened_on < y_end_excl)
+            if date_from is not None:
+                conds.append(RecordRow.happened_on >= date_from)
+            if date_to is not None:
+                conds.append(RecordRow.happened_on <= date_to)
 
-            stmt = apply_created_cursor_filter(stmt, RecordRow, cursor)
-            stmt = stmt.order_by(RecordRow.created_at.desc(), RecordRow.id.desc()).limit(limit + 1)
+            stmt = select(RecordRow).where(*conds)
+            if sort == "created":
+                stmt = apply_created_cursor_filter(stmt, RecordRow, cursor)
+                stmt = stmt.order_by(RecordRow.created_at.desc(), RecordRow.id.desc()).limit(
+                    limit + 1
+                )
+            else:
+                stmt = apply_happened_cursor_filter(stmt, cursor)
+                stmt = stmt.order_by(
+                    RecordRow.happened_on.desc(),
+                    RecordRow.created_at.desc(),
+                    RecordRow.id.desc(),
+                ).limit(limit + 1)
+
             rows = list((await session.scalars(stmt)).all())
 
             has_more = len(rows) > limit
             page_rows = rows[:limit]
-            next_cursor = (
-                build_created_cursor(page_rows[-1].created_at, page_rows[-1].id)
-                if has_more and page_rows
-                else None
-            )
+            if has_more and page_rows:
+                last = page_rows[-1]
+                next_cursor = (
+                    build_created_cursor(last.created_at, last.id)
+                    if sort == "created"
+                    else build_happened_cursor(last.happened_on, last.created_at, last.id)
+                )
+            else:
+                next_cursor = None
+
             items = [
                 record_row_to_dto(
                     self.container.cipher,
@@ -416,12 +967,24 @@ class MemoryService:
                 or bool(req.photo_base64)
             ):
                 raise ValidationFailedError(
-                    "银箭人物默认收起照片，不支持上传照片",
+                    "银盾边界页默认不保存照片",
                     extensions={"field": "kind"},
                 )
 
+            if req.capture_id is not None:
+                cap_exists = await session.scalar(
+                    select(CaptureRow.id).where(
+                        CaptureRow.id == req.capture_id,
+                        CaptureRow.user_id == scope.user_id,
+                    )
+                )
+                if cap_exists is None:
+                    raise NotFoundError("Capture not found")
+
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
+            tz_name = await get_user_timezone(session, scope)
+            local_today = resolve_local_today(now, tz_name)
             rec_id = req.id or new_id()
 
             existing_rec = await session.get(RecordRow, rec_id)
@@ -447,7 +1010,7 @@ class MemoryService:
                 id=rec_id,
                 user_id=scope.user_id,
                 person_id=person_id,
-                capture_id=None,
+                capture_id=req.capture_id,
                 kind=effective_kind.value,
                 title_enc=self.container.cipher.encrypt_str(
                     dek,
@@ -475,7 +1038,7 @@ class MemoryService:
                 ),
                 media_object_key=object_key,
                 stamp_code=req.stamp_code,
-                happened_on=req.happened_on or now.date(),
+                happened_on=req.happened_on or local_today,
                 pinned=req.pinned,
                 review_state=RecordReviewState.NORMAL.value,
                 version=1,
@@ -500,7 +1063,8 @@ class MemoryService:
                 status_code=201,
                 response_body=dto.model_dump(mode="json", by_alias=True),
             )
-            return dto, None
+        self._evict_search_cache(scope.user_id, person_id)
+        return dto, None
 
     async def get_material(self, *, scope: UserScope, material_id: UUID) -> MaterialDto:
         async with self.container.db.user_session(scope) as session:
@@ -642,6 +1206,7 @@ class MemoryService:
             }
         )
 
+        evict_person_ids: list[UUID] = []
         async with self.container.db.user_session(scope) as session:
             idem_row, hit = await self.container.idempotency.claim_or_replay(
                 session,
@@ -665,7 +1230,9 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Material not found")
-            owner = await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
+            old_owner = await _load_material_owner_or_404(
+                session, scope=scope, person_id=row.person_id
+            )
             if row.version != expected_version:
                 raise VersionMismatchError(
                     f"Expected version {expected_version}, current version is {row.version}."
@@ -673,6 +1240,135 @@ class MemoryService:
 
             dek = await self.container.load_user_dek(session, scope)
             now = self.container.clock.now()
+            tz_name = await get_user_timezone(session, scope)
+            active_owner = old_owner
+            old_person_id = old_owner.id
+            evict_person_ids.append(old_person_id)
+
+            # 7-Step Atomic Cross-Person Reassignment Graph (`[换人]`)
+            if req.person_id is not None and req.person_id != row.person_id:
+                target_person = await session.scalar(
+                    select(PersonRow)
+                    .where(
+                        PersonRow.id == req.person_id,
+                        PersonRow.user_id == scope.user_id,
+                        PersonRow.deleted_at.is_(None),
+                        PersonRow.slug.is_distinct_from(UNASSIGNED_PERSON_SLUG),
+                    )
+                    .with_for_update()
+                )
+                if target_person is None:
+                    raise NotFoundError("Target person not found")
+                if target_person.state == PersonState.ARCHIVED.value:
+                    raise ValidationFailedError("Target person is archived")
+                if (
+                    target_person.tier == Tier.SILVER.value
+                    and row.kind == RecordKind.PHOTO.value
+                ):
+                    raise ValidationFailedError(
+                        "银盾边界页默认不保存照片",
+                        extensions={"field": "personId"},
+                    )
+
+                # Step 3: Promote provisional target to ACTIVE if needed
+                if target_person.state == PersonState.PROVISIONAL.value:
+                    target_person.state = PersonState.ACTIVE.value
+                    target_person.version += 1
+                    target_person.updated_at = now
+
+                # Step 4: Move Record, linked active Facts (restoring old_person superseded facts!),
+                #         linked Reminders, open InboxItems, and purge stale ChatCitations.
+                row.person_id = target_person.id
+                active_owner = target_person
+                evict_person_ids.append(target_person.id)
+
+                linked_facts = list(
+                    (
+                        await session.scalars(
+                            select(FactRow)
+                            .where(
+                                FactRow.user_id == scope.user_id,
+                                FactRow.record_id == row.id,
+                                FactRow.invalid_at.is_(None),
+                            )
+                            .with_for_update()
+                        )
+                    ).all()
+                )
+                moved_fact_ids = [f.id for f in linked_facts]
+                if moved_fact_ids:
+                    await restore_superseded_facts(
+                        session,
+                        user_id=scope.user_id,
+                        superseding_fact_ids=moved_fact_ids,
+                        now=now,
+                    )
+                    for fact in linked_facts:
+                        fact.person_id = target_person.id
+                        fact.version += 1
+                        fact.updated_at = now
+                    await session.execute(
+                        update(ReminderRow)
+                        .where(
+                            ReminderRow.user_id == scope.user_id,
+                            ReminderRow.fact_id.in_(moved_fact_ids),
+                            ReminderRow.status.in_(
+                                (ReminderStatus.ACTIVE.value, ReminderStatus.PROPOSED.value)
+                            ),
+                        )
+                        .values(person_id=target_person.id, updated_at=now)
+                    )
+
+                open_inbox_items = list(
+                    (
+                        await session.scalars(
+                            select(InboxItemRow)
+                            .where(
+                                InboxItemRow.user_id == scope.user_id,
+                                InboxItemRow.record_id == row.id,
+                                InboxItemRow.status == InboxItemStatus.OPEN.value,
+                            )
+                            .with_for_update()
+                        )
+                    ).all()
+                )
+                affected_capture_ids: set[UUID] = set()
+                for item in open_inbox_items:
+                    item.person_id = target_person.id
+                    if item.kind in (
+                        InboxItemKind.PERSON_DISAMBIGUATION.value,
+                        InboxItemKind.NEW_PERSON_CONFIRM.value,
+                    ):
+                        item.status = InboxItemStatus.RESOLVED.value
+                        item.resolution_action = InboxResolutionAction.ASSIGN_PERSON.value
+                        item.resolved_at = now
+                        if (
+                            row.review_state == RecordReviewState.HELD.value
+                            and req.review_state is None
+                        ):
+                            row.review_state = RecordReviewState.NORMAL.value
+                        if item.capture_id is not None:
+                            affected_capture_ids.add(item.capture_id)
+                for cap_id in affected_capture_ids:
+                    await sync_capture_status_after_inbox_resolution(
+                        session, scope=scope, capture_id=cap_id, now=now
+                    )
+
+                await session.execute(
+                    delete(ChatCitationRow).where(
+                        ChatCitationRow.user_id == scope.user_id,
+                        ChatCitationRow.record_id == row.id,
+                    )
+                )
+
+                # Step 5: Clean up empty provisional / unassigned source person
+                await session.flush()
+                await _cleanup_unassigned_placeholder_if_empty(
+                    session, scope=scope, person_id=old_person_id, now=now
+                )
+                await _cleanup_provisional_person_if_empty(
+                    session, scope=scope, person=old_owner, now=now
+                )
 
             if req.title is not None:
                 clean_title = strip_forbidden_dev_jargon(req.title) or "随手手札"
@@ -722,6 +1418,40 @@ class MemoryService:
             if req.review_state is not None:
                 row.review_state = req.review_state.value
 
+            if req.trigger_date is not None:
+                date_facts = list(
+                    (
+                        await session.scalars(
+                            select(FactRow)
+                            .where(
+                                FactRow.user_id == scope.user_id,
+                                FactRow.record_id == row.id,
+                                FactRow.invalid_at.is_(None),
+                                FactRow.type.in_((FactType.DATE.value, FactType.PROMISE.value)),
+                            )
+                            .with_for_update()
+                        )
+                    ).all()
+                )
+                for dfact in date_facts:
+                    dfact.trigger_date = req.trigger_date
+                    dfact.needs_glance = False
+                    dfact.updated_at = now
+                    dfact.version += 1
+                    f_content = decrypt_fact_content(self.container.cipher, dek, dfact)
+                    if dfact.status == FactStatus.CONFIRMED.value and dfact.person_id is not None:
+                        await upsert_reminder_for_fact(
+                            session,
+                            scope=scope,
+                            dek=dek,
+                            cipher=self.container.cipher,
+                            fact=dfact,
+                            fact_content=f_content,
+                            desired_status=ReminderStatus.ACTIVE,
+                            now=now,
+                            tz_name=tz_name,
+                        )
+
             row.version += 1
             row.updated_at = now
             await session.flush()
@@ -732,8 +1462,8 @@ class MemoryService:
                 row,
                 tokens=self.container.tokens,
                 now=now,
-                mask_person_id=(owner.slug == UNASSIGNED_PERSON_SLUG),
-                cloak_photo_media=(owner.tier == Tier.SILVER.value),
+                mask_person_id=(active_owner.slug == UNASSIGNED_PERSON_SLUG),
+                cloak_photo_media=(active_owner.tier == Tier.SILVER.value),
             )
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -742,7 +1472,9 @@ class MemoryService:
                 status_code=200,
                 response_body=dto.model_dump(mode="json", by_alias=True),
             )
-            return dto, None
+
+        self._evict_search_cache(scope.user_id, *evict_person_ids)
+        return dto, None
 
     async def delete_material(
         self,
@@ -755,6 +1487,7 @@ class MemoryService:
         req_hash = hash_request_payload(
             {"action": "delete_material", "materialId": str(material_id)}
         )
+        evict_person_id: UUID | None = None
         async with self.container.db.user_session(scope) as session:
             idem_row, hit = await self.container.idempotency.claim_or_replay(
                 session,
@@ -778,7 +1511,8 @@ class MemoryService:
             )
             if row is None:
                 raise NotFoundError("Material not found")
-            await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
+            owner = await _load_material_owner_or_404(session, scope=scope, person_id=row.person_id)
+            evict_person_id = owner.id
             now = self.container.clock.now()
             row.deleted_at = now
             row.updated_at = now
@@ -806,6 +1540,12 @@ class MemoryService:
                 linked_fact_ids.append(fact.id)
 
             if linked_fact_ids:
+                await restore_superseded_facts(
+                    session,
+                    user_id=scope.user_id,
+                    superseding_fact_ids=linked_fact_ids,
+                    now=now,
+                )
                 await cancel_reminders_for_facts(
                     session,
                     user_id=scope.user_id,
@@ -813,7 +1553,45 @@ class MemoryService:
                     now=now,
                 )
 
+            open_inbox_items = list(
+                (
+                    await session.scalars(
+                        select(InboxItemRow)
+                        .where(
+                            InboxItemRow.user_id == scope.user_id,
+                            InboxItemRow.record_id == row.id,
+                            InboxItemRow.status == InboxItemStatus.OPEN.value,
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            affected_capture_ids: set[UUID] = set()
+            for item in open_inbox_items:
+                item.status = InboxItemStatus.RESOLVED.value
+                item.resolution_action = InboxResolutionAction.DISCARD.value
+                item.resolved_at = now
+                if item.capture_id is not None:
+                    affected_capture_ids.add(item.capture_id)
+            for cap_id in affected_capture_ids:
+                await sync_capture_status_after_inbox_resolution(
+                    session, scope=scope, capture_id=cap_id, now=now
+                )
+
+            await session.execute(
+                delete(ChatCitationRow).where(
+                    ChatCitationRow.user_id == scope.user_id,
+                    ChatCitationRow.record_id == row.id,
+                )
+            )
+
             await session.flush()
+            await _cleanup_unassigned_placeholder_if_empty(
+                session, scope=scope, person_id=owner.id, now=now
+            )
+            await _cleanup_provisional_person_if_empty(
+                session, scope=scope, person=owner, now=now
+            )
 
             assert idem_row is not None
             await self.container.idempotency.complete(
@@ -822,7 +1600,8 @@ class MemoryService:
                 status_code=204,
                 response_body={"deleted": True},
             )
-            return None
+        self._evict_search_cache(scope.user_id, evict_person_id)
+        return None
 
     async def get_material_media(
         self,
@@ -981,7 +1760,7 @@ class MemoryService:
                             column="snippet_enc",
                             row_id=record_id,
                         ),
-                        happened_on=now.date(),
+                        happened_on=resolve_local_today(now, tz_name),
                         pinned=True,
                         review_state=RecordReviewState.NORMAL.value,
                         version=1,
@@ -1062,7 +1841,8 @@ class MemoryService:
                 status_code=201,
                 response_body=dto.model_dump(mode="json", by_alias=True),
             )
-            return dto, None
+        self._evict_search_cache(scope.user_id, person_id)
+        return dto, None
 
     async def patch_fact(
         self,
@@ -1417,6 +2197,9 @@ class MemoryService:
                             monogram=p.monogram,
                             tier=Tier(p.tier),
                             role_tag=decrypt_person_role_tag(self.container.cipher, dek, p),
+                            distinguishing_cue=decrypt_person_distinguishing_cue(
+                                self.container.cipher, dek, p
+                            ),
                             state=PersonState(p.state),
                         )
                     )
@@ -1931,7 +2714,18 @@ class MemoryService:
                 status_code=200,
                 response_body=resp.model_dump(mode="json", by_alias=True),
             )
-            return resp, None
+            evict_ids = {
+                pid
+                for pid in (
+                    final_person_id,
+                    item.person_id,
+                    current_person_row.id if current_person_row is not None else None,
+                    linked_record.person_id if linked_record is not None else None,
+                )
+                if pid is not None
+            }
+        self._evict_search_cache(scope.user_id, *evict_ids)
+        return resp, None
 
     async def auto_ink_due_pencil_drafts(self, *, limit: int = 100) -> int:
         """D1: promote "probably right" pencil drafts to ink once their 48h glance window ends.
@@ -2086,6 +2880,7 @@ class MemoryService:
         body_text = strip_forbidden_dev_jargon(body_text) or "已确认记录"
         title_text = build_natural_slip_tag("", body_text)
         rec_id = new_id()
+        tz_name = await get_user_timezone(session, scope)
         rec = RecordRow(
             id=rec_id,
             user_id=scope.user_id,
@@ -2116,7 +2911,7 @@ class MemoryService:
                 column="snippet_enc",
                 row_id=rec_id,
             ),
-            happened_on=now.date(),
+            happened_on=resolve_local_today(now, tz_name),
             pinned=True,
             review_state=RecordReviewState.NORMAL.value,
             version=1,

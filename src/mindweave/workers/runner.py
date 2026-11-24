@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import re
 import signal
 import threading
 from collections.abc import Awaitable, Callable
@@ -20,17 +19,10 @@ from mindweave.core.db import DatabaseManager
 from mindweave.core.logging import get_logger, sanitize_log_value
 from mindweave.core.orm import BackgroundJobRow
 from mindweave.shared.enums import JobStatus
-from mindweave.shared.pii import mask_hard_pii
 from mindweave.workers.scheduler import PeriodicScheduler
 
 logger = get_logger(__name__)
 
-_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
-_KV_SECRET_RE = re.compile(
-    r"((?:token|secret|password|raw_text|transcript|content|body|display_name|person_name|alias)"
-    r"\s*[=:]\s*)([^\s,;]+)",
-    re.IGNORECASE,
-)
 _MAX_ERROR_CHARS = 240
 
 
@@ -72,14 +64,19 @@ def compute_backoff_seconds(attempts: int) -> int:
 
 
 def sanitize_job_error(exc: BaseException, *, max_length: int = _MAX_ERROR_CHARS) -> str:
-    """Produce a truncated, single-line, zero-PII diagnostic summary for `last_error`."""
-    raw_msg = " ".join(str(exc).split())
-    masked = str(sanitize_log_value(raw_msg))
-    masked = _PHONE_RE.sub("[REDACTED_PHONE]", masked)
-    masked = _KV_SECRET_RE.sub(r"\1[REDACTED]", masked)
-    masked = mask_hard_pii(masked).masked_text
+    """Produce a truncated, single-line, zero-PII diagnostic summary for `last_error`.
+
+    Never persists raw `str(exc)` because downstream exceptions can embed free-form Chinese
+    journal text or names that bypass regex redaction.
+    """
+    from mindweave.core.errors import AppError
+
     prefix = type(exc).__name__
-    combined = f"{prefix}: {masked}" if masked else prefix
+    if isinstance(exc, AppError):
+        code = str(sanitize_log_value(exc.error_code))
+        combined = f"{prefix}: {code}"
+    else:
+        combined = f"{prefix}: internal_error"
     if len(combined) > max_length:
         return combined[: max_length - 3] + "..."
     return combined
@@ -247,10 +244,18 @@ class WorkerRunner:
         )
         try:
             while not event.is_set():
-                if self._scheduler is not None:
-                    await self._scheduler.tick()
+                try:
+                    if self._scheduler is not None:
+                        await self._scheduler.tick()
 
-                processed = await self.run_once()
+                    processed = await self.run_once()
+                except Exception as exc:
+                    logger.warning(
+                        "worker.poll_iteration_failed",
+                        error_type=type(exc).__name__,
+                    )
+                    processed = 0
+
                 if event.is_set():
                     break
                 if processed > 0:

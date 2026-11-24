@@ -118,7 +118,7 @@ def build_desensitized_push_copy(
         raise PushCopySafetyError(f"Invalid reminder rule {rule!r}") from exc
 
     if lead_day == 0:
-        title = "心络 · 今日有一份心意备忘"
+        title = "心络 · 今日有一条重要提醒"
         body = (
             "点开查看你记下的重要约定与待办承诺"
             if rule_enum is ReminderRule.ONCE

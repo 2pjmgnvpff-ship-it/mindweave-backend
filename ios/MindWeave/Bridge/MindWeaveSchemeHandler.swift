@@ -1,9 +1,26 @@
 import Foundation
+import os
 import WebKit
 
-/// Custom `WKURLSchemeHandler` serving offline bundled `WebBundle/` assets on `mindweave://app/`
-/// and transparently proxying `/v1/*` and `/healthz` (including real-time SSE streams)
-/// to the configured MindWeave backend server on the same origin.
+/// Strictly `Sendable` immutable cached bundle asset payload for off-main-thread serving.
+private struct CachedBundleAsset: Sendable {
+    let data: Data
+    let mimeType: String
+    let cacheControl: String
+}
+
+/// Strictly `Sendable` local HTTP response payload computed off `@MainActor` and handed back
+/// to `@MainActor` where non-`Sendable` `any WKURLSchemeTask` is invoked safely.
+private struct LocalSchemePayload: Sendable {
+    let statusCode: Int
+    let headers: [String: String]
+    let body: Data
+}
+
+/// Custom `WKURLSchemeHandler` serving offline bundled `WebBundle/` assets on `mindweave://app/`,
+/// native voice `.m4a` clips on `mindweave://app/__native_audio/<id>.m4a` (with RFC 9110 `206`
+/// Range support), and transparently proxying `/v1/*` and `/healthz` (including SSE streams and
+/// HTTP `206 Partial Content` media streaming) to the configured MindWeave backend server.
 @MainActor
 final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "mindweave"
@@ -55,6 +72,19 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private let config: ServerConfigStore
+    private let bundleRootURL: URL?
+    private let localIOQueue = DispatchQueue(
+        label: "app.mindweave.scheme.io",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
+    private let assetCache = OSAllocatedUnfairLock<[String: CachedBundleAsset]>(initialState: [:])
+    private static let maxCachedAssetBytes = 256 * 1024
+
+    // Strictly @MainActor-pinned non-Sendable WKURLSchemeTask maps (zero cross-actor capture!).
+    private var pendingLocalTasks: [ObjectIdentifier: any WKURLSchemeTask] = [:]
+    private var pendingProxyPreTasks: [ObjectIdentifier: any WKURLSchemeTask] = [:]
+
     private let lock = NSLock()
     private var activeTasks: [ObjectIdentifier: URLSessionDataTask] = [:]
     private var schemeTasksByDataTask: [Int: any WKURLSchemeTask] = [:]
@@ -68,6 +98,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
 
     init(config: ServerConfigStore) {
         self.config = config
+        self.bundleRootURL = Bundle.main.url(forResource: "WebBundle", withExtension: nil)?.standardizedFileURL
         self.delegateProxy = SessionDelegateProxy()
         super.init()
         self.delegateProxy.owner = self
@@ -88,17 +119,20 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         )
     }
 
-    /// Cancels all in-flight upstream proxy tasks safely (e.g., on server switch or teardown).
+    /// Cancels all in-flight upstream and local tasks and purges all 8 tracking maps (`02d LK-9`, `BC5 BOMB-IOS-3`).
     func cancelAllTasks() {
+        pendingLocalTasks.removeAll()
+        pendingProxyPreTasks.removeAll()
+
         let tasksToCancel: [URLSessionDataTask]
         lock.lock()
-        for (schemeID, dataTask) in activeTasks {
-            stoppedTasks.insert(schemeID)
-            schemeTasksByDataTask.removeValue(forKey: dataTask.taskIdentifier)
-            receivedResponseTasks.remove(schemeID)
-        }
         tasksToCancel = Array(activeTasks.values)
         activeTasks.removeAll()
+        schemeTasksByDataTask.removeAll()
+        schemeTaskIDsByDataTask.removeAll()
+        originalURLsByDataTask.removeAll()
+        stoppedTasks.removeAll()
+        receivedResponseTasks.removeAll()
         lock.unlock()
 
         for task in tasksToCancel {
@@ -110,8 +144,12 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         guard let requestURL = urlSchemeTask.request.url else {
-            let error = URLError(.badURL)
-            urlSchemeTask.didFailWithError(error)
+            urlSchemeTask.didFailWithError(URLError(.badURL))
+            return
+        }
+
+        if requestURL.path.hasPrefix("/__native_audio/") {
+            serveNativeAudio(for: urlSchemeTask, requestURL: requestURL)
             return
         }
 
@@ -124,13 +162,17 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
         let schemeID = ObjectIdentifier(urlSchemeTask as AnyObject)
-        let dataTaskToCancel: URLSessionDataTask?
+        pendingLocalTasks.removeValue(forKey: schemeID)
+        pendingProxyPreTasks.removeValue(forKey: schemeID)
 
+        let dataTaskToCancel: URLSessionDataTask?
         lock.lock()
         dataTaskToCancel = activeTasks.removeValue(forKey: schemeID)
         if let dataTask = dataTaskToCancel {
             stoppedTasks.insert(schemeID)
             schemeTasksByDataTask.removeValue(forKey: dataTask.taskIdentifier)
+            schemeTaskIDsByDataTask.removeValue(forKey: dataTask.taskIdentifier)
+            originalURLsByDataTask.removeValue(forKey: dataTask.taskIdentifier)
             receivedResponseTasks.remove(schemeID)
         }
         lock.unlock()
@@ -138,16 +180,79 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         dataTaskToCancel?.cancel()
     }
 
-    // MARK: - Local WebBundle Serving
+    // MARK: - Local Native Audio Serving (/__native_audio/<id>.m4a, RFC 9110 Range 206 Support)
+
+    private func serveNativeAudio(for urlSchemeTask: any WKURLSchemeTask, requestURL: URL) {
+        let filename = String(requestURL.path.dropFirst("/__native_audio/".count))
+        guard filename.hasSuffix(".m4a") else {
+            deliverLocalPayload(
+                LocalSchemePayload(
+                    statusCode: 400,
+                    headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"],
+                    body: Data("Invalid audio path".utf8)
+                ),
+                to: urlSchemeTask,
+                url: requestURL
+            )
+            return
+        }
+        let rawID = String(filename.dropLast(4))
+        let safeID = NativeAudioStore.sanitizeID(rawID)
+        guard !safeID.isEmpty, safeID == rawID else {
+            deliverLocalPayload(
+                LocalSchemePayload(
+                    statusCode: 400,
+                    headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"],
+                    body: Data("Invalid session ID".utf8)
+                ),
+                to: urlSchemeTask,
+                url: requestURL
+            )
+            return
+        }
+
+        let schemeID = ObjectIdentifier(urlSchemeTask as AnyObject)
+        let rangeHeader = urlSchemeTask.request.value(forHTTPHeaderField: "Range")
+        pendingLocalTasks[schemeID] = urlSchemeTask
+
+        localIOQueue.async { [weak self] in
+            let payload: LocalSchemePayload
+            if let audioData = NativeAudioStore.shared.read(sessionId: safeID) {
+                payload = Self.makeRangeAwarePayload(
+                    data: audioData,
+                    mimeType: "audio/mp4",
+                    cacheControl: "no-store",
+                    rangeHeader: rangeHeader
+                )
+            } else {
+                payload = LocalSchemePayload(
+                    statusCode: 404,
+                    headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store"],
+                    body: Data("Not Found".utf8)
+                )
+            }
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let liveTask = self.pendingLocalTasks.removeValue(forKey: schemeID) else {
+                    return
+                }
+                self.deliverLocalPayload(payload, to: liveTask, url: requestURL)
+            }
+        }
+    }
+
+    // MARK: - Off-Main-Thread Local WebBundle Serving (02d CB-1/CB-2 + 02f CI-4)
 
     private func serveBundledAsset(for urlSchemeTask: any WKURLSchemeTask, requestURL: URL) {
-        guard let bundleRoot = Bundle.main.url(forResource: "WebBundle", withExtension: nil)?.standardizedFileURL else {
-            respondWithLocalStatus(
-                urlSchemeTask: urlSchemeTask,
-                url: requestURL,
-                statusCode: 500,
-                mimeType: "text/plain; charset=utf-8",
-                body: Data("WebBundle resource missing from app bundle.".utf8)
+        guard let bundleRoot = bundleRootURL else {
+            deliverLocalPayload(
+                LocalSchemePayload(
+                    statusCode: 500,
+                    headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache"],
+                    body: Data("WebBundle resource missing from app bundle.".utf8)
+                ),
+                to: urlSchemeTask,
+                url: requestURL
             )
             return
         }
@@ -161,93 +266,245 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             }
         }
 
+        // Fast synchronous cache hit (0 disk syscalls, 0 actor hops!).
+        if let cached = assetCache.withLock({ $0[relativePath] }) {
+            let payload = LocalSchemePayload(
+                statusCode: 200,
+                headers: [
+                    "Content-Type": cached.mimeType,
+                    "Content-Length": "\(cached.data.count)",
+                    "Cache-Control": cached.cacheControl,
+                    "Access-Control-Allow-Origin": "*",
+                ],
+                body: cached.data
+            )
+            deliverLocalPayload(payload, to: urlSchemeTask, url: requestURL)
+            return
+        }
+
+        // Cache miss: pin non-Sendable WKURLSchemeTask on @MainActor and read disk on I/O queue.
+        let schemeID = ObjectIdentifier(urlSchemeTask as AnyObject)
+        pendingLocalTasks[schemeID] = urlSchemeTask
+        let cache = assetCache
+        let maxCached = Self.maxCachedAssetBytes
+
+        localIOQueue.async { [weak self] in
+            let payload = Self.loadBundledAssetOffMain(
+                bundleRoot: bundleRoot,
+                relativePath: relativePath,
+                cache: cache,
+                maxCachedBytes: maxCached
+            )
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let liveTask = self.pendingLocalTasks.removeValue(forKey: schemeID) else {
+                    return
+                }
+                self.deliverLocalPayload(payload, to: liveTask, url: requestURL)
+            }
+        }
+    }
+
+    nonisolated private static func loadBundledAssetOffMain(
+        bundleRoot: URL,
+        relativePath: String,
+        cache: OSAllocatedUnfairLock<[String: CachedBundleAsset]>,
+        maxCachedBytes: Int
+    ) -> LocalSchemePayload {
         let candidateURL = bundleRoot.appendingPathComponent(relativePath).standardizedFileURL
         let rootPrefix = bundleRoot.path.hasSuffix("/") ? bundleRoot.path : bundleRoot.path + "/"
 
-        // Prevent any path traversal outside WebBundle.
         guard candidateURL.path == bundleRoot.path || candidateURL.path.hasPrefix(rootPrefix) else {
-            respondWithLocalStatus(
-                urlSchemeTask: urlSchemeTask,
-                url: requestURL,
+            return LocalSchemePayload(
                 statusCode: 403,
-                mimeType: "text/plain; charset=utf-8",
+                headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache"],
                 body: Data("Forbidden".utf8)
             )
-            return
         }
 
         var targetFileURL = candidateURL
         var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: targetFileURL.path, isDirectory: &isDirectory) {
-            if isDirectory.boolValue {
-                targetFileURL = targetFileURL.appendingPathComponent("index.html")
-            }
-        } else {
-            respondWithLocalStatus(
-                urlSchemeTask: urlSchemeTask,
-                url: requestURL,
+        guard FileManager.default.fileExists(atPath: targetFileURL.path, isDirectory: &isDirectory) else {
+            return LocalSchemePayload(
                 statusCode: 404,
-                mimeType: "text/plain; charset=utf-8",
+                headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache"],
                 body: Data("Not Found".utf8)
             )
-            return
+        }
+        if isDirectory.boolValue {
+            targetFileURL = targetFileURL.appendingPathComponent("index.html")
         }
 
-        do {
-            let fileData = try Data(contentsOf: targetFileURL)
-            let mimeType = Self.mimeType(for: targetFileURL.pathExtension)
-            respondWithLocalStatus(
-                urlSchemeTask: urlSchemeTask,
-                url: requestURL,
-                statusCode: 200,
-                mimeType: mimeType,
-                body: fileData
+        guard let fileData = try? Data(contentsOf: targetFileURL) else {
+            return LocalSchemePayload(
+                statusCode: 500,
+                headers: ["Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache"],
+                body: Data("Failed to read bundled asset.".utf8)
             )
-        } catch {
-            urlSchemeTask.didFailWithError(error)
         }
+
+        let mime = mimeType(for: targetFileURL.pathExtension)
+        let isImmutable = relativePath.hasPrefix("scripts/")
+            || relativePath.hasPrefix("styles/")
+            || relativePath.hasPrefix("assets/")
+        let cacheControl = isImmutable ? "public, max-age=31536000, immutable" : "no-cache"
+
+        if fileData.count <= maxCachedBytes {
+            let entry = CachedBundleAsset(data: fileData, mimeType: mime, cacheControl: cacheControl)
+            cache.withLock { dict in
+                dict[relativePath] = entry
+            }
+        }
+
+        return LocalSchemePayload(
+            statusCode: 200,
+            headers: [
+                "Content-Type": mime,
+                "Content-Length": "\(fileData.count)",
+                "Cache-Control": cacheControl,
+                "Access-Control-Allow-Origin": "*",
+            ],
+            body: fileData
+        )
     }
 
-    private func respondWithLocalStatus(
-        urlSchemeTask: any WKURLSchemeTask,
-        url: URL,
-        statusCode: Int,
-        mimeType: String,
-        body: Data
+    private func deliverLocalPayload(
+        _ payload: LocalSchemePayload,
+        to urlSchemeTask: any WKURLSchemeTask,
+        url: URL
     ) {
-        let headers: [String: String] = [
-            "Content-Type": mimeType,
-            "Content-Length": "\(body.count)",
-            "Cache-Control": "no-cache",
-            "Access-Control-Allow-Origin": "*",
-        ]
         if let response = HTTPURLResponse(
             url: url,
-            statusCode: statusCode,
+            statusCode: payload.statusCode,
             httpVersion: "HTTP/1.1",
-            headerFields: headers
+            headerFields: payload.headers
         ) {
             urlSchemeTask.didReceive(response)
-            urlSchemeTask.didReceive(body)
+            if !payload.body.isEmpty {
+                urlSchemeTask.didReceive(payload.body)
+            }
             urlSchemeTask.didFinish()
         } else {
             urlSchemeTask.didFailWithError(URLError(.cannotParseResponse))
         }
     }
 
-    // MARK: - Upstream API & SSE Streaming Proxy
+    /// Slices an in-memory media buffer per RFC 9110 `Range: bytes=start-end` (`206` / `416` / `200`).
+    nonisolated static func makeRangeAwarePayload(
+        data: Data,
+        mimeType: String,
+        cacheControl: String,
+        rangeHeader: String?
+    ) -> LocalSchemePayload {
+        let total = data.count
+        var baseHeaders: [String: String] = [
+            "Content-Type": mimeType,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": cacheControl,
+            "Access-Control-Allow-Origin": "*",
+        ]
+
+        guard let rangeHeader = rangeHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
+              rangeHeader.lowercased().hasPrefix("bytes="),
+              total > 0 else {
+            baseHeaders["Content-Length"] = "\(total)"
+            return LocalSchemePayload(statusCode: 200, headers: baseHeaders, body: data)
+        }
+
+        let spec = String(rangeHeader.dropFirst(6)).split(separator: ",").first.map(String.init) ?? ""
+        let parts = spec.split(separator: "-", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2 else {
+            baseHeaders["Content-Length"] = "\(total)"
+            return LocalSchemePayload(statusCode: 200, headers: baseHeaders, body: data)
+        }
+
+        let start: Int
+        let end: Int
+        if parts[0].isEmpty {
+            guard let suffixLen = Int(parts[1]), suffixLen > 0 else {
+                baseHeaders["Content-Range"] = "bytes */\(total)"
+                baseHeaders["Content-Length"] = "0"
+                return LocalSchemePayload(statusCode: 416, headers: baseHeaders, body: Data())
+            }
+            start = max(0, total - suffixLen)
+            end = total - 1
+        } else {
+            guard let parsedStart = Int(parts[0]), parsedStart >= 0 else {
+                baseHeaders["Content-Range"] = "bytes */\(total)"
+                baseHeaders["Content-Length"] = "0"
+                return LocalSchemePayload(statusCode: 416, headers: baseHeaders, body: Data())
+            }
+            start = parsedStart
+            if parts[1].isEmpty {
+                end = total - 1
+            } else if let parsedEnd = Int(parts[1]) {
+                end = min(parsedEnd, total - 1)
+            } else {
+                baseHeaders["Content-Range"] = "bytes */\(total)"
+                baseHeaders["Content-Length"] = "0"
+                return LocalSchemePayload(statusCode: 416, headers: baseHeaders, body: Data())
+            }
+        }
+
+        guard start < total && start <= end else {
+            baseHeaders["Content-Range"] = "bytes */\(total)"
+            baseHeaders["Content-Length"] = "0"
+            return LocalSchemePayload(statusCode: 416, headers: baseHeaders, body: Data())
+        }
+
+        let slice = data.subdata(in: start..<(end + 1))
+        baseHeaders["Content-Range"] = "bytes \(start)-\(end)/\(total)"
+        baseHeaders["Content-Length"] = "\(slice.count)"
+        return LocalSchemePayload(statusCode: 206, headers: baseHeaders, body: slice)
+    }
+
+    // MARK: - Upstream API & SSE Streaming Proxy (Off-Main Body Drain — BC5 BOMB-IOS-2 + 02f CI-4)
 
     private func startUpstreamProxy(for urlSchemeTask: any WKURLSchemeTask, requestURL: URL) {
-        guard let session = sessionHolder.session,
-              let targetURL = Self.buildUpstreamURL(for: requestURL, baseURL: config.apiBaseURL) else {
+        guard let targetURL = Self.buildUpstreamURL(for: requestURL, baseURL: config.apiBaseURL) else {
             urlSchemeTask.didFailWithError(URLError(.badURL))
             return
         }
 
-        let upstreamRequest = Self.buildUpstreamRequest(
-            from: urlSchemeTask.request,
-            targetURL: targetURL
+        let reqSnapshot: URLRequest = urlSchemeTask.request
+        if reqSnapshot.httpBody == nil && reqSnapshot.httpBodyStream != nil {
+            // Pin non-Sendable WKURLSchemeTask on @MainActor; copy Sendable URLRequest value to drain stream off-main!
+            let schemeID = ObjectIdentifier(urlSchemeTask as AnyObject)
+            pendingProxyPreTasks[schemeID] = urlSchemeTask
+            localIOQueue.async { [weak self] in
+                let upstreamRequest = Self.buildUpstreamRequest(from: reqSnapshot, targetURL: targetURL)
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          let liveTask = self.pendingProxyPreTasks.removeValue(forKey: schemeID) else {
+                        return
+                    }
+                    self.launchUpstreamDataTask(
+                        upstreamRequest: upstreamRequest,
+                        for: liveTask,
+                        originalURL: requestURL
+                    )
+                }
+            }
+            return
+        }
+
+        let upstreamRequest = Self.buildUpstreamRequest(from: reqSnapshot, targetURL: targetURL)
+        launchUpstreamDataTask(
+            upstreamRequest: upstreamRequest,
+            for: urlSchemeTask,
+            originalURL: requestURL
         )
+    }
+
+    private func launchUpstreamDataTask(
+        upstreamRequest: URLRequest,
+        for urlSchemeTask: any WKURLSchemeTask,
+        originalURL: URL
+    ) {
+        guard let session = sessionHolder.session else {
+            urlSchemeTask.didFailWithError(URLError(.cancelled))
+            return
+        }
         let dataTask = session.dataTask(with: upstreamRequest)
         let schemeID = ObjectIdentifier(urlSchemeTask as AnyObject)
         let taskID = dataTask.taskIdentifier
@@ -258,7 +515,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         activeTasks[schemeID] = dataTask
         schemeTasksByDataTask[taskID] = urlSchemeTask
         schemeTaskIDsByDataTask[taskID] = schemeID
-        originalURLsByDataTask[taskID] = requestURL
+        originalURLsByDataTask[taskID] = originalURL
         lock.unlock()
 
         dataTask.resume()
@@ -409,9 +666,14 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         ]
 
         var hasClientPlatform = false
-        var acceptsEventStream = targetURL.path.hasSuffix("/chat/stream")
-            || targetURL.path.hasSuffix("/chat")
-            || targetURL.path.hasSuffix("/events")
+        var hasRangeOrMediaHeader = false
+        let pathLower = targetURL.path.lowercased()
+        var acceptsEventStream = pathLower.hasSuffix("/chat/stream")
+            || pathLower.hasSuffix("/chat")
+            || pathLower.hasSuffix("/events")
+        let isBinaryMediaEndpoint = pathLower.hasSuffix("/audio")
+            || pathLower.hasSuffix("/media")
+            || pathLower.hasSuffix("/download")
 
         if let headers = originalRequest.allHTTPHeaderFields {
             for (name, value) in headers {
@@ -425,6 +687,9 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
                 if lower == "accept" && value.lowercased().contains("text/event-stream") {
                     acceptsEventStream = true
                 }
+                if lower == "range" || lower == "if-range" {
+                    hasRangeOrMediaHeader = true
+                }
                 upstream.setValue(value, forHTTPHeaderField: name)
             }
         }
@@ -433,9 +698,13 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             upstream.setValue("ios-wkwebview", forHTTPHeaderField: "X-Client-Platform")
         }
 
-        if acceptsEventStream {
-            // Prevent gzip chunk buffering so SSE events arrive instantaneously.
+        // BC5 BOMB-IOS-1a: Force `Accept-Encoding: identity` for SSE, `/audio`, `/media`, and ANY
+        // `Range`/`If-Range` request so URLSession auto-gzip never strips `Content-Length` or breaks `206`!
+        if acceptsEventStream || isBinaryMediaEndpoint || hasRangeOrMediaHeader {
             upstream.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        }
+
+        if acceptsEventStream {
             upstream.timeoutInterval = 300
         } else {
             upstream.timeoutInterval = 60
@@ -476,8 +745,9 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
 
     nonisolated static func filteredResponseHeaders(from httpResponse: HTTPURLResponse) -> [String: String] {
         // URLSession transparently decompresses encoded bodies, so Content-Length must ONLY be
-        // stripped when a non-identity Content-Encoding header is present. Preserving Content-Length
-        // on uncompressed audio/* and 206 Partial Content responses keeps iOS CoreMedia seeking intact.
+        // stripped when a non-identity Content-Encoding header is present. Preserving Content-Length,
+        // Content-Range, and Accept-Ranges on uncompressed audio/* and 206 Partial Content responses
+        // keeps iOS CoreMedia seeking intact.
         var hasNonIdentityEncoding = false
         for (rawKey, rawValue) in httpResponse.allHeaderFields {
             guard let key = rawKey as? String, let value = rawValue as? String else {

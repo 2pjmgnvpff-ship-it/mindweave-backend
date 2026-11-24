@@ -2,15 +2,54 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field
 
 from mindweave.core.dto import CamelModel
-from mindweave.modules.reminders.domain.schedule import DEFAULT_LEAD_DAYS
+from mindweave.modules.reminders.domain.schedule import (
+    DEFAULT_LEAD_DAYS,
+    ReminderScheduleError,
+    resolve_next_lunar_occurrence_date,
+)
 from mindweave.modules.reminders.infra.repositories import DecryptedDevice, DecryptedReminder
 from mindweave.shared.enums import PushPlatform, ReminderRule, ReminderStatus
+
+
+def _compute_next_occurrence_date(item: DecryptedReminder) -> date | None:
+    """Compute the concrete solar occurrence date corresponding to a solar or lunar reminder."""
+    if item.rule is ReminderRule.ONCE:
+        return item.once_date
+    if item.next_fire_at is not None:
+        try:
+            tz = ZoneInfo(item.timezone)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            tz = ZoneInfo("Asia/Shanghai")
+        fire_dt = (
+            item.next_fire_at.replace(tzinfo=UTC)
+            if item.next_fire_at.tzinfo is None
+            else item.next_fire_at
+        )
+        local_fire_date = fire_dt.astimezone(tz).date()
+        lead = int(item.next_lead_day or 0)
+        return local_fire_date + timedelta(days=lead)
+    if item.is_lunar and item.target_month is not None and item.target_day is not None:
+        try:
+            return resolve_next_lunar_occurrence_date(
+                target_month=item.target_month,
+                target_day=item.target_day,
+                is_leap_month=item.is_leap_month,
+                timezone=item.timezone,
+                reference_utc=datetime.now(UTC),
+                fire_hour=item.fire_hour,
+                fire_minute=item.fire_minute,
+                lead_days=item.lead_days,
+            )
+        except (ReminderScheduleError, ValueError):
+            return None
+    return item.once_date
 
 
 class RegisterDeviceRequest(CamelModel):
@@ -85,6 +124,7 @@ class ReminderResponse(CamelModel):
     target_day: int | None = None
     is_leap_month: bool
     once_date: date | None = None
+    next_occurrence_date: date | None = None
     fire_hour: int
     fire_minute: int
     lead_days: list[int]
@@ -111,6 +151,7 @@ class ReminderResponse(CamelModel):
             target_day=item.target_day,
             is_leap_month=item.is_leap_month,
             once_date=item.once_date,
+            next_occurrence_date=_compute_next_occurrence_date(item),
             fire_hour=item.fire_hour,
             fire_minute=item.fire_minute,
             lead_days=list(item.lead_days),

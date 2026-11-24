@@ -1,191 +1,178 @@
-// chat.js — full-screen Muse chat with Cupid: live agent execution trace, 1-tap action cards,
-// proactive care whisper card, voice-first hold-to-speak composer, left-edge iOS swipe-to-pop,
-// tactile citations, searchable right-edge drawer, gold-only perspective, crisis safety stop.
-import { h, clear, svg, $ } from '../dom.js';
+// chat.js — Gleb Porcelain Cupid Chat (A1 24px Orb header, B4 Dual-Voice bar, BC3 order=desc pagination,
+// SSE truncation retry, 1:1 right-edge Memory Drawer, scrollChatToTop, LK-4 display:none teardown).
+import { h, clear, svg, $, ensureStyle } from '../dom.js';
 import { api, uuid } from '../api/endpoints.js';
 import { friendlyMessage } from '../api/client.js';
 import { store } from '../store.js';
 import { haptic } from '../native-bridge.js';
-import { BACK_SVG, SEND_SVG, PAPERS_SVG, ARROW_SVGS, CUPID_IMG } from '../icons.js';
-import { shouldSendOnEnter, matchesMaterialQuery } from '../format.js';
+import { BACK_SVG, SEND_SVG, PAPERS_SVG, ARROW_SVGS } from '../icons.js';
+import { createOrb, setOrbState } from '../lib/orb.js';
+import { createImeGuard } from '../lib/ime-guard.js';
+import { initKeyboardViewportBridge } from '../lib/swipe-arbiter.js';
 import {
-  userBubble, writebackReceipt, aiBubble, actionProposalCard, proactiveBriefCard,
-  perspectiveCard, suggestionRow, crisisCard, historyMessage, starterChips, drawerCard, attachedChip,
+  userBubble, writebackReceipt, aiBubble, actionProposalCard,
+  perspectiveCard, suggestionRow, crisisCard, historyMessage, starterChips, attachedChip,
 } from './chat-render.js';
-import { createChatVoice, bindChatGestures, clearSwipeStyles } from './chat-voice.js';
+import { createChatVoice, bindChatEdgePop, clearSwipeStyles } from './chat-voice.js';
+import { createChatDrawer } from './chat-drawer.js';
 import { loadMaterials } from './journal.js';
 import { actions } from '../actions.js';
 import { whisper } from './toast.js';
 
-const SUB_COPY = {
-  gold: (n) => `陪你多替「${n}」想一步`,
-  silver: (n) => `站在你这边，聊聊「${n}」`,
-  crystal: (n) => `帮你把「${n}」的礼数记周全`,
-};
+const B4_TIP_KEY = 'mw.b4TipSeen';
+const SUB_COPY = { gold: (n) => `陪你多替「${n}」想一步`, silver: (n) => `客观整理，聊聊「${n}」`, crystal: (n) => `帮你把「${n}」的细节记周全` };
 const EMPTY_COPY = {
-  gold: (n) => `想聊聊「${n}」的什么？丘比特会翻着你记下的手帐回答，每句都标出处。`,
-  silver: (n) => `和「${n}」之间不痛快？说吧，丘比特站你这边，只是不会替你编事实。`,
-  crystal: (n) => `要给「${n}」回个消息、备份礼物？问丘比特就好。`,
+  gold: (n) => `想聊聊「${n}」的什么？丘比特会翻着你记下的手帐回答，每句都标出处`,
+  silver: (n) => `需要理清和「${n}」的边界或时间线？丘比特只据实整理，不替你编造事实`,
+  crystal: (n) => `要给「${n}」回个消息或记件小事？直接问丘比特就好`,
 };
-const ONBOARDING_QUESTION = '你记住了什么？';
-const DRAWER_SEARCH_THRESHOLD = 6;
+const STOP_SVG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2.5"/></svg>';
 
-let state = { personId: null, attached: new Set(), streaming: null, built: false, historySeq: 0, liveClientIds: new Set(), drawerQuery: '' };
-let els = {};
+const state = { personId: null, attached: new Set(), streaming: null, built: false, historySeq: 0, nextCursor: null, loadingOlder: false, liveClientIds: new Set() };
+const els = {};
 let voiceCtrl = null;
+let drawerCtrl = null;
+let chatAbort = null;
+let closeTimer = null;
+
+const isTipSeen = () => { try { return localStorage.getItem(B4_TIP_KEY) === '1'; } catch { return true; } };
+const dismissTip = () => {
+  if (!els.tipKit || els.tipKit.hidden) return;
+  els.tipKit.hidden = true;
+  try { localStorage.setItem(B4_TIP_KEY, '1'); } catch { /* ignore */ }
+};
+const autoGrow = () => ((els.input.style.height = 'auto'), (els.input.style.height = `${Math.min(120, els.input.scrollHeight)}px`));
+const person = () => store.get().people[state.personId] || null;
+const scrollDown = () => requestAnimationFrame(() => els.messages && (els.messages.scrollTop = els.messages.scrollHeight));
+const hideStarters = () => els.starters && ((els.starters.hidden = true), (els.starters.style.display = 'none'), clear(els.starters));
+const stopCrisis = () => $('#chat')?.classList.remove('is-crisis');
+
+export function scrollChatToTop(smooth = true) {
+  els.messages?.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+}
 
 function syncComposerAction() {
-  if (!els.send || !els.mic || !els.input) return;
+  if (!els.orbBtn || !els.input) return;
   const hasText = Boolean(els.input.value.trim());
-  const streaming = Boolean(state.streaming);
-  const voiceBusy = Boolean(voiceCtrl?.isBusy());
-  const transcribing = Boolean(voiceCtrl?.isTranscribing());
-  const showMic = (!hasText && !streaming) || voiceBusy;
-  els.mic.hidden = !showMic;
-  els.mic.disabled = transcribing;
-  els.send.hidden = showMic;
-  els.send.disabled = !hasText || streaming || transcribing;
-  els.input.disabled = transcribing;
+  const mode = state.streaming ? 'stop' : hasText && !voiceCtrl?.isBusy() ? 'send' : 'orb';
+  els.orbBtn.dataset.mode = mode;
+  els.orbBtn.classList.toggle('is-send', mode === 'send');
+  els.orbBtn.classList.toggle('is-stop', mode === 'stop');
+  els.orbBtn.setAttribute('aria-label', mode === 'stop' ? '停止回复' : mode === 'send' ? '发送' : '轻点直接语音畅聊，按住松开发送');
+  els.sendIcon.hidden = mode !== 'send';
+  els.sendIcon.style.display = mode === 'send' ? '' : 'none';
+  els.stopIcon.hidden = mode !== 'stop';
+  els.stopIcon.style.display = mode === 'stop' ? '' : 'none';
+  els.dockOrb.hidden = mode !== 'orb';
+  els.dockOrb.style.display = mode === 'orb' ? '' : 'none';
+  els.input.disabled = Boolean(voiceCtrl?.isTranscribing());
 }
 
 function build() {
   const root = $('#chat');
   clear(root);
+  chatAbort?.abort();
+  chatAbort = new AbortController();
+  const { signal } = chatAbort;
+
   els.back = h('button', { type: 'button', class: 'muse-glass-circle-btn', 'aria-label': '回到手帐', onClick: () => (haptic('light'), closeChat()) }, svg(BACK_SVG));
-  els.drawerBadge = h('span', { class: 'muse-drawer-badge', hidden: true, 'aria-hidden': 'true' });
-  els.drawerPill = h('button', { type: 'button', class: 'muse-drawer-pill', 'aria-label': '挑几页手帐给丘比特看', onClick: () => (haptic('light'), toggleDrawer(true)) }, svg(PAPERS_SVG, 'muse-drawer-icon'), h('span', { text: '手帐' }), els.drawerBadge);
-  els.medallion = h('div', { class: 'muse-cupid-medallion' }, h('img', { class: 'muse-medallion-img', src: CUPID_IMG, alt: '丘比特' }));
+  els.headerOrb = createOrb({ size: 'header', state: 'idle' });
+  els.titleName = h('span', { class: 'cupid-chat-name', text: '丘比特' });
   els.arrow = h('span', { class: 'cupid-inline-arrow', 'aria-hidden': 'true' });
-  els.sub = h('span', { class: 'muse-status-sub-row' });
-  els.messages = h('div', { class: 'ai-chat-messages', role: 'log', 'aria-label': '和丘比特的对话' });
-  els.edge = h('div', { class: 'chat-right-edge-gesture-zone', 'aria-hidden': 'true' });
-  els.scrim = h('div', { class: 'chat-material-scrim', onClick: () => toggleDrawer(false) });
-  els.drawerList = h('div', { class: 'drawer-materials-list' });
-  els.drawerCount = h('span', { class: 'drawer-count-pill', text: '0' });
-  els.drawerSearch = h('input', { type: 'search', class: 'drawer-search-input', placeholder: '翻找旧手帐…', 'aria-label': '搜索手帐', autocomplete: 'off' });
-  els.drawerSearchClear = h('button', { type: 'button', class: 'drawer-search-clear', 'aria-label': '清空搜索', text: '✕', hidden: true, onClick: () => (haptic('light'), resetDrawerSearch(), renderDrawer(), els.drawerSearch.focus({ preventScroll: true })) });
-  els.drawerSearchWrap = h('div', { class: 'drawer-search-wrap', hidden: true }, h('span', { class: 'drawer-search-icon', 'aria-hidden': 'true', text: '⌕' }), els.drawerSearch, els.drawerSearchClear);
-  els.drawer = h('aside', { class: 'chat-material-drawer', 'aria-label': '挑几页手帐', 'aria-hidden': 'true' }, h('div', { class: 'drawer-inner-header' }, h('div', {}, h('p', { class: 'drawer-title', text: '挑几页给丘比特看' }), h('p', { class: 'drawer-subtitle', text: '选中的会一起发过去' })), els.drawerCount), els.drawerSearchWrap, els.drawerList);
-  els.brief = h('div', { class: 'cupid-brief-host', hidden: true });
-  els.starters = h('div', { class: 'cupid-starter-row', role: 'group', 'aria-label': '可以这样问丘比特', hidden: true });
+  els.drawerBadge = h('span', { class: 'muse-drawer-badge', hidden: true, 'aria-hidden': 'true' });
+  els.drawerPill = h('button', { type: 'button', class: 'muse-drawer-pill', 'aria-label': '挑几页手帐', onClick: () => (haptic('light'), drawerCtrl?.setOpen(true)) }, svg(PAPERS_SVG, 'muse-drawer-icon'), h('span', { text: '手帐' }), els.drawerBadge);
+  els.newThreadBtn = h('button', { type: 'button', class: 'muse-new-thread-btn', text: '新对话', onClick: () => startNewThread() });
+
+  els.inner = h('div', { class: 'ai-chat-inner' });
+  els.messages = h('div', { class: 'ai-chat-messages', role: 'log', 'aria-label': '和丘比特的对话' }, els.inner);
+  els.starters = h('div', { class: 'cupid-starter-row', role: 'group', 'aria-label': '可以这样问丘比特', hidden: true, style: { display: 'none' } });
   els.tray = h('div', { class: 'chat-attached-tray', hidden: true });
+  els.tipKit = h('button', { type: 'button', class: 'b4-tipkit-popover', text: '轻点右侧灵珠直接语音畅聊，框内话筒仅转文字', hidden: isTipSeen(), onClick: () => (haptic('light'), dismissTip()) });
+
+  els.plus = h('button', { type: 'button', class: 'muse-composer-plus-btn', 'aria-label': '附上手帐', text: '+', onClick: () => (haptic('light'), drawerCtrl?.setOpen(true)) });
   els.input = h('textarea', { class: 'chat-text-input', rows: '1', maxlength: '2000', 'aria-label': '想和丘比特说的话', placeholder: '和丘比特说说…' });
-  els.send = h('button', { type: 'button', class: 'chat-send-btn', 'aria-label': '发送', hidden: true, disabled: true }, svg(SEND_SVG));
-  els.plus = h('button', { type: 'button', class: 'muse-composer-plus-btn', 'aria-label': '附上手帐', text: '+', onClick: () => (haptic('light'), toggleDrawer(true)) });
+  els.dockOrb = createOrb({ size: 'dock', state: 'idle' });
+  els.sendIcon = svg(SEND_SVG, 'chat-send-icon');
+  els.stopIcon = svg(STOP_SVG, 'chat-stop-icon');
+  if (els.sendIcon?.style) { els.sendIcon.style.width = '18px'; els.sendIcon.style.height = '18px'; }
+  if (els.stopIcon?.style) { els.stopIcon.style.width = '18px'; els.stopIcon.style.height = '18px'; }
+  els.sendIcon.hidden = true;
+  els.stopIcon.hidden = true;
+  els.orbBtn = h('button', { type: 'button', id: 'chatOrbBtn', class: 'chat-detached-orb-btn', dataset: { mode: 'orb' } }, els.dockOrb, els.sendIcon, els.stopIcon);
   els.pillBar = h('div', { class: 'muse-composer-pill-bar' });
+
   voiceCtrl = createChatVoice({
-    pillBar: els.pillBar,
+    pillBar: els.pillBar, orbBtn: els.orbBtn, orbEl: els.dockOrb, inputEl: els.input,
     getPersonId: () => state.personId,
-    canRecord: () => !state.streaming && Boolean(state.personId) && !$('#chat').classList.contains('is-crisis'),
-    onTranscript: (text) => send(text),
+    canRecord: () => !state.streaming && Boolean(state.personId) && !root.classList.contains('is-crisis'),
+    onDirectSend: (text) => (dismissTip(), send(text)),
+    onDictateAppend: (text, baseText, { preview = false } = {}) => {
+      dismissTip();
+      const base = String(baseText || '').trim();
+      els.input.value = base ? `${base} ${text}` : text;
+      autoGrow();
+      if (!preview) syncComposerAction();
+    },
     onStateChange: () => syncComposerAction(),
   });
-  els.mic = voiceCtrl.micBtn;
-  els.pillBar.append(els.plus, els.input, voiceCtrl.overlayEl, els.send, els.mic);
+  els.pillBar.append(els.plus, els.input, voiceCtrl.statusChip, voiceCtrl.inlineMicBtn, voiceCtrl.dictateDoneBtn);
 
-  const header = h(
-    'header',
-    { class: 'muse-chat-header' },
-    h('div', { class: 'muse-header-controls' }, els.back, els.drawerPill),
-    h('div', { class: 'muse-companion-centerpiece' }, h('div', { class: 'muse-medallion-stage' }, h('span', { class: 'muse-cupid-halo', 'aria-hidden': 'true' }), els.medallion), h('div', { class: 'muse-cupid-status-pill' }, h('span', { class: 'muse-status-main-row' }, h('span', { class: 'cupid-chat-name', text: '丘比特' }), els.arrow), els.sub)),
+  drawerCtrl = createChatDrawer({
+    root, getPerson: () => person(), getAttached: () => state.attached,
+    onToggleAttach: (id) => toggleAttach(id),
+    onApplySelection: () => els.input.focus({ preventScroll: true }),
+    onOpenPeek: (mid) => actions.openPeek?.(mid, person(), { fromChat: true }),
+  });
+
+  const header = h('header', { class: 'ai-chat-header muse-chat-header' },
+    h('div', { class: 'ai-chat-header-left' }, els.back, h('div', { class: 'ai-chat-header-title' }, els.headerOrb, els.titleName, els.arrow)),
+    h('div', { class: 'ai-chat-header-actions' }, els.drawerPill, els.newThreadBtn),
   );
-  root.append(header, els.messages, els.edge, els.scrim, els.drawer, h('div', { class: 'ai-chat-composer-wrap' }, els.brief, els.starters, els.tray, els.pillBar));
-  els.drawerSearch.addEventListener('input', () => {
-    state.drawerQuery = els.drawerSearch.value.trim();
-    els.drawerSearchClear.hidden = !state.drawerQuery;
-    renderDrawer();
-  });
-  els.input.addEventListener('input', () => {
-    autoGrow();
-    if (els.input.value.trim()) hideBrief();
-    syncComposerAction();
-  });
-  els.input.addEventListener('focus', () => setTimeout(scrollDown, 140));
-  els.input.addEventListener('keydown', (e) => shouldSendOnEnter(e) && (e.preventDefault(), send()));
-  els.send.addEventListener('click', () => send());
+  root.append(header, els.messages, drawerCtrl.scrimEl, drawerCtrl.drawerEl, h('div', { class: 'muse-composer-wrap ai-chat-composer-wrap' }, els.starters, els.tray, els.tipKit, h('div', { class: 'muse-composer-row' }, els.pillBar, els.orbBtn)));
+
+  createImeGuard(els.input, { isTouchDevice: Boolean(globalThis.matchMedia?.('(pointer: coarse)')?.matches), onSubmit: () => send() });
+  els.input.addEventListener('input', () => (autoGrow(), saveDraft(), syncComposerAction()), { signal });
+  els.input.addEventListener('focus', () => setTimeout(scrollDown, 120), { signal });
+  els.orbBtn.addEventListener('click', () => {
+    if (els.orbBtn.dataset.mode === 'stop') { haptic('light'); state.streaming?.abort(); }
+    else if (els.orbBtn.dataset.mode === 'send') send();
+  }, { signal });
+  els.messages.addEventListener('scroll', () => els.messages.scrollTop < 48 && state.nextCursor && !state.loadingOlder && loadOlderHistory(), { passive: true, signal });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || !root.classList.contains('is-active')) return;
-    if (els.drawer.classList.contains('is-open')) toggleDrawer(false);
+    if (drawerCtrl?.isOpen()) drawerCtrl.setOpen(false);
     else closeChat();
-  });
-  bindChatGestures({
-    root,
-    edge: els.edge,
-    drawer: els.drawer,
-    isVoiceBusy: () => Boolean(voiceCtrl?.isBusy()),
-    onOpenDrawer: () => toggleDrawer(true),
-    onCloseDrawer: () => toggleDrawer(false),
-    onSwipePop: () => closeChat({ fromSwipe: true }),
-  });
+  }, { signal });
+
+  bindChatEdgePop({ root, isDrawerOpen: () => Boolean(drawerCtrl?.isOpen()), isVoiceBusy: () => Boolean(voiceCtrl?.isBusy()), onSwipePop: () => closeChat({ fromSwipe: true }), signal });
+  initKeyboardViewportBridge?.({ signal });
   syncComposerAction();
   state.built = true;
 }
 
-const autoGrow = () => ((els.input.style.height = 'auto'), (els.input.style.height = `${Math.min(120, els.input.scrollHeight)}px`));
-const resetDrawerSearch = () => ((state.drawerQuery = ''), els.drawerSearch && (els.drawerSearch.value = ''), els.drawerSearchClear && (els.drawerSearchClear.hidden = true));
-const person = () => store.get().people[state.personId] || null;
-const scrollDown = () => requestAnimationFrame(() => els.messages && (els.messages.scrollTop = els.messages.scrollHeight));
-const hideStarters = () => els.starters && (els.starters.hidden = true);
-const hideBrief = () => els.brief && (clear(els.brief), (els.brief.hidden = true));
-const stopCrisis = () => $('#chat').classList.remove('is-crisis');
+function saveDraft() {
+  if (!state.personId || !els.input) return;
+  const drafts = { ...(store.get().chatDraftsByPerson || {}) };
+  if (els.input.value) drafts[state.personId] = els.input.value;
+  else delete drafts[state.personId];
+  store.set({ chatDraftsByPerson: drafts });
+}
 
 function updateDrawerBadge() {
   const count = state.attached.size;
-  if (els.drawerCount) els.drawerCount.textContent = String(count);
   if (els.drawerBadge) ((els.drawerBadge.textContent = String(count)), (els.drawerBadge.hidden = count === 0));
   if (els.drawerPill) els.drawerPill.classList.toggle('has-attached', count > 0);
+  drawerCtrl?.syncSelectionCounters();
 }
 
-function renderStarters(tier) {
-  if (!els.starters) return;
-  clear(els.starters);
-  els.starters.append(...starterChips(tier, (prompt) => send(prompt)));
-  els.starters.hidden = false;
-}
-
-function renderBrief(brief, tier) {
-  if (!els.brief) return;
-  clear(els.brief);
-  const card = proactiveBriefCard(brief, tier, (prompt) => send(prompt));
-  els.brief.hidden = !card;
-  if (card) els.brief.appendChild(card);
-}
-
-function isFreshThread(items) {
-  if (!items.length) return true;
-  if (items.length <= 2 && items[0]?.role === 'user' && String(items[0]?.content || '').trim() === ONBOARDING_QUESTION) {
-    return items.length === 1 || items[1]?.role === 'assistant';
-  }
-  return false;
-}
-
-function renderDrawer() {
-  const allItems = store.get().materials[state.personId]?.items || [];
-  const tier = person()?.tier || 'crystal';
-  const showSearch = allItems.length > DRAWER_SEARCH_THRESHOLD;
-  els.drawerSearchWrap.hidden = !showSearch;
-  if (!showSearch && state.drawerQuery) resetDrawerSearch();
-  const items = state.drawerQuery ? allItems.filter((m) => matchesMaterialQuery(m, state.drawerQuery)) : allItems;
-  clear(els.drawerList);
-  updateDrawerBadge();
-  if (!allItems.length) return els.drawerList.appendChild(h('p', { class: 'drawer-empty', text: '这一页还没有手帐。先回去记一句吧。' }));
-  if (!items.length) return els.drawerList.appendChild(h('p', { class: 'drawer-empty', text: '没有找到相关的手帐，换个词试试。' }));
-  for (const m of items) {
-    els.drawerList.appendChild(
-      drawerCard(m, {
-        selected: state.attached.has(m.id),
-        tier,
-        onToggle: () => {
-          if (state.attached.has(m.id)) state.attached.delete(m.id);
-          else if (state.attached.size >= 5) return (haptic('warning'), whisper('一次最多附 5 页', 2000));
-          else state.attached.add(m.id);
-          haptic('selection');
-          renderDrawer();
-          renderTray();
-        },
-      }),
-    );
-  }
+function toggleAttach(materialId) {
+  let selected;
+  if (state.attached.has(materialId)) { state.attached.delete(materialId); selected = false; }
+  else if (state.attached.size >= 5) { haptic('warning'); whisper('一次最多附 5 页', 2000); return null; }
+  else { state.attached.add(materialId); selected = true; }
+  haptic('selection');
+  renderTray();
+  return selected;
 }
 
 function attachedMaterials() {
@@ -199,104 +186,111 @@ function renderTray() {
   els.tray.hidden = !list.length;
   updateDrawerBadge();
   for (const m of list) {
-    els.tray.appendChild(
-      attachedChip(m, () => {
-        state.attached.delete(m.id);
-        renderTray();
-        if (els.drawer.classList.contains('is-open')) renderDrawer();
-      }),
-    );
+    els.tray.appendChild(attachedChip(m, () => { state.attached.delete(m.id); renderTray(); drawerCtrl?.syncCardSelection(m.id, false); }));
   }
 }
 
-function toggleDrawer(open, { restoreFocus = true } = {}) {
-  const wasOpen = els.drawer.classList.contains('is-open');
-  if (open) {
-    const pid = state.personId;
-    if (!store.get().materials[pid]?.loaded) {
-      loadMaterials(pid).then(() => state.personId === pid && (renderDrawer(), renderTray()));
-    }
-    renderDrawer();
-  } else {
-    resetDrawerSearch();
-  }
-  els.drawer.classList.toggle('is-open', open);
-  els.scrim.classList.toggle('is-open', open);
-  els.drawer.setAttribute('aria-hidden', String(!open));
-  if (open) (els.drawerSearchWrap.hidden ? els.drawerList.querySelector('button') : els.drawerSearch)?.focus({ preventScroll: true });
-  else if (wasOpen && restoreFocus) els.drawerPill?.focus({ preventScroll: true });
+function renderStarters(tier, nameCn) {
+  if (!els.starters) return;
+  clear(els.starters);
+  els.starters.append(...starterChips(tier, (prompt) => send(prompt), nameCn));
+  els.starters.hidden = false;
+  els.starters.style.display = '';
 }
 
-function frameReply(bubbleEl) {
-  requestAnimationFrame(() => {
-    const box = els.messages;
-    if (!box) return;
-    if (!bubbleEl?.isConnected) return (box.scrollTop = box.scrollHeight);
-    const relTop = bubbleEl.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
-    const maxScroll = Math.max(0, box.scrollHeight - box.clientHeight);
-    const span = box.scrollHeight - relTop;
-    if (span <= box.clientHeight - 28) box.scrollTop = maxScroll;
-    else box.scrollTop = Math.max(0, Math.min(maxScroll, relTop - 24));
-  });
+function emptyNotice(tier, nameCn) {
+  return h('div', { class: 'ai-chat-empty' },
+    h('p', { class: 'ai-chat-empty-title', text: SUB_COPY[tier](nameCn || '') }),
+    h('p', { class: 'ai-chat-empty-sub', text: EMPTY_COPY[tier](nameCn || '') }),
+  );
+}
+
+function startNewThread() {
+  if (!state.personId) return;
+  haptic('light');
+  state.streaming?.abort();
+  state.nextCursor = null;
+  clear(els.inner);
+  const p = person();
+  const tier = Object.hasOwn(ARROW_SVGS, p?.tier) ? p.tier : 'crystal';
+  els.inner.appendChild(emptyNotice(tier, p?.nameCn));
+  renderStarters(tier, p?.nameCn);
+  els.input?.focus({ preventScroll: true });
 }
 
 async function loadHistory({ hasInitialPrompt = false } = {}) {
   const pid = state.personId;
   const seq = ++state.historySeq;
   const p = person();
-  clear(els.messages);
+  const tier = Object.hasOwn(ARROW_SVGS, p?.tier) ? p.tier : 'crystal';
+  state.nextCursor = null;
+  state.loadingOlder = false;
+  clear(els.inner);
   const anchor = document.createComment('history-end');
-  els.messages.appendChild(anchor);
-  const rawTier = p?.tier || 'crystal';
-  const tier = Object.hasOwn(ARROW_SVGS, rawTier) ? rawTier : 'crystal';
-  const briefPromise = !hasInitialPrompt && typeof api.brief === 'function' ? api.brief(pid).catch(() => null) : Promise.resolve(null);
-  let showFreshCards = false;
+  els.inner.appendChild(anchor);
   try {
-    const res = await api.chatHistory(pid, { limit: 40 });
+    const res = await api.chatHistory(pid, { order: 'desc', limit: 40 });
     if (state.personId !== pid || state.historySeq !== seq || !anchor.isConnected) return;
-    const rawItems = res.items || [];
-    const liveIdx = rawItems.findIndex((m) => m.clientMessageId && state.liveClientIds.has(m.clientMessageId));
-    const items = liveIdx >= 0 ? rawItems.slice(0, liveIdx) : rawItems;
+    state.nextCursor = res?.nextCursor || null;
+    const items = [...(res?.items || [])].reverse().filter((m) => !(m.clientMessageId && state.liveClientIds.has(m.clientMessageId)));
     const hasLive = Boolean(anchor.nextSibling);
     if (!items.length && !hasLive) {
-      els.messages.insertBefore(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }), anchor);
+      els.inner.insertBefore(emptyNotice(tier, p?.nameCn), anchor);
+      if (!hasInitialPrompt) renderStarters(tier, p?.nameCn);
     } else if (items.length) {
       const frag = document.createDocumentFragment();
       for (const m of items) frag.append(...historyMessage(m, pid, tier));
-      els.messages.insertBefore(frag, anchor);
+      els.inner.insertBefore(frag, anchor);
+      hideStarters();
     }
     anchor.remove();
-    showFreshCards = !hasLive && !hasInitialPrompt && isFreshThread(items);
   } catch {
     if (state.personId !== pid || state.historySeq !== seq || !anchor.isConnected) return;
     if (!anchor.nextSibling) {
-      els.messages.insertBefore(h('p', { class: 'chat-empty-hint', text: EMPTY_COPY[tier](p.nameCn) }), anchor);
-      showFreshCards = !hasInitialPrompt;
+      els.inner.insertBefore(emptyNotice(tier, p?.nameCn), anchor);
+      if (!hasInitialPrompt) renderStarters(tier, p?.nameCn);
     }
     anchor.remove();
   }
-  if (showFreshCards) renderStarters(tier);
-  else hideStarters();
   scrollDown();
-  if (showFreshCards) {
-    const brief = await briefPromise;
-    if (state.personId !== pid || state.historySeq !== seq || state.streaming || els.input.value.trim() || els.starters.hidden) return;
-    if (brief?.headline) renderBrief(brief, tier);
-  }
+}
+
+async function loadOlderHistory() {
+  const pid = state.personId;
+  const cursor = state.nextCursor;
+  if (!pid || !cursor || state.loadingOlder) return;
+  state.loadingOlder = true;
+  const seq = state.historySeq;
+  const tier = Object.hasOwn(ARROW_SVGS, person()?.tier) ? person().tier : 'crystal';
+  try {
+    const res = await api.chatHistory(pid, { order: 'desc', limit: 40, cursor });
+    if (state.personId !== pid || state.historySeq !== seq) return;
+    state.nextCursor = res?.nextCursor || null;
+    const older = [...(res?.items || [])].reverse();
+    if (older.length) {
+      const prevHeight = els.messages.scrollHeight;
+      const frag = document.createDocumentFragment();
+      for (const m of older) frag.append(...historyMessage(m, pid, tier));
+      els.inner.prepend(frag);
+      els.messages.scrollTop += els.messages.scrollHeight - prevHeight;
+    }
+  } catch { /* keep scroll */ } finally { state.loadingOlder = false; }
 }
 
 async function stream(text, ids, attempt, userEl) {
   const pid = state.personId;
-  const rawTier = person()?.tier || 'crystal';
-  const tier = Object.hasOwn(ARROW_SVGS, rawTier) ? rawTier : 'crystal';
+  const tier = Object.hasOwn(ARROW_SVGS, person()?.tier) ? person().tier : 'crystal';
   const bubble = aiBubble();
-  els.messages.appendChild(bubble.el);
-  frameReply(bubble.el);
+  els.inner.appendChild(bubble.el);
+  scrollDown();
   const ctrl = new AbortController();
   state.streaming = ctrl;
+  setOrbState(els.headerOrb, 'thinking');
   syncComposerAction();
+
   let gotError = null;
   let crisis = null;
+  let receivedDone = false;
   let writebackQueued = false;
   const seenProposals = new Set();
   const actionCards = [];
@@ -307,53 +301,51 @@ async function stream(text, ids, attempt, userEl) {
       { message: text, referencedMaterialIds: ids, clientMessageId: attempt.clientMessageId, idem: attempt.idem, signal: ctrl.signal },
       ({ event, data }) => {
         if (event === 'agent_step') bubble.addAgentStep(data);
-        else if (event === 'delta') bubble.append(data?.text || '');
+        else if (event === 'delta') { setOrbState(els.headerOrb, 'speaking'); bubble.append(data?.text || ''); }
         else if (event === 'citation') bubble.addCitation(data, pid);
         else if (event === 'whisper') bubble.setWhisper(data?.text);
         else if (event === 'action_proposal') {
-          const propKey = data?.id ? String(data.id) : `${data?.kind}:${data?.title || data?.body || ''}`;
-          if (!seenProposals.has(propKey)) {
-            seenProposals.add(propKey);
-            const card = actionProposalCard(data, pid);
-            if (card) actionCards.push(card);
-          }
-        } else if (event === 'perspective' && tier === 'gold') extras.push(perspectiveCard(data?.items, tier));
-        else if (event === 'suggestion') extras.push(suggestionRow(data?.items));
+          const key = data?.id ? String(data.id) : `${data?.kind}:${data?.title || data?.body || ''}`;
+          if (!seenProposals.has(key)) { seenProposals.add(key); const card = actionProposalCard(data, pid); if (card) actionCards.push(card); }
+        } else if (event === 'perspective' && tier === 'gold') extras.push(perspectiveCard(data?.items || data?.perspectives, tier));
+        else if (event === 'suggestion') extras.push(suggestionRow(data?.items, tier));
         else if (event === 'crisis') crisis = data;
         else if (event === 'error') gotError = data;
-        else if (event === 'done' && data?.writebackQueued === true) writebackQueued = true;
-        if (event === 'agent_step' || event === 'delta' || event === 'citation') frameReply(bubble.el);
+        else if (event === 'done') { receivedDone = true; if (data?.writebackQueued === true) writebackQueued = true; }
       },
     );
   } catch (err) {
-    if (err?.name === 'AbortError') return bubble.el.remove();
-    gotError = { code: err.code, status: err.status, message: err.message };
+    if (err?.name === 'AbortError') { bubble.flushCitations(); setOrbState(els.headerOrb, 'idle'); if (!bubble.started) bubble.el.remove(); return; }
+    gotError = { code: err?.code, status: err?.status, message: err?.message };
   } finally {
     if (state.streaming === ctrl) state.streaming = null;
     syncComposerAction();
   }
   if (state.personId !== pid) return;
   if (crisis) {
+    setOrbState(els.headerOrb, 'idle');
     bubble.el.replaceWith(crisisCard(crisis, { onContinue: () => stopCrisis() }));
     $('#chat').classList.add('is-crisis');
     return scrollDown();
   }
+  if (!gotError && !receivedDone) gotError = { code: 'SSE_TRUNCATED', message: '网络中断，这段回复没有完整送达，再试一次？' };
   if (gotError) {
-    bubble.fail(gotError.message || friendlyMessage(gotError.code, gotError.status), () => {
-      bubble.el.remove();
-      stream(text, ids, attempt, userEl); // same Idempotency-Key + clientMessageId → safe replay
-    });
+    setOrbState(els.headerOrb, 'idle');
+    const msg = gotError.code === 'SSE_IDLE_TIMEOUT' ? '网络响应超时，轻点再试一次' : gotError.message || friendlyMessage(gotError.code, gotError.status);
+    bubble.fail(msg, () => { bubble.el.remove(); stream(text, ids, attempt, userEl); });
     return scrollDown();
   }
   bubble.finishTrace();
-  if (!bubble.started) bubble.setText('丘比特想了想，暂时没有更多可说的。');
+  bubble.flushCitations();
+  setOrbState(els.headerOrb, 'done');
+  if (!bubble.started) bubble.setText('丘比特想了想，暂时没有更多可说的');
   if (writebackQueued) {
-    if (userEl?.isConnected && !userEl.nextElementSibling?.classList.contains('chat-writeback-receipt')) userEl.after(writebackReceipt());
+    if (userEl?.isConnected && !userEl.nextElementSibling?.classList.contains('chat-writeback-receipt')) userEl.after(writebackReceipt(tier));
     actions.reloadMaterials(pid);
   }
-  for (const card of actionCards) els.messages.appendChild(card);
-  for (const x of extras) if (x) els.messages.appendChild(x);
-  frameReply(bubble.el);
+  for (const card of actionCards) els.inner.appendChild(card);
+  for (const x of extras) if (x) els.inner.appendChild(x);
+  scrollDown();
 }
 
 function send(overrideText) {
@@ -361,95 +353,84 @@ function send(overrideText) {
   const text = (fromInput ? els.input.value : String(overrideText)).trim();
   if (!text || state.streaming || !state.personId) return;
   haptic('light');
+  dismissTip();
   const attachments = attachedMaterials();
   const ids = attachments.map((m) => m.id);
-  hideBrief();
   hideStarters();
-  els.messages.querySelector('.chat-empty-hint')?.remove();
+  els.inner.querySelector('.ai-chat-empty')?.remove();
+  els.inner.querySelector('.chat-empty-hint')?.remove();
   const userEl = userBubble(text, attachments);
-  els.messages.appendChild(userEl);
-  if (fromInput) {
-    els.input.value = '';
-    autoGrow();
-  }
+  els.inner.appendChild(userEl);
+  if (fromInput) { els.input.value = ''; autoGrow(); saveDraft(); }
   state.attached.clear();
   renderTray();
-  toggleDrawer(false, { restoreFocus: false });
+  drawerCtrl?.setOpen(false, { restoreFocus: false });
   const attempt = { clientMessageId: uuid(), idem: uuid() };
   state.liveClientIds.add(attempt.clientMessageId);
   stream(text, ids, attempt, userEl);
 }
 
 export function openChat(personId, opts = {}) {
+  ensureStyle?.('./styles/chat.css');
   const s = store.get();
   let pid = personId || s.activePersonId;
   if (!pid || !s.people[pid]) pid = s.coreIds[0] || s.casualIds[0] || null;
-  if (!pid) return whisper('先记下一个人，再和丘比特聊 TA', 2600);
+  if (!pid) return whisper('先记下一个人，再和丘比特聊', 2600);
   if (!state.built) build();
   const root = $('#chat');
+  clearTimeout(closeTimer);
+  closeTimer = null;
   clearSwipeStyles(root);
-  const changed = state.personId !== pid;
-  if (changed) {
-    state.streaming?.abort();
-    voiceCtrl?.cancel();
-    state.attached.clear();
-    resetDrawerSearch();
-  }
+  if (state.personId !== pid) { state.streaming?.abort(); voiceCtrl?.cancel(); state.attached.clear(); drawerCtrl?.resetPerson(); }
   state.personId = pid;
   state.liveClientIds.clear();
   const p = s.people[pid];
-  const rawTier = p.tier || 'crystal';
-  const safeTier = Object.hasOwn(ARROW_SVGS, rawTier) ? rawTier : 'crystal';
+  const safeTier = Object.hasOwn(ARROW_SVGS, p.tier) ? p.tier : 'crystal';
   root.dataset.arrowTier = safeTier;
+  if (els.titleName) els.titleName.textContent = p.nameCn || '丘比特';
   clear(els.arrow);
-  els.arrow.appendChild(svg(ARROW_SVGS[safeTier]));
-  els.sub.textContent = SUB_COPY[safeTier](p.nameCn);
+  const arrowSvg = svg(ARROW_SVGS[safeTier]);
+  if (arrowSvg?.style) { arrowSvg.style.width = '14px'; arrowSvg.style.height = '14px'; arrowSvg.style.display = 'block'; arrowSvg.style.flexShrink = '0'; }
+  els.arrow.appendChild(arrowSvg);
+  setOrbState(els.headerOrb, 'idle');
   stopCrisis();
   if (opts?.materialId) {
     const mid = String(opts.materialId);
     if (!state.attached.has(mid) && state.attached.size >= 5) state.attached.delete(state.attached.values().next().value);
     state.attached.add(mid);
   }
-  const initialPrompt = typeof opts?.initialPrompt === 'string' ? opts.initialPrompt.trim() : '';
+  els.input.value = (s.chatDraftsByPerson || {})[pid] || '';
+  autoGrow();
   renderTray();
-  hideBrief();
   hideStarters();
   syncComposerAction();
+  root.style.display = '';
   root.hidden = false;
-  requestAnimationFrame(() => {
-    root.classList.add('is-active');
-    els.medallion.classList.remove('is-cupid-greeting');
-    void els.medallion.offsetWidth;
-    els.medallion.classList.add('is-cupid-greeting');
-  });
-  for (const id of ['journalCanvas', 'dock']) $(`#${id}`).inert = true;
+  requestAnimationFrame(() => root.classList.add('is-active'));
+  for (const id of ['journalCanvas', 'dock']) { const el = $(`#${id}`); if (el) el.inert = true; }
+  const initialPrompt = typeof opts?.initialPrompt === 'string' ? opts.initialPrompt.trim() : '';
   loadHistory({ hasInitialPrompt: Boolean(initialPrompt) });
-  if (!s.materials[pid]?.loaded) {
-    loadMaterials(pid).then(() => state.personId === pid && (renderTray(), els.drawer.classList.contains('is-open') && renderDrawer()));
-  }
+  if (!s.materials[pid]?.loaded) loadMaterials(pid).then(() => state.personId === pid && (renderTray(), drawerCtrl?.isOpen() && drawerCtrl.renderList()));
   if (initialPrompt) send(initialPrompt);
-  else setTimeout(() => els.input.focus({ preventScroll: true }), 260);
 }
 
 export function closeChat({ fromSwipe = false } = {}) {
   const root = $('#chat');
-  if (root.hidden) return;
+  if (!root || root.hidden) return;
+  saveDraft();
   state.streaming?.abort();
+  state.streaming = null;
   voiceCtrl?.cancel();
   state.historySeq += 1;
-  toggleDrawer(false, { restoreFocus: false });
+  drawerCtrl?.setOpen(false, { restoreFocus: false });
   root.classList.remove('is-active');
-  for (const id of ['journalCanvas', 'dock']) $(`#${id}`).inert = false;
-  setTimeout(() => {
-    if (!root.classList.contains('is-active')) {
-      clearSwipeStyles(root);
-      root.hidden = true;
-    }
-  }, fromSwipe ? 260 : 340);
-  $('#aiOrb')?.focus({ preventScroll: true });
+  for (const id of ['journalCanvas', 'dock']) { const el = $(`#${id}`); if (el) el.inert = false; }
+  clearTimeout(closeTimer);
+  closeTimer = setTimeout(() => {
+    closeTimer = null;
+    if (!root.classList.contains('is-active')) { clearSwipeStyles(root); if (els.inner) clear(els.inner); root.hidden = true; root.style.display = 'none'; }
+  }, fromSwipe ? 220 : 240);
+  $('#aiOrb')?.focus?.({ preventScroll: true });
 }
 
-/** Ask Cupid a first question programmatically (used by onboarding & proactive CTAs). */
-export function sendToCupid(personId, text) {
-  openChat(personId, { initialPrompt: text });
-}
+export const sendToCupid = (personId, text) => openChat(personId, { initialPrompt: text });

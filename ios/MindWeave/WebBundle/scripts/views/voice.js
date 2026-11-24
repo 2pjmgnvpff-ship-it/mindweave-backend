@@ -1,331 +1,317 @@
-// voice.js — D3 hold-to-talk on the left orb with the split-arc gesture.
-// drag up = 自动分析 (global) · right/default = this person (current) · far = cancel (red, no popup).
-// < 300 ms → discarded with a quiet '按住说话' hint. Real waveform from an AnalyserNode.
-import { $, h, svg } from '../dom.js';
+// voice.js — Inline porcelain #voiceInlineCapsule driven by voice-fsm.js (VoiceSessionArbiter).
+// 32px Living Orb + live mwSpeech Chinese captions + ONE clean Slide UP (-72px) = CANCEL gesture.
+// ZERO fullscreen .voice-hold-stage, ZERO --voice-level CSS thrash, ZERO mwAudio when native!
+import { $, h, clear } from '../dom.js';
 import { store } from '../store.js';
-import { haptic, setAudioSession, prefersReducedMotion } from '../native-bridge.js';
-import { MIC_SVG } from '../icons.js';
-import { computeZone, routeFor, decideRelease, shouldAutoStop, formatTimer, MAX_HOLD_MS } from '../voice-logic.js';
-import { createRecorder, MicError } from '../recorder.js';
-import { submitVoice } from './capture.js';
+import { haptic, hapticPrepare, isNativeSpeechAvailable } from '../native-bridge.js';
+import {
+  PRE_ROLL_MS,
+  CAPSULE_REVEAL_MS,
+  MIN_HOLD_MS,
+  MAX_HOLD_MS,
+  isSlideUpCancel,
+  decideRelease,
+  formatTimer,
+} from '../voice-logic.js';
+import { voiceFsm } from '../voice-fsm.js';
+import { createOrb, setOrbState, driveOrbRms } from '../lib/orb.js';
+import { submitVoice, submitText } from './capture.js';
 import { whisper } from './toast.js';
 import { actions } from '../actions.js';
 
-const NEAR_CAP_MS = MAX_HOLD_MS - 10000;
+const NEAR_CAP_MS = MAX_HOLD_MS - 10_000;
 
-let hold = null; // { pointerId, ox, oy, t0, zone, rec, recReady, raf, timer, finished, level }
-let hintTimer = null;
-let zoneCaptionEl = null;
-let sessionActive = false;
+let capsuleEl = null;
+let orbEl = null;
+let captionEl = null;
+let timerEl = null;
+let cancelHintEl = null;
+let hintTimer = 0;
+let hold = null; // { pointerId, sessionId, startY, t0, revealed, cancelArmed, preRollTimer, revealTimer, tickTimer, partialText, finished }
 
-function els() {
-  return {
-    app: $('#app'),
-    orb: $('#voiceOrb'),
-    stage: $('#voiceStage'),
-    pill: $('#voicePill'),
-    canvas: $('#voiceCanvas'),
-    timer: $('#voiceTimer'),
-    puck: $('#voicePuck'),
-    labelRight: $('#voiceLabelRight'),
-    live: $('#voiceLive'),
-    hint: $('#holdHint'),
-  };
-}
-
-function isDirectory() {
-  return store.get().view === 'directory' || !store.get().activePersonId;
-}
-
-function activePersonName() {
+function activePerson() {
   const s = store.get();
-  return s.people[s.activePersonId]?.nameCn || '此人';
+  return s.activePersonId ? s.people[s.activePersonId] || null : null;
 }
 
-function announce(text) {
-  const { live } = els();
-  if (live) live.textContent = text;
+function ensureInlineCapsule() {
+  if (capsuleEl && capsuleEl.isConnected && orbEl) return capsuleEl;
+  capsuleEl = $('#voiceInlineCapsule');
+  if (!capsuleEl) {
+    capsuleEl = h('div', { class: 'voice-inline-capsule', id: 'voiceInlineCapsule' });
+    ($('#app') || document.body).appendChild(capsuleEl);
+  }
+  clear(capsuleEl);
+  orbEl = createOrb({ size: 'voice', state: 'listening' });
+  captionEl = h('p', { class: 'voice-inline-caption', text: '正在听…' });
+  timerEl = h('span', { class: 'voice-inline-timer', text: '0:00' });
+  cancelHintEl = h('span', { class: 'voice-inline-hint', text: '上滑取消' });
+  capsuleEl.setAttribute('role', 'status');
+  capsuleEl.setAttribute('aria-live', 'polite');
+  capsuleEl.style.display = 'none';
+  capsuleEl.append(orbEl, h('div', { class: 'voice-inline-body' }, captionEl, h('div', { class: 'voice-inline-meta' }, timerEl, cancelHintEl)));
+  return capsuleEl;
+}
+
+function showCapsule() {
+  const el = ensureInlineCapsule();
+  el.classList.remove('is-cancelling', 'is-near-cap');
+  el.style.display = 'flex';
+  setOrbState(orbEl, 'listening');
+  requestAnimationFrame(() => el.classList.add('is-open'));
+}
+
+function hideCapsule() {
+  if (!capsuleEl) return;
+  capsuleEl.classList.remove('is-open', 'is-cancelling', 'is-near-cap');
+  setOrbState(orbEl, 'idle');
+  driveOrbRms(orbEl, 0);
+  setTimeout(() => {
+    if (!hold && capsuleEl) capsuleEl.style.display = 'none';
+  }, 200);
 }
 
 export function showHoldHint() {
-  const { hint } = els();
-  if (!hint) return;
-  hint.classList.add('is-visible');
-  clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => hint.classList.remove('is-visible'), 3200);
-}
-
-function updateZoneCaption(zone) {
-  if (!zoneCaptionEl) return;
-  if (zone === 'cancel') zoneCaptionEl.textContent = '松开即可取消';
-  else if (zone === 'global' || isDirectory()) zoneCaptionEl.textContent = '松开 · 自动整理人物与要点';
-  else zoneCaptionEl.textContent = `松开 · 收进「${activePersonName()}」`;
-}
-
-function setZone(zone, { force = false } = {}) {
-  const { stage, app } = els();
-  if (!hold) return;
-  const changed = hold.zone !== zone;
-  if (!changed && !force) return;
-  hold.zone = zone;
-  stage.dataset.voiceZone = zone;
-  app.dataset.voiceCancel = String(zone === 'cancel');
-  updateZoneCaption(zone);
-  if (changed) {
-    haptic('selection');
-    if (prefersReducedMotion()) drawSilk(0);
+  const hint = $('#holdHint');
+  if (hint) {
+    hint.classList.add('is-visible');
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => hint.classList.remove('is-visible'), 3000);
+    return;
   }
+  whisper('按住左侧话筒随口记一句', 2200);
 }
 
-function clearCanvas() {
-  const { canvas } = els();
-  if (!canvas) return;
-  const ctx = canvas.getContext('2d');
-  ctx?.clearRect(0, 0, canvas.width, canvas.height);
+function setCancelVisual(on) {
+  if (!hold || hold.cancelArmed === on) return;
+  hold.cancelArmed = on;
+  capsuleEl?.classList.toggle('is-cancelling', on);
+  if (cancelHintEl) cancelHintEl.textContent = on ? '松开即可取消' : '上滑取消';
+  if (on) haptic('voiceCancelCliff');
 }
 
-function drawSilk(now) {
-  const { canvas, stage } = els();
-  if (!hold || !canvas) return;
-  const reduced = prefersReducedMotion();
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width;
-  const hgt = canvas.height;
-  const mid = hgt / 2;
-  const t = reduced ? 0.6 : now * 0.0046;
-  const level = hold.recReady ? hold.rec.level() : 0.12;
-  hold.level = hold.level == null ? level : hold.level * 0.72 + level * 0.28;
-  const gain = reduced ? 0.45 + hold.level * 0.85 : 0.36 + hold.level * 1.9;
-  const zone = hold.zone;
-  const ribbons =
-    zone === 'cancel'
-      ? [
-          { color: 'rgba(255, 245, 244, 0.94)', amp: 18, freq: 0.013, speed: 0.95, lw: 4 },
-          { color: 'rgba(255, 198, 192, 0.6)', amp: 12, freq: 0.02, speed: -0.75, lw: 3 },
-        ]
-      : zone === 'global'
-        ? [
-            { color: 'rgba(218, 150, 56, 0.9)', amp: 24, freq: 0.015, speed: 1.35, lw: 4.2 },
-            { color: 'rgba(92, 168, 236, 0.68)', amp: 18, freq: 0.021, speed: -1.05, lw: 3.4 },
-            { color: 'rgba(176, 128, 232, 0.46)', amp: 12, freq: 0.028, speed: 1.65, lw: 2.6 },
-          ]
-        : [
-            { color: 'rgba(218, 142, 58, 0.88)', amp: 24, freq: 0.015, speed: 1.25, lw: 4.2 },
-            { color: 'rgba(238, 116, 56, 0.5)', amp: 17, freq: 0.021, speed: -0.95, lw: 3.2 },
-            { color: 'rgba(182, 128, 92, 0.34)', amp: 11, freq: 0.0275, speed: 1.6, lw: 2.6 },
-          ];
-  ctx.clearRect(0, 0, w, hgt);
-  ribbons.forEach((rb, i) => {
-    ctx.beginPath();
-    for (let x = 0; x <= w; x += 3) {
-      const env = Math.sin((x / w) * Math.PI);
-      const y = mid + Math.sin(x * rb.freq + t * rb.speed + i) * Math.cos(x * 0.007 - t * 0.6) * Math.min(rb.amp * gain, mid - 2) * env;
-      if (x === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.strokeStyle = rb.color;
-    ctx.lineWidth = rb.lw;
-    ctx.lineCap = 'round';
-    ctx.stroke();
-  });
-  stage.style.setProperty('--voice-level', hold.level.toFixed(3));
-  if (!reduced) hold.raf = requestAnimationFrame(drawSilk);
-}
-
-function tick() {
-  if (!hold) return;
-  const { timer, pill } = els();
-  const elapsed = performance.now() - hold.t0;
-  timer.textContent = formatTimer(elapsed);
-  pill.classList.toggle('voice-near-cap', elapsed >= NEAR_CAP_MS);
-  if (prefersReducedMotion()) drawSilk(0);
-  if (shouldAutoStop(elapsed)) {
-    announce('已经两分钟啦，先替你收好这一段');
-    finish(hold.zone === 'cancel' ? 'current' : hold.zone);
-  }
-}
-
-function openStage() {
-  const { app, stage, orb, labelRight, timer } = els();
-  const directory = isDirectory();
-  labelRight.textContent = directory ? '默认此人' : `收进「${activePersonName()}」`;
-  stage.dataset.directory = String(directory);
-  stage.style.setProperty('--voice-level', '0');
-  timer.textContent = '0:00';
-  stage.classList.add('is-active');
-  stage.setAttribute('aria-hidden', 'false');
-  app.dataset.voiceHolding = 'true';
-  orb.classList.add('is-holding');
-}
-
-function closeStage() {
-  const { app, stage, orb, puck, pill } = els();
-  stage.classList.remove('is-active');
-  stage.setAttribute('aria-hidden', 'true');
-  stage.style.setProperty('--voice-level', '0');
-  app.dataset.voiceHolding = 'false';
-  app.dataset.voiceCancel = 'false';
-  orb.classList.remove('is-holding');
-  puck.classList.remove('is-dragging');
-  pill.classList.remove('voice-near-cap');
-  clearCanvas();
-}
-
-async function begin(e) {
+function beginHold(e, triggerEl) {
   if (hold) return;
-  haptic('medium');
-  if (!sessionActive) {
-    sessionActive = true;
-    setAudioSession?.('playAndRecord');
-  }
-  const { orb } = els();
-  const rect = orb.getBoundingClientRect();
-  hold = {
+  hapticPrepare('voiceArm');
+
+  const p = activePerson();
+  const current = {
     pointerId: e.pointerId ?? 'key',
-    ox: rect.left + rect.width / 2,
-    oy: rect.top + rect.height / 2,
+    sessionId: 0,
+    startY: e.clientY ?? 0,
     t0: performance.now(),
-    zone: isDirectory() ? 'global' : 'current',
-    rec: createRecorder(),
-    recReady: false,
+    revealed: false,
+    cancelArmed: false,
+    preRollTimer: 0,
+    revealTimer: 0,
+    tickTimer: 0,
+    partialText: '',
     finished: false,
-    level: null,
+    triggerEl,
   };
-  const current = hold;
-  setZone(current.zone, { force: true });
-  openStage();
-  if (prefersReducedMotion()) drawSilk(0);
-  else current.raf = requestAnimationFrame(drawSilk);
-  current.timer = setInterval(tick, 200);
-  announce('正在听，松开收进手帐，往远处拖可以取消');
-  try {
-    await current.rec.start();
-    current.recReady = true;
-    if (current.finished) current.rec.discard();
-  } catch (err) {
-    if (hold === current) teardown();
-    current.rec.discard();
-    haptic('warning');
-    const kind = err instanceof MicError ? err.kind : 'unsupported';
-    if (kind === 'denied') {
-      whisper('麦克风没打开，先打字记下吧', 3200);
-    } else {
-      whisper('这台设备暂时录不了音，先打字记下吧', 3200);
+  hold = current;
+  triggerEl?.classList.add('is-holding');
+
+  // 05 §8.3: Honor 40ms PRE_ROLL_MS so rapid accidental taps NEVER touch hardware mic / getUserMedia.
+  current.preRollTimer = setTimeout(() => {
+    current.preRollTimer = 0;
+    if (hold !== current || current.finished) return;
+    const sessionId = voiceFsm.acquire('journal_orb', {
+      mode: 'capture',
+      saveAudio: true,
+      onPartial: (txt) => {
+        if (hold !== current) return;
+        current.partialText = txt;
+        if (captionEl && txt.trim()) captionEl.textContent = txt.trim();
+      },
+      onRms: (rms) => {
+        if (hold === current && current.revealed && orbEl) driveOrbRms(orbEl, rms);
+      },
+      onSilentWarning: () => {
+        if (hold === current && captionEl && !current.partialText) {
+          captionEl.textContent = '好像没听到声音，靠近一点说试试';
+        }
+      },
+      onPermissionDenied: () => {
+        if (hold !== current || current.finished) return;
+        const intendedHold = current.revealed || performance.now() - current.t0 >= CAPSULE_REVEAL_MS;
+        abortHold(true);
+        whisper('麦克风或语音识别未开启，先打字记一句吧', 3200);
+        if (intendedHold) actions.openTextCapture?.({ personId: p?.id || null });
+      },
+      onError: (ev) => {
+        if (hold !== current || current.finished) return;
+        const intendedHold = current.revealed || performance.now() - current.t0 >= CAPSULE_REVEAL_MS;
+        abortHold(true);
+        if (!intendedHold) {
+          showHoldHint();
+          return;
+        }
+        whisper(ev?.kind === 'denied' ? '麦克风没打开，先打字记一句吧' : '暂时没能开始录音，先打字记一句吧', 3000);
+        actions.openTextCapture?.({ personId: p?.id || null });
+      },
+      onAutoCap: () => {
+        if (hold === current) finishHold();
+      },
+    });
+    if (!sessionId) {
+      cleanupHold(current);
+      whisper('语音通道正忙，请稍候一秒', 1800);
+      return;
     }
-    actions.openTextCapture({ personId: isDirectory() ? null : store.get().activePersonId, directory: isDirectory() });
-  }
+    current.sessionId = sessionId;
+  }, PRE_ROLL_MS);
+
+  // Reveal inline porcelain capsule ONLY after 160ms hold guard (zero short-tap flash!).
+  current.revealTimer = setTimeout(() => {
+    if (hold !== current || current.finished) return;
+    current.revealed = true;
+    // Acoustic-safe <= 15ms voiceArm transient (zero continuous buzz during active mic!).
+    haptic('voiceArm');
+    ensureInlineCapsule();
+    if (captionEl) captionEl.textContent = p ? `正在听 · 收进「${p.nameCn}」` : '正在听 · 自动归档';
+    if (timerEl) timerEl.textContent = '0:00';
+    if (cancelHintEl) cancelHintEl.textContent = '上滑取消';
+    showCapsule();
+    current.tickTimer = setInterval(() => {
+      if (hold !== current) return;
+      const elapsed = performance.now() - current.t0;
+      if (timerEl) timerEl.textContent = formatTimer(elapsed);
+      capsuleEl?.classList.toggle('is-near-cap', elapsed >= NEAR_CAP_MS);
+    }, 200);
+  }, CAPSULE_REVEAL_MS);
 }
 
-function move(e) {
-  if (!hold || (e.pointerId !== undefined && e.pointerId !== hold.pointerId)) return;
-  const dx = e.clientX - hold.ox;
-  const upY = hold.oy - e.clientY;
-  setZone(computeZone(dx, upY, { directory: isDirectory() }));
-  const { puck, app } = els();
-  const appRect = app.getBoundingClientRect();
-  puck.style.left = `${e.clientX - appRect.left}px`;
-  puck.style.top = `${e.clientY - appRect.top}px`;
-  puck.classList.toggle('is-dragging', Math.hypot(dx, upY) > 12);
+function moveHold(e) {
+  if (!hold || hold.finished) return;
+  if (e.pointerId !== undefined && e.pointerId !== hold.pointerId) return;
+  const dy = (e.clientY ?? hold.startY) - hold.startY;
+  setCancelVisual(isSlideUpCancel(dy));
 }
 
-function teardown() {
-  if (!hold) return;
-  cancelAnimationFrame(hold.raf);
-  clearInterval(hold.timer);
-  hold = null;
-  if (sessionActive) {
-    sessionActive = false;
-    setAudioSession?.('deactivate');
-  }
-  closeStage();
+function cleanupHold(current) {
+  clearTimeout(current.preRollTimer);
+  clearTimeout(current.revealTimer);
+  clearInterval(current.tickTimer);
+  current.triggerEl?.classList.remove('is-holding');
+  if (hold === current) hold = null;
+  hideCapsule();
 }
 
-async function finish(forcedZone) {
+function abortHold(silent = false) {
   if (!hold || hold.finished) return;
   const current = hold;
   current.finished = true;
-  const zone = forcedZone || current.zone;
+  const sid = current.sessionId;
+  cleanupHold(current);
+  if (sid) voiceFsm.cancel(sid, { reason: 'user_cancel' });
+  if (!silent) whisper('已取消，这段话没有留下', 1800);
+}
+
+async function finishHold() {
+  if (!hold || hold.finished) return;
+  const current = hold;
+  current.finished = true;
   const durationMs = performance.now() - current.t0;
-  const directory = isDirectory();
-  const activePersonId = store.get().activePersonId;
-  teardown();
+  const zone = current.cancelArmed ? 'cancel' : 'current';
+  const sid = current.sessionId;
+  const partialFallback = current.partialText;
+  cleanupHold(current);
+
   const decision = decideRelease({ zone, durationMs });
-  if (decision !== 'submit' || !current.recReady) {
-    current.rec.discard();
-    if (decision === 'too-short') {
-      haptic('light');
-      showHoldHint();
-    } else if (decision === 'cancel') {
-      haptic('warning');
-      announce('已取消，什么也没记');
-    } else {
-      whisper('麦克风刚准备好，再按住说一次吧', 2600);
-    }
+  if (decision === 'cancel') {
+    if (sid) voiceFsm.cancel(sid, { reason: 'slide_up_cancel' });
+    whisper('已取消，这段话没有留下', 1800);
     return;
   }
-  const { blob } = await current.rec.stop();
-  if (!blob || blob.size < 200) {
+  if (decision === 'too-short') {
+    if (sid) voiceFsm.cancel(sid, { reason: 'short_tap' });
+    haptic('light');
     showHoldHint();
     return;
   }
-  const route = routeFor(zone, { activePersonId, directory });
-  if (!route) return;
-  haptic('success');
-  submitVoice({ blob, route });
+
+  haptic('voiceRelease');
+  const res = sid ? await voiceFsm.stop(sid) : null;
+  if (!res) return;
+
+  const p = activePerson();
+  const route = p ? { routeMode: 'current', activePersonId: p.id } : { routeMode: 'global', activePersonId: null };
+  const transcript = String(res.transcript || partialFallback || '').trim();
+
+  if (res.native) {
+    if (res.blob || res.audioUrl) {
+      submitVoice({
+        blob: res.blob || null,
+        audioUrl: res.audioUrl || null,
+        draftId: res.draftId || null,
+        clientTranscript: transcript,
+        speechEngine: 'apple_native',
+        audioDurationMs: res.durationMs,
+        route,
+      });
+    } else if (transcript) {
+      submitText({ text: transcript, route });
+    } else {
+      whisper('没有听清这句话，再按住说一次吧', 2200);
+    }
+    return;
+  }
+
+  if (!res.blob || res.blob.size < 200) {
+    if (transcript) submitText({ text: transcript, route });
+    else showHoldHint();
+    return;
+  }
+  submitVoice({ blob: res.blob, audioDurationMs: res.durationMs, route });
+}
+
+function bindTrigger(btn) {
+  if (!btn || btn.dataset.voiceBound) return;
+  btn.dataset.voiceBound = '1';
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+  btn.addEventListener('pointerdown', (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    e.preventDefault();
+    try { btn.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    beginHold(e, btn);
+  });
+  btn.addEventListener('pointermove', moveHold);
+  btn.addEventListener('pointerup', (e) => {
+    if (hold && hold.pointerId === e.pointerId) finishHold();
+  });
+  btn.addEventListener('pointercancel', (e) => {
+    if (hold && hold.pointerId === e.pointerId) abortHold();
+  });
+  btn.addEventListener('keydown', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && !hold) {
+      e.preventDefault();
+      beginHold({}, btn);
+    }
+  });
+  btn.addEventListener('keyup', (e) => {
+    if ((e.key === ' ' || e.key === 'Enter') && hold && hold.pointerId === 'key') finishHold();
+  });
 }
 
 export function initVoice() {
-  const { orb, hint, stage, pill } = els();
-  orb.prepend(svg(MIC_SVG, 'voice-orb-icon'));
-  if (stage && pill && !stage.querySelector('.voice-zone-caption')) {
-    zoneCaptionEl = h('span', { class: 'voice-zone-caption', 'aria-hidden': 'true' });
-    pill.after(zoneCaptionEl);
+  // Bind the B1 44x44 Voice Well inside #capsule (and observe capsule re-renders if needed).
+  const bindCurrent = () => {
+    const well = $('#capsuleVoiceBtn') || $('#capsule .capsule-voice-btn') || $('#voiceOrb');
+    if (well) bindTrigger(well);
+  };
+  bindCurrent();
+  const capsule = $('#capsule');
+  if (capsule && typeof MutationObserver === 'function') {
+    new MutationObserver(bindCurrent).observe(capsule, { childList: true });
   }
-  orb.addEventListener('contextmenu', (e) => e.preventDefault());
-  orb.addEventListener('pointerdown', (e) => {
-    if (e.button !== undefined && e.button !== 0) return;
-    e.preventDefault();
-    try {
-      orb.setPointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-    hint.classList.remove('is-visible');
-    begin(e);
-  });
-  orb.addEventListener('pointermove', move);
-  orb.addEventListener('pointerup', (e) => {
-    if (hold && hold.pointerId === e.pointerId) finish();
-  });
-  orb.addEventListener('pointercancel', (e) => {
-    if (hold && hold.pointerId === e.pointerId) {
-      hold.zone = 'cancel';
-      finish('cancel');
-    }
-  });
-  globalThis.addEventListener?.('blur', () => {
-    if (hold) {
-      hold.zone = 'cancel';
-      finish('cancel');
-    }
-  });
-  // keyboard: hold Space / Enter to talk
-  orb.addEventListener('keydown', (e) => {
-    if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && !hold) {
-      e.preventDefault();
-      begin({});
-    }
-  });
-  orb.addEventListener('keyup', (e) => {
-    if ((e.key === ' ' || e.key === 'Enter') && hold && hold.pointerId === 'key') {
-      e.preventDefault();
-      finish();
-    }
-  });
-  // swallow the synthetic click so a short tap only shows the hint
-  orb.addEventListener('click', (e) => e.preventDefault());
-  $('#holdHintType').addEventListener('click', () => {
-    hint.classList.remove('is-visible');
-    actions.openTextCapture({ personId: isDirectory() ? null : store.get().activePersonId, directory: isDirectory() });
-  });
+  const typeBtn = $('#holdHintType');
+  if (typeBtn) {
+    typeBtn.addEventListener('click', () => {
+      $('#holdHint')?.classList.remove('is-visible');
+      actions.openTextCapture?.({ personId: store.get().activePersonId || null });
+    });
+  }
+  globalThis.addEventListener?.('blur', () => { if (hold) abortHold(true); });
+  if (isNativeSpeechAvailable?.()) ensureInlineCapsule();
 }

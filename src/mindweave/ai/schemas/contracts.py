@@ -36,6 +36,8 @@ class TranscribeInput(BaseModel):
     language: str = "zh-CN"
     active_person_name: str | None = None
     recent_context_snippets: list[str] = Field(default_factory=list)
+    client_transcript_hint: str | None = None
+    speech_engine: str | None = None
 
 
 class TranscribeOutput(BaseModel):
@@ -70,6 +72,7 @@ class ExtractedPersonCandidate(BaseModel):
     candidate_person_ids: list[UUID] = Field(default_factory=list)
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     is_new_person: bool = False
+    distinguishing_cue: str | None = None
 
 
 class ExtractedFactItem(BaseModel):
@@ -83,12 +86,15 @@ class ExtractedFactItem(BaseModel):
     source_speaker: SourceSpeaker = SourceSpeaker.NARRATOR
     title: str = ""
     content: str
-    trigger_date: str | None = None  # YYYY-MM-DD when known
+    happened_at: str | None = None  # YYYY-MM-DD (past/present memory date ONLY; <= today)
+    trigger_date: str | None = None  # YYYY-MM-DD (future reminder / event target date)
     is_lunar: bool = False
     lunar_month: int | None = None
     lunar_day: int | None = None
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     event_group: str | None = None
+    source_span: str | None = None
+    self_corrected_from: str | None = None
 
 
 class ExtractRecordInput(BaseModel):
@@ -113,6 +119,8 @@ class ExtractRecordOutput(BaseModel):
     needs_disambiguation: bool = False
     scoped_person_locked: bool = False
     suggest_new_person: str | None = None
+    repaired_transcript: str | None = None
+    needs_cloud_refinement: bool = False
     persons: list[ExtractedPersonCandidate] = Field(default_factory=list)
     facts: list[ExtractedFactItem] = Field(default_factory=list)
 
@@ -125,6 +133,8 @@ class ContextFactItem(BaseModel):
     fact_type: FactType
     content: str
     happened_on: str | None = None
+    alias: str | None = None
+    is_unlinked_fact: bool = False
 
 
 class ContextMaterialItem(BaseModel):
@@ -135,6 +145,17 @@ class ContextMaterialItem(BaseModel):
     title: str
     body: str
     happened_on: str | None = None
+    alias: str | None = None
+
+
+class ContextReminderItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    trigger_date: str
+    days_until: int
+    is_lunar: bool = False
+    source_alias: str | None = None
 
 
 class ConversationTurn(BaseModel):
@@ -142,6 +163,7 @@ class ConversationTurn(BaseModel):
 
     role: str  # user | assistant
     content: str
+    created_at: str | None = None
 
 
 class CompanionChatInput(BaseModel):
@@ -158,6 +180,11 @@ class CompanionChatInput(BaseModel):
     recent_turns: list[ConversationTurn] = Field(default_factory=list)
     user_message: str
     safety_override: SafetyCategory = SafetyCategory.NORMAL
+    local_date: str | None = None
+    weekday_zh: str | None = None
+    local_time: str | None = None
+    timezone_name: str = "Asia/Shanghai"
+    upcoming_reminders: list[ContextReminderItem] = Field(default_factory=list)
 
 
 class CompanionChatOutput(BaseModel):

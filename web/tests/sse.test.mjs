@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSseParser, readSseResponse } from '../scripts/api/sse.js';
+import { createSseParser, readSseResponse, DEFAULT_SSE_IDLE_MS } from '../scripts/api/sse.js';
 
 function collect() {
   const events = [];
@@ -70,4 +70,51 @@ test('readSseResponse works with a ReadableStream body split in bytes (multi-byt
   const events = [];
   await readSseResponse({ body: stream }, (e) => events.push(e));
   assert.equal(events[0].data.text, '丘比特在听');
+});
+
+test('BC3 BUG-CC-6c: default idle timeout is 25s and silent hang rejects with SseIdleTimeoutError', async () => {
+  assert.equal(DEFAULT_SSE_IDLE_MS, 25_000);
+  let cancelled = false;
+  const hanging = new ReadableStream({
+    start(ctrl) {
+      ctrl.enqueue(new TextEncoder().encode('event: delta\ndata: {"text":"开场"}\n\n'));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const events = [];
+  await assert.rejects(
+    () => readSseResponse({ body: hanging }, (e) => events.push(e), { idleTimeoutMs: 60 }),
+    (err) => err?.name === 'SseIdleTimeoutError' && err?.code === 'SSE_IDLE_TIMEOUT',
+  );
+  assert.equal(events.length, 1);
+  assert.equal(cancelled, true);
+});
+
+test('BC3 BUG-CC-6c: keep-alive comment chunks reset the per-read idle watchdog', async () => {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    start(ctrl) {
+      setTimeout(() => ctrl.enqueue(enc.encode(': keep-alive\n\n')), 25);
+      setTimeout(() => ctrl.enqueue(enc.encode(': keep-alive\n\n')), 50);
+      setTimeout(() => {
+        ctrl.enqueue(enc.encode('event: done\ndata: {"ok":true}\n\n'));
+        ctrl.close();
+      }, 75);
+    },
+  });
+  const events = [];
+  await readSseResponse({ body: stream }, (e) => events.push(e), { idleTimeoutMs: 55 });
+  assert.deepEqual(events.map((e) => e.event), ['done']);
+});
+
+test('external AbortSignal aborts readSseResponse cleanly with AbortError', async () => {
+  const ac = new AbortController();
+  const stream = new ReadableStream({ start() {} });
+  setTimeout(() => ac.abort(), 20);
+  await assert.rejects(
+    () => readSseResponse({ body: stream }, () => {}, { idleTimeoutMs: 5000, signal: ac.signal }),
+    (err) => err?.name === 'AbortError',
+  );
 });

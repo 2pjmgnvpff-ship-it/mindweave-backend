@@ -72,7 +72,7 @@ class DataRightsService:
         seen = set(merged)
         user_dir: Path = (self._container.settings.blob_storage_dir / str(user_id)).resolve()
         root_dir: Path = self._container.settings.blob_storage_dir.resolve()
-        if not str(user_dir).startswith(str(root_dir)) or not user_dir.is_dir():
+        if not user_dir.is_relative_to(root_dir) or not user_dir.is_dir():
             return merged
         for file_path in sorted(user_dir.rglob("*")):
             if not file_path.is_file() or file_path.name.endswith(".ct"):

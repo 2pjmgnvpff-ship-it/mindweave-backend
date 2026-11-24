@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mindweave.shared.enums import UNASSIGNED_PERSON_SLUG, Tier
 
@@ -24,9 +25,9 @@ AIGC_STANDARD_GB45438 = "GB 45438-2025"
 JOURNAL_AIGC_DISCLOSURE_FOOTER = "手账内容含 AI 基于您的单方记录整理生成，仅作个人私密备忘"
 
 TIER_HEADINGS: dict[str, str] = {
-    Tier.GOLD.value: "金箭 · 记爱",
-    Tier.SILVER.value: "银箭 · 记恨",
-    Tier.CRYSTAL.value: "水晶箭 · 记繁琐",
+    Tier.GOLD.value: "金箭 · 珍重",
+    Tier.SILVER.value: "银盾 · 边界",
+    Tier.CRYSTAL.value: "水晶 · 日常",
 }
 
 FACT_TYPE_LABELS: dict[str, str] = {
@@ -40,12 +41,21 @@ FACT_TYPE_LABELS: dict[str, str] = {
 }
 
 RECORD_KIND_LABELS: dict[str, str] = {
-    "photo": "拍立得",
-    "note": "纸质便签",
+    "photo": "照片",
+    "note": "文字手帐",
     "voice": "原声签",
 }
 
-_RAW_CITATION_RE = re.compile(r"\s*(?:\[rec_[^\]]+\]|【rec_[^】]+】)")
+REMINDER_STATUS_LABELS: dict[str, str] = {
+    "active": "提醒中",
+    "paused": "已暂停",
+    "proposed": "待确认",
+    "completed": "已完成",
+}
+
+_LUNAR_MONTH_NAMES = ("正", "二", "三", "四", "五", "六", "七", "八", "九", "十", "冬", "腊")
+_CN_DIGITS = ("", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十")
+_RAW_CITATION_RE = re.compile(r"\s*(?:\[rec_[^\]]+\]|【rec_[^】]+】|\[S\d+(?:\s*,\s*S\d+)*\])")
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +76,65 @@ class ExportArchiveBundle:
 
 
 def sanitize_journal_text(text: str) -> str:
-    """Strip internal citation tags (`[rec_...]`) so journal prose stays human-friendly (Invariant I6)."""
+    """Strip internal citation tags (`[rec_...]`/`[S1]`) so journal prose stays human-friendly (Invariant I6)."""
     cleaned = _RAW_CITATION_RE.sub("", text)
     return cleaned.strip()
+
+
+def _format_local_export_time(exported_at_iso: str, timezone_name: str = "Asia/Shanghai") -> str:
+    try:
+        dt = datetime.fromisoformat(exported_at_iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        try:
+            tz = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            tz = ZoneInfo("Asia/Shanghai")
+        local_dt = dt.astimezone(tz)
+        return local_dt.strftime("%Y年%m月%d日 %H:%M")
+    except Exception:
+        return exported_at_iso
+
+
+def _format_lunar_label(month: int | None, day: int | None, is_leap: bool = False) -> str | None:
+    if month is None or day is None or not (1 <= month <= 12) or not (1 <= day <= 30):
+        return None
+    m_name = _LUNAR_MONTH_NAMES[month - 1]
+    if day == 10:
+        d_name = "初十"
+    elif day == 20:
+        d_name = "二十"
+    elif day == 30:
+        d_name = "三十"
+    elif day < 10:
+        d_name = f"初{_CN_DIGITS[day]}"
+    elif day < 20:
+        d_name = f"十{_CN_DIGITS[day - 10]}"
+    else:
+        d_name = f"廿{_CN_DIGITS[day - 20]}"
+    leap_prefix = "闰" if is_leap else ""
+    return f"农历{leap_prefix}{m_name}月{d_name}"
+
+
+def _format_reminder_schedule(rem: Mapping[str, Any]) -> str:
+    rule = str(rem.get("rule") or "once")
+    is_lunar = bool(rem.get("isLunar", False))
+    if is_lunar:
+        lunar_str = _format_lunar_label(
+            rem.get("targetMonth"),
+            rem.get("targetDay"),
+            bool(rem.get("isLeapMonth", False)),
+        )
+        if lunar_str:
+            return f"每年 {lunar_str}" if rule == "yearly" else lunar_str
+    if rule == "yearly":
+        tm = rem.get("targetMonth")
+        td = rem.get("targetDay")
+        if isinstance(tm, int) and isinstance(td, int):
+            return f"每年 {tm:02d}-{td:02d}"
+        return "每年"
+    once_d = rem.get("onceDate")
+    return f"单次 {once_d}" if once_d else "单次"
 
 
 def allocate_media_archive_path(object_key: str, used_paths: set[str]) -> str:
@@ -123,8 +189,10 @@ def render_journal_markdown(
     facts: Sequence[Mapping[str, Any]],
     reminders: Sequence[Mapping[str, Any]],
     chat_messages: Sequence[Mapping[str, Any]],
+    media_archive_paths: Mapping[str, str] | None = None,
+    timezone_name: str = "Asia/Shanghai",
 ) -> str:
-    """Render a warm, human-readable Markdown journal organized by Arrow Tier and Person."""
+    """Render a warm, human-readable Markdown journal organized by Tier and Person."""
     visible_persons: list[Mapping[str, Any]] = []
     excluded_person_ids: set[str] = set()
     for person in persons:
@@ -135,11 +203,13 @@ def render_journal_markdown(
         visible_persons.append(person)
 
     known_person_ids = {str(p["id"]) for p in visible_persons if p.get("id") is not None}
+    archive_map = media_archive_paths or {}
+    local_export_time = _format_local_export_time(exported_at_iso, timezone_name=timezone_name)
 
     lines: list[str] = [
         "# 心络 · 私密手账导出卷",
         "",
-        f"- 导出时间：{exported_at_iso}",
+        f"- 导出时间：{local_export_time}",
         f"- 收录人物：{len(visible_persons)} 位",
         "",
     ]
@@ -191,8 +261,24 @@ def render_journal_markdown(
         if pid and str(pid) in known_person_ids and str(pid) not in excluded_person_ids:
             messages_by_person.setdefault(str(pid), []).append(msg)
 
+    def _append_material_line(m: Mapping[str, Any], *, is_silver: bool) -> None:
+        m_kind = str(m.get("kind", ""))
+        kind_label = RECORD_KIND_LABELS.get(m_kind, "文字手帐")
+        m_title = sanitize_journal_text(str(m.get("title", "")))
+        m_body = sanitize_journal_text(str(m.get("body", "")))
+        when_str = f"（{m['happenedOn']}）" if m.get("happenedOn") else ""
+        lines.append(f"- [{kind_label}] **{m_title}**{when_str}：{m_body}")
+        media_key = m.get("mediaObjectKey")
+        arc_path = archive_map.get(str(media_key)) if media_key else None
+        if arc_path:
+            if m_kind == "photo" and not is_silver:
+                lines.append(f"  ![{m_title or '手账照片'}]({arc_path})")
+            elif m_kind == "voice":
+                lines.append(f"  [原声录音]({arc_path})")
+
     for tier_enum in (Tier.GOLD, Tier.SILVER, Tier.CRYSTAL):
         tier_val = tier_enum.value
+        is_silver_tier = tier_enum is Tier.SILVER
         heading = TIER_HEADINGS[tier_val]
         lines.append(f"## {heading}")
         lines.append("")
@@ -227,7 +313,21 @@ def render_journal_markdown(
                     ftype_label = FACT_TYPE_LABELS.get(str(f.get("type", "")), "备忘")
                     content = sanitize_journal_text(str(f.get("content", "")))
                     status_note = "（待确认）" if f.get("status") == "pending" else ""
-                    date_note = f" · {f['triggerDate']}" if f.get("triggerDate") else ""
+                    lunar_note = (
+                        _format_lunar_label(
+                            f.get("lunarMonth"),
+                            f.get("lunarDay"),
+                            bool(f.get("lunarIsLeapMonth", False)),
+                        )
+                        if f.get("isLunar")
+                        else None
+                    )
+                    date_parts: list[str] = []
+                    if lunar_note:
+                        date_parts.append(lunar_note)
+                    if f.get("triggerDate"):
+                        date_parts.append(str(f["triggerDate"]))
+                    date_note = f" · {' / '.join(date_parts)}" if date_parts else ""
                     lines.append(f"- **{ftype_label}**{status_note}：{content}{date_note}")
                 lines.append("")
 
@@ -235,11 +335,7 @@ def render_journal_markdown(
             if p_mats:
                 lines.append("#### 原始手札")
                 for m in p_mats:
-                    kind_label = RECORD_KIND_LABELS.get(str(m.get("kind", "")), "便签")
-                    m_title = sanitize_journal_text(str(m.get("title", "")))
-                    m_body = sanitize_journal_text(str(m.get("body", "")))
-                    when_str = f"（{m['happenedOn']}）" if m.get("happenedOn") else ""
-                    lines.append(f"- [{kind_label}] **{m_title}**{when_str}：{m_body}")
+                    _append_material_line(m, is_silver=is_silver_tier)
                 lines.append("")
 
             p_rems = reminders_by_person.get(pid, [])
@@ -247,13 +343,16 @@ def render_journal_markdown(
                 lines.append("#### 守约提醒")
                 for r in p_rems:
                     r_title = sanitize_journal_text(str(r.get("title", "")))
-                    r_rule = "每年" if r.get("rule") == "yearly" else "单次"
-                    lines.append(f"- {r_title}（{r_rule} · {r.get('status', 'active')}）")
+                    r_sched = _format_reminder_schedule(r)
+                    r_status = REMINDER_STATUS_LABELS.get(
+                        str(r.get("status") or "active"), "提醒中"
+                    )
+                    lines.append(f"- {r_title}（{r_sched} · {r_status}）")
                 lines.append("")
 
             p_msgs = messages_by_person.get(pid, [])
             if p_msgs:
-                lines.append("#### 树洞对话摘录")
+                lines.append("#### 丘比特对话摘录")
                 for msg in p_msgs:
                     speaker = "我" if msg.get("role") == "user" else "心络"
                     m_content = sanitize_journal_text(str(msg.get("content", "")))
@@ -264,11 +363,7 @@ def render_journal_markdown(
         lines.append("## 未归属随手记")
         lines.append("")
         for m in unassigned_materials:
-            kind_label = RECORD_KIND_LABELS.get(str(m.get("kind", "")), "便签")
-            m_title = sanitize_journal_text(str(m.get("title", "")))
-            m_body = sanitize_journal_text(str(m.get("body", "")))
-            when_str = f"（{m['happenedOn']}）" if m.get("happenedOn") else ""
-            lines.append(f"- [{kind_label}] **{m_title}**{when_str}：{m_body}")
+            _append_material_line(m, is_silver=False)
         for f in unassigned_facts:
             ftype_label = FACT_TYPE_LABELS.get(str(f.get("type", "")), "备忘")
             content = sanitize_journal_text(str(f.get("content", "")))
@@ -336,6 +431,7 @@ def package_export_zip(
     exported_at_iso: str,
     sections: Mapping[str, Any],
     media_items: Sequence[ExportMediaItem],
+    timezone_name: str = "Asia/Shanghai",
 ) -> ExportArchiveBundle:
     """Build portable in-memory ZIP archive with `data.json`, `journal.md`, and `media/*`."""
     sanitized_sections = _sanitize_export_sections(sections)
@@ -349,6 +445,12 @@ def package_export_zip(
         }
         for item in media_items
     ]
+    media_archive_paths = {item.object_key: item.archive_path for item in media_items}
+
+    pref_section = sanitized_sections.get("preferences")
+    effective_tz = timezone_name
+    if isinstance(pref_section, Mapping) and pref_section.get("timezone"):
+        effective_tz = str(pref_section["timezone"])
 
     core_payload: dict[str, Any] = {
         "schemaVersion": EXPORT_SCHEMA_VERSION,
@@ -393,6 +495,8 @@ def package_export_zip(
         facts=sanitized_sections.get("facts", []),
         reminders=sanitized_sections.get("reminders", []),
         chat_messages=sanitized_sections.get("chatMessages", []),
+        media_archive_paths=media_archive_paths,
+        timezone_name=effective_tz,
     )
     journal_bytes = journal_md.encode("utf-8")
 

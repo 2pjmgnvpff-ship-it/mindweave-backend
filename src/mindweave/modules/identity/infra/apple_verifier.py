@@ -187,6 +187,10 @@ class AppleJwksTokenVerifier:
 class NoopEmailOtpSender:
     """Default dev/test OTP sender adapter that performs zero PII logging (Invariant I10)."""
 
+    @property
+    def provider_name(self) -> str:
+        return "noop"
+
     async def send_otp(
         self,
         *,
@@ -194,6 +198,18 @@ class NoopEmailOtpSender:
         otp_code: str,
         purpose: OtpPurpose,
         expires_in_seconds: int,
-    ) -> None:
+        challenge_id: Any | None = None,
+    ) -> Any:
         # Intentionally never logs email or otp_code (Invariant I10).
-        del email, otp_code, purpose, expires_in_seconds
+        from mindweave.modules.identity.domain.models import EmailDeliveryReceipt
+
+        del email, otp_code, purpose, expires_in_seconds, challenge_id
+        return EmailDeliveryReceipt(
+            delivered=False,
+            provider="noop",
+            delivery_status="dev_bypass",
+            provider_message_id=None,
+        )
+
+    async def aclose(self) -> None:
+        return None

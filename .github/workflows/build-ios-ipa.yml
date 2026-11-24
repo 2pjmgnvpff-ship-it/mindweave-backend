@@ -47,9 +47,12 @@ jobs:
       - name: Select Xcode toolchain
         run: |
           set -euo pipefail
-          XCODE_16_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
-          if [[ -n "${XCODE_16_APP}" && -d "${XCODE_16_APP}" ]]; then
-            sudo xcode-select -s "${XCODE_16_APP}/Contents/Developer"
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -n 1 || true)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            XCODE_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+          if [[ -n "${XCODE_APP}" && -d "${XCODE_APP}" ]]; then
+            sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
           fi
           xcodebuild -version
           swift --version
@@ -258,6 +261,23 @@ jobs:
           echo "${BINARY_INFO}" | grep -q "Mach-O 64-bit executable arm64"
 
           plutil -lint "${APP_DIR}/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSSpeechRecognitionUsageDescription' "${APP_DIR}/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "${APP_DIR}/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :NSFaceIDUsageDescription' "${APP_DIR}/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CADisableMinimumFrameDurationOnPhone' "${APP_DIR}/Info.plist" | grep -qi "true"
+
+          # Verify Release Mach-O binary strips ALL debug server-config symbols and loopback URLs
+          ! strings "${APP_DIR}/MindWeave" | grep -qE "ServerConfigSheet|mwConfig|openServerConfig|127\.0\.0\.1"
+
+          # Verify packaged WebBundle JS syntax and Release server-config gating
+          if command -v node >/dev/null 2>&1; then
+            find "${APP_DIR}/WebBundle/scripts" -name '*.js' -print0 | xargs -0 -n 1 node --check
+          fi
+          for f in WebBundle/scripts/views/auth.js WebBundle/scripts/main.js WebBundle/scripts/views/settings.js; do
+            grep -qE "isDebugBuild|__MW_DEBUG_BUILD__" "${APP_DIR}/${f}"
+          done
+          test ! -d "${APP_DIR}/WebBundle/screenshots"
+
           echo "--- IPA Archive Listing ---"
           unzip -l "${IPA_PATH}"
           ls -lh "${IPA_PATH}"

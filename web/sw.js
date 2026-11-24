@@ -1,17 +1,12 @@
-// sw.js — minimal offline shell. Caches the app shell + static assets only.
-// API traffic (/v1, /api, /auth media URLs) is NEVER cached: always straight to the network.
-const CACHE = 'mw-shell-6';
+// sw.js — V2 minimal offline shell. Caches app shell & static assets only.
+// API traffic (/v1, /api, /dev) is NEVER cached: always straight to network.
+const CACHE = 'mw-shell-7';
 const SHELL = [
   './',
   './index.html',
   './manifest.webmanifest',
   './assets/icon.svg',
-  './assets/cupid/muse_cupid_a_listen.webp',
-  './assets/cupid/arrow_pin_gold.webp',
-  './assets/cupid/arrow_pin_silver.webp',
-  './assets/cupid/arrow_pin_crystal.webp',
-  './assets/gleb/lake_bench_clean.jpg',
-  './assets/gleb/orb_ai_glow.png',
+  './styles/tokens.css',
   './styles/base.css',
   './styles/journal.css',
   './styles/dock.css',
@@ -24,11 +19,19 @@ const SHELL = [
   './scripts/format.js',
   './scripts/icons.js',
   './scripts/native-bridge.js',
-  './scripts/gestures.js',
   './scripts/voice-logic.js',
+  './scripts/voice-fsm.js',
   './scripts/offline-queue.js',
   './scripts/actions.js',
   './scripts/recorder.js',
+  './scripts/journal-scrubber.js',
+  './scripts/lib/solar-terms.js',
+  './scripts/lib/spring-waapi.js',
+  './scripts/lib/virtual-river.js',
+  './scripts/lib/swipe-arbiter.js',
+  './scripts/lib/journal-pinch.js',
+  './scripts/lib/ime-guard.js',
+  './scripts/lib/orb.js',
   './scripts/api/client.js',
   './scripts/api/sse.js',
   './scripts/api/endpoints.js',
@@ -36,18 +39,24 @@ const SHELL = [
   './scripts/views/auth.js',
   './scripts/views/journal.js',
   './scripts/views/journal-items.js',
-  './scripts/views/casual.js',
+  './scripts/views/vellum-pocket.js',
+  './scripts/views/peek-date.js',
+  './scripts/views/people-sheet.js',
+  './scripts/views/archive-history-sheet.js',
+  './scripts/views/capture-receipt.js',
   './scripts/views/dock.js',
   './scripts/views/arrow.js',
   './scripts/views/voice.js',
   './scripts/views/capture.js',
   './scripts/views/chat.js',
   './scripts/views/chat-render.js',
+  './scripts/views/chat-drawer.js',
   './scripts/views/chat-voice.js',
   './scripts/views/settings.js',
+  './scripts/views/data-rights-sheet.js',
+  './scripts/views/crisis.js',
   './scripts/views/sheet.js',
   './scripts/views/onboarding.js',
-  './scripts/views/questions.js',
 ];
 
 self.addEventListener('install', (event) => {
@@ -76,7 +85,7 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin || isApi(url)) return; // network only, never cached
+  if (url.origin !== self.location.origin || isApi(url)) return;
 
   if (req.mode === 'navigate') {
     event.respondWith(
@@ -85,7 +94,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // static assets: network first (fresh code after deploys), cache fallback when offline
   event.respondWith(
     fetch(req)
       .then((res) => {

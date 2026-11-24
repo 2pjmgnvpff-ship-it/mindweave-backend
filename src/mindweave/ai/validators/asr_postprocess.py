@@ -122,7 +122,7 @@ _PROTECTED_DIFF_CHARS: frozenset[str] = frozenset(
 )
 
 _SELF_CORRECTION_CUE_RE = re.compile(
-    r"[，,、\s]*(?:呃|哦|哎|啊)?[，,、\s]*(?:不对|说错了|搞错了|口误)[，,、\s]*(?:应该)?(?:是)?[，,、\s]*"
+    r"[，,、\s]*(?:呃|哦|哎|啊)?[，,、\s]*(?:不对|说错了|讲错了|搞错了|口误|记错了)[，,、\s]*(?:应该是|应该|改成|改到|改为|换成|是)?[，,、\s]*"
 )
 _EVALUATIVE_BEFORE_CUE_RE = re.compile(r"(?:觉得|感觉|这样|那样|有点|好像|真的?|太|很|并|也)$")
 
@@ -208,6 +208,32 @@ def _clean_join_after(after_rest: str, *, absorb_leading_comma: bool) -> str:
     return after_rest
 
 
+_NEGATION_PIVOT_ASR_RE = re.compile(
+    r"(?P<sep>[，,、；;\s]*)"
+    r"(?:啊|哦|呃|嗯)?[，,、\s]*"
+    r"(?P<repair_prefix>(?:不对|搞错了|说错了|讲错了|口误|记错了)[，,、\s]*)?"
+    r"(?:不是|并非)\s*(?P<rejected>[^，,。；;！!？?\n]{1,12}?)"
+    r"[，,、\s]*(?P<connector>改成|改到|改为|换成|其实是|应该是|而是|是)"
+    r"\s*(?P<replacement>[^，,。；;！!？?\n]+)"
+)
+_ASR_OVERRIDE_VERBS: frozenset[str] = frozenset({"改成", "改到", "改为", "换成"})
+_ASR_WEEK_MODIFIERS: tuple[str, ...] = ("下", "这", "本", "上")
+_ASR_CLAUSE_BOUNDARY_RE = re.compile(r"[。！？；;\n，,、]+")
+_ASR_WEEKDAY_PHRASE_RE = re.compile(
+    r"(?:下|这|本|上)?(?:周|星期|礼拜)[一二三四五六日天末]"
+    r"(?:(?:上午|下午|中午|晚上|早上|凌晨|傍晚)?"
+    r"(?:(?:\d{1,2}|[一二两三四五六七八九十]{1,2})[点时](?:半|\d{1,2}分?)?)?)?"
+)
+
+
+def _split_prev_clause_asr(before: str) -> tuple[str, str]:
+    boundaries = list(_ASR_CLAUSE_BOUNDARY_RE.finditer(before))
+    if boundaries:
+        split_pos = boundaries[-1].end()
+        return before[:split_pos], before[split_pos:]
+    return "", before
+
+
 def resolve_spoken_self_corrections(
     text: str,
     *,
@@ -221,6 +247,63 @@ def resolve_spoken_self_corrections(
         reverse=True,
     )
 
+    # Pass 1: Negation-pivot self-corrections ("不是X，改成/换成/是Y") with strict contrast guard
+    for _ in range(4):
+        changed = False
+        for m in _NEGATION_PIVOT_ASR_RE.finditer(result):
+            rejected = m.group("rejected").strip()
+            connector = m.group("connector").strip()
+            has_repair_prefix = bool(m.group("repair_prefix"))
+            has_override_verb = connector in _ASR_OVERRIDE_VERBS
+            raw_rep = m.group("replacement").strip()
+            rep_core = raw_rep.rstrip("吧哈啊呀哦啦呢了").strip() or raw_rep
+
+            before = result[: m.start()]
+            after = result[m.end() :]
+            prefix_before_clause, prev_clause = _split_prev_clause_asr(before)
+            rejected_in_prev = bool(rejected and rejected in prev_clause)
+
+            # CRITICAL GUARD: NEVER rewrite bare contrastive "不是X，是/而是Y"
+            # (e.g. "妈妈不是不吃辣，是不能吃海鲜")!
+            if not (has_override_verb or has_repair_prefix or rejected_in_prev):
+                continue
+
+            if rejected_in_prev:
+                idx = prev_clause.rfind(rejected)
+                left = prev_clause[:idx]
+                right = prev_clause[idx + len(rejected) :]
+                if (
+                    left.endswith(_ASR_WEEK_MODIFIERS)
+                    and rep_core.startswith(_ASR_WEEK_MODIFIERS)
+                    and rejected.startswith(("周", "星期", "礼拜"))
+                ):
+                    left = left[:-1]
+                result = f"{prefix_before_clause}{left}{rep_core}{right}{after}"
+                changed = True
+                break
+
+            if not before.strip():
+                result = f"{rep_core}{after}"
+                changed = True
+                break
+
+            if _ASR_WEEKDAY_PHRASE_RE.fullmatch(rep_core):
+                replaced = _replace_last_span(
+                    prev_clause, _ASR_WEEKDAY_PHRASE_RE, rep_core, max_lookback=10
+                )
+                if replaced is not None:
+                    result = f"{prefix_before_clause}{replaced}{after}"
+                    changed = True
+                    break
+
+            if has_override_verb:
+                result = f"{before.rstrip('，,、 ')}{connector}{rep_core}{after}"
+                changed = True
+                break
+        if not changed:
+            break
+
+    # Pass 2: Classic cue-only self-corrections ("约了周五，不对，是周六" / "刚跟阿哲，说错了是阿远，吃晚饭")
     for _ in range(4):
         changed = False
         for m in _SELF_CORRECTION_CUE_RE.finditer(result):
@@ -231,10 +314,12 @@ def resolve_spoken_self_corrections(
             if _EVALUATIVE_BEFORE_CUE_RE.search(before.rstrip()):
                 continue
 
-            # 1. Weekday self-correction ("约了周五，不对，是周六" / "下周三复查，不对，是下周六")
-            wd_m = _WEEKDAY_RE.match(after)
+            # 1. Weekday + optional period/clock self-correction ("约了周五，不对，是周六下午")
+            wd_m = _ASR_WEEKDAY_PHRASE_RE.match(after) or _WEEKDAY_RE.match(after)
             if wd_m is not None:
-                replaced = _replace_last_span(before, _WEEKDAY_RE, wd_m.group(0), max_lookback=6)
+                replaced = _replace_last_span(
+                    before, _ASR_WEEKDAY_PHRASE_RE, wd_m.group(0), max_lookback=6
+                ) or _replace_last_span(before, _WEEKDAY_RE, wd_m.group(0), max_lookback=6)
                 if replaced is not None:
                     rest = _clean_join_after(after[wd_m.end() :], absorb_leading_comma=False)
                     result = replaced + rest

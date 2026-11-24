@@ -60,7 +60,7 @@ class LocalEncryptedBlobStore:
     def _paths(self, object_key: str) -> tuple[Path, Path]:
         rel = _safe_rel_key(object_key)
         blob_path = (self._root / rel).resolve()
-        if not str(blob_path).startswith(str(self._root)):
+        if not blob_path.is_relative_to(self._root):
             raise ValueError("Path traversal blocked")
         meta_path = blob_path.with_name(blob_path.name + ".ct")
         return blob_path, meta_path
@@ -121,7 +121,7 @@ class LocalEncryptedBlobStore:
 
     async def delete_user_prefix(self, *, user_id: UUID) -> int:
         user_dir = (self._root / str(user_id)).resolve()
-        if not str(user_dir).startswith(str(self._root)) or not user_dir.exists():
+        if not user_dir.is_relative_to(self._root) or not user_dir.exists():
             return 0
 
         def _purge() -> int:
@@ -143,3 +143,104 @@ class LocalEncryptedBlobStore:
             return count
 
         return await asyncio.to_thread(_purge)
+
+
+async def filter_unreferenced_blob_keys(
+    session: object,
+    candidate_keys: set[str],
+) -> list[str]:
+    """Return only blob keys no longer referenced by any Record, Capture, Person, Preference, or Export."""
+    cleaned = {k for k in candidate_keys if k}
+    if not cleaned:
+        return []
+    from sqlalchemy import or_, select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from mindweave.core.orm import (
+        CaptureRow,
+        ExportJobRow,
+        PersonRow,
+        RecordRow,
+        UserPreferenceRow,
+    )
+    from mindweave.shared.enums import CaptureStatus
+
+    assert isinstance(session, AsyncSession)
+    keys_list = list(cleaned)
+    live_record_keys = set(
+        (
+            await session.scalars(
+                select(RecordRow.media_object_key).where(
+                    RecordRow.media_object_key.in_(keys_list),
+                )
+            )
+        ).all()
+    )
+    live_capture_audio = set(
+        (
+            await session.scalars(
+                select(CaptureRow.audio_object_key).where(
+                    CaptureRow.status != CaptureStatus.REVERTED.value,
+                    CaptureRow.audio_object_key.in_(keys_list),
+                )
+            )
+        ).all()
+    )
+    live_capture_img = set(
+        (
+            await session.scalars(
+                select(CaptureRow.image_object_key).where(
+                    CaptureRow.status != CaptureStatus.REVERTED.value,
+                    CaptureRow.image_object_key.in_(keys_list),
+                )
+            )
+        ).all()
+    )
+    person_rows = (
+        await session.execute(
+            select(
+                PersonRow.avatar_object_key,
+                PersonRow.main_photo_object_key,
+                PersonRow.sub_photo_object_key,
+            ).where(
+                or_(
+                    PersonRow.avatar_object_key.in_(keys_list),
+                    PersonRow.main_photo_object_key.in_(keys_list),
+                    PersonRow.sub_photo_object_key.in_(keys_list),
+                )
+            )
+        )
+    ).all()
+    live_person_keys = {k for row in person_rows for k in row if k}
+    live_wallpaper_keys = set(
+        (
+            await session.scalars(
+                select(UserPreferenceRow.wallpaper_object_key).where(
+                    UserPreferenceRow.wallpaper_object_key.in_(keys_list),
+                )
+            )
+        ).all()
+    )
+    live_export_keys = set(
+        (
+            await session.scalars(
+                select(ExportJobRow.archive_object_key).where(
+                    ExportJobRow.archive_object_key.in_(keys_list),
+                )
+            )
+        ).all()
+    )
+    still_live = {
+        k
+        for k in (
+            live_record_keys
+            | live_capture_audio
+            | live_capture_img
+            | live_person_keys
+            | live_wallpaper_keys
+            | live_export_keys
+        )
+        if k
+    }
+    return sorted(k for k in cleaned if k not in still_live)
+

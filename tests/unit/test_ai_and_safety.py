@@ -74,11 +74,12 @@ from mindweave.shared.scopes import UserScope
 def test_prompt_registry_loads_all_versioned_prompts() -> None:
     registry = PromptRegistry()
     expected = {
-        "extract_record": "1.2.0",
-        "ask_relationship": "1.3.0",
+        "extract_record": "1.3.0",
+        "ask_relationship": "1.4.0",
+        "ask_relationship_stream": "1.0.0",
         "parse_screenshot": "1.0.0",
         "safety_classify": "1.0.0",
-        "transcribe_audio": "1.1.0",
+        "transcribe_audio": "1.2.0",
         "summarize_thread": "1.0.0",
     }
     for pid, ver in expected.items():
@@ -583,7 +584,7 @@ async def test_gateway_pre_llm_hard_pii_masking_and_no_semantic_cache() -> None:
             known_persons=[KnownPersonRef(person_id=p_uid, display_name="沈清秋", tier=Tier.GOLD)],
         ),
     )
-    assert prompt_ver == "extract_record@1.2.0"
+    assert prompt_ver == "extract_record@1.3.0"
     assert model_prof.startswith("fake:")
     assert len(fake.recorded_requests) == 1
     outbound_req = fake.recorded_requests[0]

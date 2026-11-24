@@ -273,6 +273,11 @@ class FakeAdapter:
     def provider_name(self) -> str:
         return "fake"
 
+    @staticmethod
+    def supports_audio_input(_model: str) -> bool:
+        """FakeAdapter does NOT perform real acoustic speech recognition."""
+        return False
+
     @property
     def faults(self) -> FakeFaultConfig:
         return self._faults
@@ -365,11 +370,35 @@ class FakeAdapter:
     # Task handlers
     # -----------------------------------------------------------------------
 
+    _BINARY_AUDIO_PREFIXES: tuple[bytes, ...] = (
+        b"RIFF",
+        b"OggS",
+        b"ID3",
+        b"fLaC",
+        b"\x1a\x45\xdf\xa3",
+    )
+
     def _handle_transcribe(self, ctx: dict[str, Any]) -> TranscribeOutput:
         payload = TranscribeInput.model_validate(ctx["payload"])
         raw_bytes = payload.audio_bytes
 
-        # Explicit silent / unintelligible audio fixtures must return empty strings (zero hallucination)
+        # 1. Explicit on-device native speech transcript hint takes priority (real user speech!)
+        client_hint = (payload.client_transcript_hint or "").strip()
+        if client_hint:
+            corrected = postprocess_asr_transcript(
+                client_hint,
+                active_person_name=payload.active_person_name,
+                known_person_names=payload.known_person_names,
+                recent_context_snippets=payload.recent_context_snippets,
+            )
+            est_ms = max(1000, min(120_000, len(raw_bytes) // 4)) if raw_bytes else None
+            return TranscribeOutput(
+                raw_transcript=client_hint,
+                corrected_transcript=corrected,
+                duration_ms=est_ms,
+            )
+
+        # 2. Explicit silent / unintelligible audio fixtures must return empty strings
         stripped_marker = raw_bytes.strip().upper()
         if not raw_bytes or stripped_marker in {b"SILENCE", b"NOISE", b"EMPTY"}:
             return TranscribeOutput(
@@ -402,34 +431,25 @@ class FakeAdapter:
                     duration_ms=0,
                 )
         else:
-            try:
-                cand = raw_bytes.decode("utf-8")
-                if "\x00" not in cand and cand.strip():
-                    decoded = cand.strip()
-            except UnicodeDecodeError:
-                decoded = ""
+            # Guard against treating raw binary audio containers (.wav/.m4a/.ogg/.webm/.mp3) as UTF-8
+            is_binary_container = (
+                raw_bytes.startswith(self._BINARY_AUDIO_PREFIXES)
+                or (len(raw_bytes) >= 8 and raw_bytes[4:8] == b"ftyp")
+                or (len(raw_bytes) >= 2 and raw_bytes[0] == 0xFF and (raw_bytes[1] & 0xE0) == 0xE0)
+            )
+            if not is_binary_container:
+                try:
+                    cand = raw_bytes.decode("utf-8")
+                    if "\x00" not in cand and cand.strip():
+                        decoded = cand.strip()
+                except UnicodeDecodeError:
+                    decoded = ""
 
         if not decoded:
-            active_name = (payload.active_person_name or "").strip()
-            context_blob = " ".join(payload.recent_context_snippets)
-            if active_name:
-                if any(k in context_blob for k in ("复查", "膝盖", "医院")):
-                    decoded = f"陪{active_name}去复查前，结合手帐帮我列一份准备清单吧？"
-                elif any(k in context_blob for k in ("围巾", "礼物", "羊绒")):
-                    decoded = f"想给{active_name}买条围巾当礼物，手帐里之前提过什么讲究？"
-                elif any(k in context_blob for k in ("甩锅", "邮件", "签字", "需求", "复盘")):
-                    decoded = f"按时间线帮我整理一下和{active_name}的关键客观事实和书面留痕要点？"
-                elif any(k in context_blob for k in ("过敏", "忌口", "喜欢", "爱吃", "爱喝")):
-                    decoded = f"最近约{active_name}见面吃饭，有哪些偏好和忌口要提前留意？"
-                else:
-                    decoded = (
-                        f"结合手帐里记下的细节，最近和{active_name}相处有哪些需要提前准备的事？"
-                    )
-            else:
-                person_hint = (
-                    payload.known_person_names[0] if payload.known_person_names else ""
-                ) or "对方"
-                decoded = f"{person_hint}提到最近想好好休息。"
+            # Invariant I13: NEVER fabricate fake Chinese speech from binary audio!
+            raise AdapterPermanentError(
+                "No live ASR provider configured and no client_transcript supplied"
+            )
 
         corrected = postprocess_asr_transcript(
             decoded,
@@ -1774,7 +1794,7 @@ class FakeAdapter:
 
         split_regex = (
             r"[；;。！!？\?\n]+|"
-            r"(?:，|,\s*)(?=(?:另外|还有|此外|而且|不过|但|其实|对了|现在|目前|如今|后来|改喝|改成|这次|最近|冬天|夏天|出门只|只喝|只戴|喜欢|超爱|最爱|爱吃|讨厌|不喜欢|不吃|不喝|不能吃|让我帮|我答应|她平时|他平时|对[^\s，,]{1,6}(?:严重)?过敏|还特别嘱咐))|"
+            r"(?:，|,\s*)(?=(?:另外|还有|此外|而且|不过|但|其实|对了|现在|目前|如今|后来|改喝|改成|这次|最近|冬天|夏天|出门只|只喝|只戴|喜欢|超爱|最爱|爱吃|讨厌|不喜欢|不吃|不喝|不能吃|让我帮|我答应|她平时|他平时|平时|农历|阴历|阳历|穿\d+|鞋码|尺码|核磁|复查|体检|生日|纪念日|下周|这周|明天|后天|周[一二三四五六日天]|新认识|新同事|室友|表弟|表姐|对[^\s，,]{1,6}(?:严重)?过敏|还特别嘱咐))|"
             r"(?<=[\u4e00-\u9fa5])(?=不喝|但不能吃|但很喜欢)" + person_lookahead
         )
         raw_parts = re.split(split_regex, normalized)
@@ -2362,7 +2382,7 @@ class FakeAdapter:
             elif "复查" in combined_topic and "围巾" in combined_topic:
                 suggestions = [
                     f"「{payload.person_name}，复查那天我提前过来接您，医保卡和旧片子我都提前收好啦，天冷出门记得戴上软和的围巾～」",
-                    f"「{payload.person_name}，前阵子看您喜欢浅驼色羊绒围巾，天凉了我想给您挑一条软和的，复查那天正好戴着保暖～」",
+                    f"「{payload.person_name}，天凉了我想给您挑一条软和保暖的围巾，复查那天正好戴着出门～」",
                 ]
             elif "复查" in combined_topic:
                 suggestions = [
@@ -2370,8 +2390,8 @@ class FakeAdapter:
                 ]
             elif "围巾" in combined_topic or "礼物" in clean_query:
                 suggestions = [
-                    f"「{payload.person_name}，最近天凉了，给您挑了一条软软暖暖的浅驼色羊绒围巾，出门戴着刚好护住脖子呀～」"
-                    if "浅驼色" in combined_topic
+                    f"「{payload.person_name}，最近天凉了，想给您挑一条软软暖暖的围巾，出门戴着刚好护住脖子呀～」"
+                    if "围巾" in combined_topic
                     else f"「{payload.person_name}，最近降温了，给您挑了份贴心小礼物，有空见面亲手带给您呀～」"
                 ]
             elif re.search(r"(?:写一段|祝贺|祝福|生日)", clean_query):
@@ -2379,14 +2399,12 @@ class FakeAdapter:
                     f"「{payload.person_name}，太替你开心啦！祝你一切顺遂开心，有空我们一起好好庆祝一下呀～」"
                 ]
             else:
-                suggestions = [
-                    f"「{payload.person_name}，最近降温了记得多照顾自己呀，有空咱们约顿你爱吃的饭慢慢聊～」"
-                ]
+                suggestions = []
 
         return CompanionChatOutput(
             safety_flag=SafetyCategory.NORMAL,
             reply_text=reply_body,
-            whisper_note=f"已为你核对{payload.person_name}的专属记忆",
+            whisper_note="",
             cited_record_ids=cited_ids,
             has_unrecorded_gap=has_gap,
             alternative_perspectives=perspectives,

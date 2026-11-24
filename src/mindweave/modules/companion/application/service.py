@@ -7,7 +7,8 @@ import contextlib
 import inspect
 import json
 import re
-from collections.abc import AsyncIterator, Sequence
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any, Literal
@@ -80,6 +81,7 @@ from mindweave.modules.companion.infra.repository import (
     CompanionRepository,
     HydratedCitation,
 )
+from mindweave.modules.memory.infra.search_cache import PersonSearchIndexCache
 from mindweave.modules.reminders.domain.schedule import (
     ReminderScheduleError,
     resolve_next_lunar_occurrence_date,
@@ -115,6 +117,7 @@ _TAGGED_PERSPECTIVES_RE = re.compile(
     r"<perspectives>(.*?)</perspectives>", re.DOTALL | re.IGNORECASE
 )
 _TAGGED_SUGGESTIONS_RE = re.compile(r"<suggestions>(.*?)</suggestions>", re.DOTALL | re.IGNORECASE)
+_TAGGED_ACTION_RE = re.compile(r"<action>(.*?)</action>", re.DOTALL | re.IGNORECASE)
 
 _PLANNING_ACTION_RE = re.compile(
     r"(?:提醒|清单|准备|复查|下周|明天|周末|生日|约好|截止|签字|日程|"
@@ -283,28 +286,33 @@ def _compute_prep_trigger_date(event_date: date | None, local_today: date) -> da
 
 
 def _build_agent_step_events(ctx: BuiltCompanionContext) -> list[dict[str, Any]]:
-    """Build truthful, zero-jargon `agent_step` SSE payloads grounded in `ContextBuilder` telemetry."""
-    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "TA"
+    """Build calm, zero-telemetry `agent_step` SSE payloads grounded in `ContextBuilder`."""
+    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "这位朋友"
     scanned = max(0, int(ctx.total_records_scanned))
     facts_cnt = max(0, int(ctx.confirmed_facts_count))
     rem_cnt = max(0, int(ctx.active_reminders_count))
     hit_cnt = max(0, int(ctx.recalled_records_count))
 
+    scan_label = (
+        f"正在梳理关于「{safe_name}」的时间线…"
+        if ctx.tier is Tier.SILVER
+        else f"正在翻看关于「{safe_name}」的手帐…"
+    )
     steps: list[dict[str, Any]] = [
         {
             "step": 1,
             "phase": "scan",
-            "label": f"翻阅「{safe_name}」的 {scanned} 页手帐",
+            "label": scan_label,
             "count": scanned,
         }
     ]
     if facts_cnt > 0 or rem_cnt > 0:
         if facts_cnt > 0 and rem_cnt > 0:
-            step2_label = f"核对 {facts_cnt} 条已记住的细节与 {rem_cnt} 项日程"
+            step2_label = "正在整理相关细节与日程…"
         elif facts_cnt > 0:
-            step2_label = f"核对 {facts_cnt} 条已记住的细节"
+            step2_label = "正在整理相关细节…"
         else:
-            step2_label = f"核对 {rem_cnt} 项日程"
+            step2_label = "正在查看近期日程…"
         steps.append(
             {
                 "step": 2,
@@ -319,7 +327,7 @@ def _build_agent_step_events(ctx: BuiltCompanionContext) -> list[dict[str, Any]]
             {
                 "step": 3,
                 "phase": "recall",
-                "label": f"命中 {hit_cnt} 处相关原话",
+                "label": "已找到相关手帐记录",
                 "count": hit_cnt,
                 "detail": "、".join(ctx.recalled_dates[:3]),
             }
@@ -355,7 +363,7 @@ def _derive_action_proposals(
         return []
 
     proposals: list[dict[str, Any]] = []
-    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "TA"
+    safe_name = sanitize_text(ctx.person_name, allow_empty=True).cleaned_text or "这位朋友"
 
     upcoming_soon = [
         r
@@ -417,10 +425,6 @@ def _derive_action_proposals(
         trigger_date = _compute_prep_trigger_date(event_date, local_today)
 
         # Ground reminder title strictly in recalled/confirmed context & user message (<= 36 chars)
-        recalled_blob = " ".join(
-            [m.title + " " + m.body for m in ctx.chat_input.referenced_materials]
-            + [f.content for f in ctx.chat_input.confirmed_facts]
-        )
         if matched_rem is not None and not explicit_date:
             rem_title_clean = str(matched_rem.get("title") or "").strip()
             raw_title = (
@@ -429,19 +433,9 @@ def _derive_action_proposals(
                 else f"提前准备：{rem_title_clean}"
             )
         elif "复查" in user_message:
-            raw_title = (
-                f"陪{safe_name}右膝盖复查准备清单"
-                if "膝盖" in (user_message + recalled_blob)
-                else f"陪{safe_name}复查前准备清单"
-            )
+            raw_title = f"陪{safe_name}复查前准备清单"
         elif "围巾" in user_message:
-            raw_title = (
-                f"为{safe_name}挑选浅驼色羊绒围巾"
-                if "浅驼色羊绒围巾" in recalled_blob
-                else f"为{safe_name}挑选纯羊绒围巾"
-                if "羊绒围巾" in recalled_blob
-                else f"为{safe_name}准备围巾心意"
-            )
+            raw_title = f"为{safe_name}准备围巾心意"
         elif "生日" in user_message:
             raw_title = f"提前准备{safe_name}的生日心意"
         elif "礼物" in user_message:
@@ -553,19 +547,43 @@ class CompanionService:
         self._explicit_safety = safety_service
         self._explicit_queue = job_queue
         self._repo = CompanionRepository(container.cipher)
+        search_cache_raw = container.extras.get("search_index_cache")
+        search_cache: PersonSearchIndexCache | None = (
+            search_cache_raw if isinstance(search_cache_raw, PersonSearchIndexCache) else None
+        )
+        if search_cache is None:
+            search_cache = PersonSearchIndexCache()
+            container.extras["search_index_cache"] = search_cache
+            container.cipher.register_eviction_hook(search_cache.evict_user)
         self._ctx_builder = ContextBuilder(
             container.cipher,
             default_timezone=container.settings.default_timezone,
+            search_cache=search_cache,
         )
 
     def _resolve_gateway(self) -> ModelGatewayPort:
-        if self._explicit_gateway is not None:
-            return self._explicit_gateway
-        for key in ("model_gateway", "gateway", "ai_gateway"):
-            candidate = self._container.extras.get(key)
-            if candidate is not None:
-                return candidate  # type: ignore[no-any-return]
-        raise UpstreamAIError("AI Model Gateway is not configured")
+        gw: ModelGatewayPort | None = self._explicit_gateway
+        if gw is None:
+            for key in ("model_gateway", "gateway", "ai_gateway"):
+                candidate = self._container.extras.get(key)
+                if candidate is not None:
+                    gw = candidate
+                    break
+        if gw is None:
+            raise UpstreamAIError("AI Model Gateway is not configured")
+        meter = getattr(gw, "meter", None)
+        if meter is not None and hasattr(meter, "bind_db"):
+            meter.bind_db(self._container.db)
+        return gw
+
+    @contextlib.asynccontextmanager
+    async def _concurrency_slot(self, user_id: UUID) -> AsyncIterator[None]:
+        limiter = self._container.extras.get("concurrency_limiter")
+        if limiter is not None and hasattr(limiter, "slot"):
+            async with limiter.slot(user_id):
+                yield
+            return
+        yield
 
     def _resolve_safety(self) -> SafetyServicePort:
         if self._explicit_safety is not None:
@@ -1212,7 +1230,7 @@ class CompanionService:
             shaming_out = CompanionChatOutput(
                 safety_flag=SafetyCategory.BOUNDARY_REFUSAL,
                 reply_text=PUBLIC_SHAMING_BOUNDARY_GUIDANCE,
-                whisper_note="私密树洞只为你一个人守口如瓶，对外反击我们走最稳妥的合法留痕。",
+                whisper_note="记录仅自己可见，重要沟通建议保留客观书面留痕",
                 cited_record_ids=[],
                 has_unrecorded_gap=False,
                 alternative_perspectives=[],
@@ -1233,15 +1251,16 @@ class CompanionService:
         call_exc: Exception | None = None
         raw_out: CompanionChatOutput | None = None
         prompt_ver: str | None = None
-        async with self._container.db.user_session(scope.user_scope) as meter_session:
-            try:
+        # ZERO DB pool hold during external LLM HTTP I/O (AiCallMeter persists in a 2ms post-call Tx)
+        try:
+            async with self._concurrency_slot(scope.user_id):
                 raw_out, prompt_ver, _model_prof = await gateway.generate_companion_reply(
                     scope=scope.user_scope,
                     payload=ctx.chat_input,
-                    session=meter_session,
+                    session=None,
                 )
-            except Exception as exc:
-                call_exc = exc
+        except Exception as exc:
+            call_exc = exc
         if call_exc is not None:
             await self._release_failed_idempotency(
                 scope,
@@ -1258,6 +1277,7 @@ class CompanionService:
             raw_out.reply_text,
             ctx.allowed_record_ids,
             declared_cited_ids=raw_out.cited_record_ids,
+            alias_to_record_id=ctx.alias_to_record_id,
         )
         cleaned_out = raw_out.model_copy(
             update={
@@ -1343,6 +1363,69 @@ class CompanionService:
 
         return _gen()
 
+    @staticmethod
+    def _parse_optional_action_tag(
+        tail_tags: str,
+        *,
+        ctx: BuiltCompanionContext,
+        local_today: date,
+        safety_category: SafetyCategory,
+    ) -> dict[str, Any] | None:
+        """Deterministically validate an optional `<action>{...}</action>` JSON proposal."""
+        if safety_category is not SafetyCategory.NORMAL:
+            return None
+        match = _TAGGED_ACTION_RE.search(tail_tags)
+        if match is None:
+            return None
+        raw_block = match.group(1).strip()
+        if not raw_block:
+            return None
+        try:
+            parsed = json.loads(raw_block)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        kind = str(parsed.get("kind") or "").strip()
+        if kind == "create_reminder":
+            title = _clamp_clean_text(str(parsed.get("title") or ""), 36, tier=ctx.tier)
+            if not title:
+                return None
+            raw_td = str(parsed.get("triggerDate") or parsed.get("trigger_date") or "").strip()
+            try:
+                trig_date = date.fromisoformat(raw_td[:10]) if raw_td else None
+            except ValueError:
+                trig_date = None
+            if trig_date is None or trig_date < local_today:
+                trig_date = local_today + timedelta(days=1)
+            return {
+                "id": str(new_id()),
+                "kind": "create_reminder",
+                "label": _clamp_clean_text(
+                    str(parsed.get("label") or "提前设一个轻提醒"), 24, tier=ctx.tier
+                )
+                or "提前设一个轻提醒",
+                "title": title,
+                "triggerDate": trig_date.isoformat(),
+                "whenLabel": _format_cn_month_day(trig_date),
+            }
+        if kind == "save_note":
+            title = _clamp_clean_text(str(parsed.get("title") or ""), 36, tier=ctx.tier)
+            body = _clamp_clean_text(str(parsed.get("body") or ""), 220, tier=ctx.tier)
+            if not title or not body:
+                return None
+            return {
+                "id": str(new_id()),
+                "kind": "save_note",
+                "label": _clamp_clean_text(
+                    str(parsed.get("label") or "存进手帐"), 24, tier=ctx.tier
+                )
+                or "存进手帐",
+                "title": title,
+                "body": body,
+            }
+        return None
+
     async def stream_chat(
         self,
         *,
@@ -1352,8 +1435,9 @@ class CompanionService:
         client_message_id: str | None = None,
         idem_key: str | None = None,
         idem_path: str,
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     ) -> AsyncIterator[str]:
-        """Stream Cupid companion chat with live truthful `agent_step` trace & `action_proposal` cards."""
+        """Stream Cupid companion chat with live calm `agent_step` trace & `action_proposal` cards."""
         return await self.prepare_sse_stream(
             scope=scope,
             message=message,
@@ -1362,6 +1446,7 @@ class CompanionService:
             idem_key=idem_key,
             idem_path=idem_path,
             emit_agent_steps=True,
+            is_disconnected=is_disconnected,
         )
 
     async def prepare_sse_stream(
@@ -1374,10 +1459,11 @@ class CompanionService:
         idem_key: str | None = None,
         idem_path: str,
         emit_agent_steps: bool = False,
+        is_disconnected: Callable[[], Awaitable[bool]] | None = None,
     ) -> AsyncIterator[str]:
         """Validate & prepare chat turn synchronously, then return async SSE frame iterator.
 
-        Router endpoints invoke `stream_chat()` (`emit_agent_steps=True`), emitting real `agent_step`
+        Router endpoints invoke `stream_chat()` (`emit_agent_steps=True`), emitting calm `agent_step`
         frames before opening the LLM stream. Direct callers using `prepare_sse_stream()` without
         `emit_agent_steps=True` preserve `delta` as the first yielded frame for backward compatibility.
         """
@@ -1399,7 +1485,7 @@ class CompanionService:
             shaming_out = CompanionChatOutput(
                 safety_flag=SafetyCategory.BOUNDARY_REFUSAL,
                 reply_text=PUBLIC_SHAMING_BOUNDARY_GUIDANCE,
-                whisper_note="私密树洞只为你一个人守口如瓶，对外反击我们走最稳妥的合法留痕。",
+                whisper_note="记录仅自己可见，重要沟通建议保留客观书面留痕",
                 cited_record_ids=[],
                 has_unrecorded_gap=False,
                 alternative_perspectives=[],
@@ -1418,6 +1504,14 @@ class CompanionService:
             return self._replay_turn_as_sse(turn)
 
         gateway = self._resolve_gateway()
+        heartbeat_sec = max(
+            0.02,
+            float(self._container.extras.get("sse_heartbeat_seconds", 10.0)),
+        )
+        chunk_timeout_sec = max(
+            heartbeat_sec,
+            float(self._container.extras.get("sse_chunk_timeout_seconds", 25.0)),
+        )
 
         async def _stream_gen() -> AsyncIterator[str]:
             assert prepared.context is not None
@@ -1425,7 +1519,10 @@ class CompanionService:
             ctx = prepared.context
 
             reply_extractor = StreamingReplyExtractor()
-            citation_proc = StreamingCitationProcessor(ctx.allowed_record_ids)
+            citation_proc = StreamingCitationProcessor(
+                ctx.allowed_record_ids,
+                alias_to_record_id=ctx.alias_to_record_id,
+            )
             sentence_guard = SentenceBufferedStreamGuard(tier=ctx.tier)
             emitted_chunks: list[str] = []
             reply_stream_finalized = False
@@ -1450,7 +1547,7 @@ class CompanionService:
                 )
 
             try:
-                # 1. Stream truthful Agent Execution Trace BEFORE opening LLM stream (NEVER on crisis!)
+                # 1. Stream calm Agent Execution Trace BEFORE opening LLM stream (NEVER on crisis!)
                 if emit_agent_steps:
                     for step_payload in _build_agent_step_events(ctx):
                         yield format_sse_event("agent_step", step_payload)
@@ -1461,48 +1558,94 @@ class CompanionService:
                     emitted_chunks.append(pullback_chunk)
                     yield format_sse_event("delta", {"text": pullback_chunk})
 
-                stream_exc: Exception | None = None
-                async with self._container.db.user_session(scope.user_scope) as meter_session:
+                # ZERO DB session open during LLM streaming (BC3 BUG-CC-2)!
+                async with self._concurrency_slot(scope.user_id):
                     try:
                         maybe_iter: Any = gateway.stream_companion_reply(
                             scope=scope.user_scope,
                             payload=ctx.chat_input,
-                            session=meter_session,
+                            session=None,
                         )
                         stream_iter: AsyncIterator[str] = (
                             await maybe_iter if inspect.isawaitable(maybe_iter) else maybe_iter
                         )
-                        async for raw_chunk in stream_iter:
-                            if not raw_chunk:
-                                continue
+                        aiter_fn = getattr(stream_iter, "__aiter__", None)
+                        anext_iter: Any = aiter_fn() if callable(aiter_fn) else stream_iter
+                        next_task: asyncio.Task[str] | None = None
+                        try:
+                            while True:
+                                next_task = asyncio.create_task(anext_iter.__anext__())
+                                idle_started = time.monotonic()
+                                while not next_task.done():
+                                    done_set, _ = await asyncio.wait(
+                                        {next_task},
+                                        timeout=heartbeat_sec,
+                                    )
+                                    if done_set:
+                                        break
+                                    if is_disconnected is not None and await is_disconnected():
+                                        next_task.cancel()
+                                        with contextlib.suppress(BaseException):
+                                            await next_task
+                                        next_task = None
+                                        raise asyncio.CancelledError(
+                                            "Client disconnected during SSE stream"
+                                        )
+                                    if (time.monotonic() - idle_started) >= chunk_timeout_sec:
+                                        next_task.cancel()
+                                        with contextlib.suppress(BaseException):
+                                            await next_task
+                                        next_task = None
+                                        raise TimeoutError(
+                                            "Upstream LLM stream chunk idle timeout exceeded"
+                                        )
+                                    yield ": keep-alive\n\n"
+                                try:
+                                    raw_chunk = next_task.result()
+                                except StopAsyncIteration:
+                                    break
+                                finally:
+                                    next_task = None
 
-                            decoded_body = reply_extractor.feed(raw_chunk)
-                            if decoded_body:
-                                step = citation_proc.feed(decoded_body)
-                                safe_delta = sentence_guard.feed(step.delta_text)
-                                if safe_delta:
-                                    emitted_chunks.append(safe_delta)
-                                    yield format_sse_event("delta", {"text": safe_delta})
+                                if not raw_chunk:
+                                    continue
 
-                                for cit in step.new_citations:
-                                    cit_frame = _citation_sse(cit)
-                                    if cit_frame is not None:
-                                        yield cit_frame
+                                decoded_body = reply_extractor.feed(raw_chunk)
+                                if decoded_body:
+                                    step = citation_proc.feed(decoded_body)
+                                    safe_delta = sentence_guard.feed(step.delta_text)
+                                    if safe_delta:
+                                        emitted_chunks.append(safe_delta)
+                                        yield format_sse_event("delta", {"text": safe_delta})
 
-                            if reply_extractor.reply_closed and not reply_stream_finalized:
-                                reply_stream_finalized = True
-                                fin_cit = citation_proc.finalize()
-                                tail_safe = (
-                                    sentence_guard.feed(fin_cit.delta_text)
-                                    + sentence_guard.finalize()
-                                )
-                                if tail_safe:
-                                    emitted_chunks.append(tail_safe)
-                                    yield format_sse_event("delta", {"text": tail_safe})
-                                for cit in fin_cit.new_citations:
-                                    cit_frame = _citation_sse(cit)
-                                    if cit_frame is not None:
-                                        yield cit_frame
+                                    for cit in step.new_citations:
+                                        cit_frame = _citation_sse(cit)
+                                        if cit_frame is not None:
+                                            yield cit_frame
+
+                                if reply_extractor.reply_closed and not reply_stream_finalized:
+                                    reply_stream_finalized = True
+                                    fin_cit = citation_proc.finalize()
+                                    tail_safe = (
+                                        sentence_guard.feed(fin_cit.delta_text)
+                                        + sentence_guard.finalize()
+                                    )
+                                    if tail_safe:
+                                        emitted_chunks.append(tail_safe)
+                                        yield format_sse_event("delta", {"text": tail_safe})
+                                    for cit in fin_cit.new_citations:
+                                        cit_frame = _citation_sse(cit)
+                                        if cit_frame is not None:
+                                            yield cit_frame
+                        finally:
+                            if next_task is not None and not next_task.done():
+                                next_task.cancel()
+                                with contextlib.suppress(BaseException):
+                                    await next_task
+                            aclose_fn = getattr(anext_iter, "aclose", None)
+                            if callable(aclose_fn):
+                                with contextlib.suppress(Exception):
+                                    await aclose_fn()
 
                         sidecar_output = getattr(stream_iter, "companion_output", None) or getattr(
                             gateway, "last_companion_output", None
@@ -1511,7 +1654,7 @@ class CompanionService:
                         gen_out, prompt_ver, _m = await gateway.generate_companion_reply(
                             scope=scope.user_scope,
                             payload=ctx.chat_input,
-                            session=meter_session,
+                            session=None,
                         )
                         sidecar_output = gen_out
                         step = citation_proc.feed(gen_out.reply_text)
@@ -1523,11 +1666,6 @@ class CompanionService:
                             cit_frame = _citation_sse(cit)
                             if cit_frame is not None:
                                 yield cit_frame
-                    except Exception as exc:
-                        stream_exc = exc
-
-                if stream_exc is not None:
-                    raise stream_exc
 
                 if not reply_stream_finalized:
                     reply_stream_finalized = True
@@ -1559,6 +1697,7 @@ class CompanionService:
                 has_any_ctx = bool(
                     ctx.chat_input.confirmed_facts or ctx.chat_input.referenced_materials
                 )
+                llm_action_proposal: dict[str, Any] | None = None
                 if reply_extractor.used_xml_tags and sidecar_output is None:
                     tail_tags = reply_extractor.tail_text
                     w_match = _TAGGED_WHISPER_RE.search(tail_tags)
@@ -1665,14 +1804,26 @@ class CompanionService:
 
                 # 2. Emit contextually grounded 1-tap executable action proposals (NEVER on crisis/refusals)
                 local_today = to_user_local(self._container.clock.now(), ctx.timezone).date()
-                for proposal in _derive_action_proposals(
+                if reply_extractor.tail_text:
+                    llm_action_proposal = self._parse_optional_action_tag(
+                        reply_extractor.tail_text,
+                        ctx=ctx,
+                        local_today=local_today,
+                        safety_category=asst.safety_category,
+                    )
+                derived_proposals = _derive_action_proposals(
                     ctx,
                     user_message=message,
                     assistant_reply=asst.content,
                     local_today=local_today,
                     safety_category=asst.safety_category,
                     has_unrecorded_gap=asst.has_unrecorded_gap,
+                )
+                if llm_action_proposal is not None and not any(
+                    p.get("kind") == llm_action_proposal.get("kind") for p in derived_proposals
                 ):
+                    derived_proposals = [llm_action_proposal, *derived_proposals][:2]
+                for proposal in derived_proposals:
                     yield format_sse_event("action_proposal", proposal)
 
                 writeback_queued = should_writeback_chat_message(
@@ -1762,7 +1913,9 @@ class CompanionService:
                 column="display_name_enc",
                 row_id=person_row.id,
             )
-            person_name = sanitize_text(raw_person_name, allow_empty=True).cleaned_text or "TA"
+            person_name = (
+                sanitize_text(raw_person_name, allow_empty=True).cleaned_text or "这位朋友"
+            )
 
             pref_row = await session.scalar(
                 select(UserPreferenceRow).where(UserPreferenceRow.user_id == scope.user_id)

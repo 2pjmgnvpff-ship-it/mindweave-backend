@@ -1,46 +1,85 @@
-// journal.js — organic editorial scrapbook page: month chapters with asymmetric collage flow,
-// stable right-edge paper index scrub + Month Loupe, Cover Vellum Pocket with live Proactive Care Brief
-// & full editable memory sovereignty, Month Book Grid, Spotlight Search, and prompt capsules.
+// journal.js — 3-Scale Porcelain Journal (纸页 / 月册 / 年轮), Fenwick virtual-river, Ghost Spine,
+// dynamic 2-finger pinch, BC6 /search + matchedTerms, B2 Gold-only 往年今日, native UIMenu long-press.
 import { h, clear, svg, $ } from '../dom.js';
-import { api } from '../api/endpoints.js';
-import { store, setMaterials, invalidateMaterials } from '../store.js';
-import { isShortNoteSlip, gentleTilt, monogramOf, sealStyle } from '../decor.js';
-import { TIER_LABEL, todayIso, formatDateCn, formatFactDateCn, formatReminderDateCn, clip, groupMaterialsByMonth, matchesMaterialQuery } from '../format.js';
-import { BRASS_CLIP_SVG, GEAR_SVG, SEARCH_SVG, CLOSE_SVG } from '../icons.js';
-import { renderMaterial, renderPendingSlip, flashMaterial, closePeek } from './journal-items.js';
+import { api, client } from '../api/endpoints.js';
+import { store, setMaterials, invalidateMaterials, patchMaterial, removeMaterial, upsertMaterial } from '../store.js';
+import { formatDateFullCn, todayIso, clip } from '../format.js';
+import { GEAR_SVG, SEARCH_SVG, CLOSE_SVG, CUPID_IMG } from '../icons.js';
+import { renderMaterial, renderPendingSlip, renderScale2Card, renderScale3Card, flashMaterial, stopActiveAudio } from './journal-items.js';
+import { openPeekOverlay, closePeek } from './peek-date.js';
+import { renderUpcomingRibbon, openVellumPocket } from './vellum-pocket.js';
 import { renderArrow, strikeArrow } from './arrow.js';
-import { openQuestionNotes } from './questions.js';
-import { openSheet, closeSheet } from './sheet.js';
-import { whisper } from './toast.js';
+import { showUndoToast, whisper } from './toast.js';
 import { actions } from '../actions.js';
-import { initNativeBridge, haptic, prefersReducedMotion } from '../native-bridge.js';
-import { attachEdgeTabScrub } from '../gestures.js';
+import { haptic, copyText, mwNativeUI, sharePayload, prefersReducedMotion } from '../native-bridge.js';
+import { createVirtualRiver } from '../lib/virtual-river.js';
+import { attachJournalPinch } from '../lib/journal-pinch.js';
+import { createOrb } from '../lib/orb.js';
+import { flipScaleMorph } from '../lib/spring-waapi.js';
+import { createGhostScrubber } from '../journal-scrubber.js';
 
-const PROMPTS = ['TA 有什么忌口？', '生日是哪天？', '最近有什么心愿？'];
-const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-const QUOTES = ['在意的人，值得被好好记住', '一句话就够，剩下的交给丘比特', '慢慢写，不着急', '今天也替你记着'];
-const BRIEF_CTA = { gold: '让丘比特帮我准备 →', silver: '让丘比特梳理时间线 →', crystal: '让丘比特理清要点 →' };
+const EMPTY_STARTERS = {
+  gold: ['记一件最近暖到心里的细节', '记下生日或想一起去的地方', '随口说一句近况'],
+  silver: ['客观记下今天的时间与原话', '记下一次需要留意的边界事件'],
+  crystal: ['记下偏好的口味或习惯', '记下最近一次重要约定'],
+};
 
-let lastKey = '';
-let inboxCache = new Map();
-let pendingFlash = null;
-let currentChapters = [];
+let scale = 1;
+let scaleStack = [];
 let activeMonthYm = '';
-let scrollRaf = 0;
+let pendingFlash = null;
+let lastRenderKey = '';
+let searchDebounce = 0;
+let searchAc = null;
+let searchHits = null;
+let activeFacet = 'all';
 
-function mastHead() {
-  const d = new Date();
-  $('#hoboDay').textContent = String(d.getDate());
-  $('#hoboMonthWk').textContent = `${d.getMonth() + 1}月 · ${WEEK[d.getDay()]}`;
-  $('#hoboQuote').textContent = QUOTES[d.getDate() % QUOTES.length];
-  $('#folioDate').textContent = formatDateCn(todayIso());
+const remindersCache = new Map();
+const bucketsCache = new Map();
+const onThisDayDismissed = new Set();
+const silverVeilByPerson = new Map();
+let silverSessionWhispered = false;
+let river = null;
+let scrubber = null;
+let pinchAc = null;
+let heroObserver = null;
+
+export function resetJournalCaches() {
+  stopActiveAudio({ revokeAll: true });
+  remindersCache.clear();
+  bucketsCache.clear();
+  onThisDayDismissed.clear();
+  silverVeilByPerson.clear();
+  silverSessionWhispered = false;
+  searchHits = null;
+  scale = 1;
+  scaleStack = [];
+  lastRenderKey = '';
 }
 
-function inboxItem(id, personId) {
-  if (!inboxCache.has(personId)) {
-    inboxCache.set(personId, api.inbox({ personId }).then((r) => r.items || []).catch(() => []));
-  }
-  return inboxCache.get(personId).then((items) => items.find((i) => i.id === id) || null);
+const isSilverVeiled = (pid) => silverVeilByPerson.get(pid) === true;
+
+async function fetchBuckets(personId, { force = false } = {}) {
+  if (!personId) return null;
+  if (!force && bucketsCache.has(personId)) return bucketsCache.get(personId);
+  try {
+    const res = typeof api.timelineBuckets === 'function'
+      ? await api.timelineBuckets(personId)
+      : await client.get(`/persons/${encodeURIComponent(personId)}/timeline-buckets`);
+    const data = { totalCount: res?.totalCount || 0, years: res?.years || [], buckets: res?.buckets || [] };
+    bucketsCache.set(personId, data);
+    return data;
+  } catch { return null; }
+}
+
+async function fetchReminders(personId, { force = false } = {}) {
+  if (!personId) return [];
+  if (!force && remindersCache.has(personId)) return remindersCache.get(personId);
+  try {
+    const list = (await api.reminders(personId))?.items || [];
+    remindersCache.set(personId, list);
+    return list;
+  } catch { return []; }
 }
 
 export async function loadMaterials(personId, { append = false } = {}) {
@@ -49,444 +88,315 @@ export async function loadMaterials(personId, { append = false } = {}) {
   const prev = s.materials[personId];
   if (prev?.loading) return;
   store.set({ materials: { ...s.materials, [personId]: { items: prev?.items || [], hasMore: false, nextCursor: null, ...prev, loading: true } } });
-  inboxCache.delete(personId);
   try {
-    setMaterials(personId, await api.materials(personId, { cursor: append ? prev?.nextCursor : undefined, limit: 30 }), { append });
+    setMaterials(personId, await api.materials(personId, { cursor: append ? prev?.nextCursor : undefined, limit: 40 }), { append });
+    fetchReminders(personId).then(() => renderJournal(store.get()));
+    fetchBuckets(personId).then(() => syncScrubber(personId));
   } catch (err) {
     const cur = store.get().materials;
     store.set({ materials: { ...cur, [personId]: { ...(cur[personId] || {}), items: cur[personId]?.items || [], loading: false, loaded: true, failed: true } } });
-    whisper(err.message, 3000);
+    whisper(err?.message || '手帐页载入稍慢，请重试', 3000);
   }
 }
 
 export function reloadMaterials(personId) {
   invalidateMaterials(personId);
+  bucketsCache.delete(personId);
+  remindersCache.delete(personId);
   if (store.get().activePersonId === personId) loadMaterials(personId);
 }
 
-export function openPerson(personId, { materialId = null, fromDirectory = false } = {}) {
-  const prev = store.get();
-  const person = prev.people[personId];
+export function openPerson(personId, { materialId = null } = {}) {
+  const person = store.get().people[personId];
   if (!person) return;
   closePeek({ silentHaptic: true });
-  const samePage = prev.view === 'journal' && prev.activePersonId === personId && prev.journalFilter === 'all' && !prev.searchOpen;
-  pendingFlash = materialId;
+  stopActiveAudio();
+  scale = 1; scaleStack = []; activeMonthYm = ''; searchHits = null; activeFacet = 'all'; pendingFlash = materialId;
   const inp = $('#spotlightInput');
   if (inp) inp.value = '';
-  store.set({ view: 'journal', activePersonId: personId, openedFromDirectory: fromDirectory || person.tier === 'crystal', journalFilter: 'all', searchOpen: false, searchQuery: '' });
-  try { localStorage.setItem('mw.lastPerson', personId); } catch { /* private mode */ }
+  // Reset scrollTop BEFORE store.set synchronously mounts virtual-river so Silver/short journals NEVER mount clipped above viewport!
+  if (!materialId && $('#journalScroll')) $('#journalScroll').scrollTop = 0;
+  $('#topbar')?.classList.remove('is-collapsed');
+  $('#folioBar')?.classList.remove('is-visible');
+  store.set({ view: 'journal', activePersonId: personId, journalFilter: 'all', searchOpen: false, searchQuery: '' });
+  try { localStorage.setItem('mw.lastPerson', personId); } catch { /* ignore */ }
+  if (person.tier === 'silver' && !silverSessionWhispered) { silverSessionWhispered = true; whisper('内容仅自己可见', 2400); }
   const m = store.get().materials[personId];
   if (!m || (!m.loaded && !m.loading)) loadMaterials(personId);
-  else if (samePage && materialId) {
-    pendingFlash = null;
-    requestAnimationFrame(() => { if (!flashMaterial(materialId)) whisper('那一页可能被翻到更早的地方了', 2400); });
-  }
-  if (!materialId) $('#journalScroll').scrollTop = 0;
+  else if (materialId) { pendingFlash = null; requestAnimationFrame(() => flashMaterial(materialId)); }
   strikeArrow();
 }
 
-/* ---------------- Organic Asymmetric Editorial Collage ---------------- */
-function renderChapter(ch, person, query) {
-  const tier = person.tier || 'crystal';
-  const collage = h('div', { class: 'month-collage' });
-  const list = ch.items;
-  let soloIdx = 0;
-  for (let i = 0; i < list.length; ) {
-    if (isShortNoteSlip(list[i], tier) && i + 1 < list.length && isShortNoteSlip(list[i + 1], tier)) {
-      collage.appendChild(h('div', { class: 'collage-pair' },
-        renderMaterial(list[i], person, { inboxItem, query, layout: 'pair-left', side: 'left', rot: gentleTilt(list[i], tier, -1) }),
-        renderMaterial(list[i + 1], person, { inboxItem, query, layout: 'pair-right', side: 'right', rot: gentleTilt(list[i + 1], tier, 1) }),
-      ));
-      i += 2;
-      continue;
-    }
-    const m = list[i++];
-    const len = Array.from(String(m.body || m.snippet || '').trim()).length;
-    const isMedia = (m.type === 'photo' && m.mediaUrl && tier !== 'silver') || m.type === 'voice';
-    const layout = len > 62 || isMedia || m.presentation === 'question' ? 'wide' : 'medium';
-    const side = soloIdx++ % 2 === 0 ? 'left' : 'right';
-    collage.appendChild(renderMaterial(m, person, { inboxItem, query, layout, side, rot: gentleTilt(m, tier, side === 'left' ? -1 : 1) }));
-  }
-  return h('section', { class: 'month-chapter', dataset: { month: ch.ym }, 'aria-label': ch.label },
-    h('header', { class: 'month-header' }, h('h2', { class: 'month-watermark', text: ch.label }), h('span', { class: 'month-hairline', 'aria-hidden': 'true' })),
-    collage,
-  );
+export function scrollJournalToTop(smooth = true) {
+  const scroller = $('#journalScroll');
+  if (!scroller) return false;
+  if (scroller.scrollTop > 120) haptic('porcelainTick');
+  const behavior = smooth && !prefersReducedMotion() ? 'smooth' : 'auto';
+  if (river?.scrollToTop) river.scrollToTop({ behavior });
+  else scroller.scrollTo({ top: 0, behavior });
+  return true;
 }
 
-function photoHero(person) {
-  const tier = person.tier || 'crystal';
-  if (!(person.hasPhoto && person.mainPhotoUrl && tier !== 'silver')) return null;
-  return h('div', { class: 'page-hero' },
-    h('figure', { class: 'artifact-photo-mount' },
-      h('span', { class: 'mount-hw hw-brass-clip' }, svg(BRASS_CLIP_SVG)),
-      h('span', { class: 'mount-hw hw-enamel-pin' }),
-      h('span', { class: 'film-sprocket-rail left' }),
-      h('span', { class: 'film-sprocket-rail right' }),
-      h('div', { class: 'photo-slot-primary' }, h('img', { src: person.mainPhotoUrl, alt: `${person.nameCn}的照片`, loading: 'lazy' })),
-      h('figcaption', { class: 'polaroid-hand-caption', text: person.contextSub || person.nameCn }),
+async function handleSlipContextMenu(m, cardEl, person) {
+  const tier = person?.tier || 'crystal';
+  const isSilver = tier === 'silver';
+  const r = cardEl.getBoundingClientRect();
+  const items = [
+    { id: 'pin', label: m.pinned ? '取消置顶' : '置顶', title: m.pinned ? '取消置顶' : '置顶', symbol: 'pin', group: 1 },
+    { id: 'edit', label: '编辑内容', title: '编辑内容', symbol: 'pencil', group: 1 },
+    { id: 'reassign', label: '换给其他人', title: '换给其他人', symbol: 'person.crop.circle.badge.arrow.right', group: 1 },
+    { id: 'copy', label: '复制文字', title: '复制文字', symbol: 'doc.on.doc', group: 1 },
+    { id: 'chat', label: '和丘比特聊这条', title: '和丘比特聊这条', symbol: 'bubble.left', group: 2 },
+    ...(!isSilver ? [{ id: 'share', label: '分享手帐卡片', title: '分享手帐卡片', symbol: 'square.and.arrow.up', group: 2 }] : []),
+    { id: 'delete', label: '删除', title: '删除', symbol: 'trash', role: 'destructive', destructive: true, group: 3 },
+  ];
+  const res = await mwNativeUI?.showContextMenu?.({ rect: { x: r.left, y: r.top, width: r.width, height: r.height }, cornerRadius: 24, previewText: clip(m.body || m.snippet || '', 80), items, tier });
+  const id = res?.selectedId;
+  if (!id) return;
+  if (id === 'pin') {
+    const next = !m.pinned;
+    patchMaterial(person.id, m.id, (await api.patchMaterial(m.id, { pinned: next }, m.version).catch(() => null)) || { pinned: next });
+    whisper(next ? '已置顶' : '已取消置顶', 1800);
+  } else if (id === 'edit') openPeekOverlay(m.id, person, { startEditing: true, onMutated: () => reloadMaterials(person.id) });
+  else if (id === 'reassign') {
+    actions.openPeopleSheet?.({
+      title: '换给哪一位人物？',
+      onSelect: async (t) => {
+        if (!t || t.id === person.id) return;
+        await api.patchMaterial(m.id, { personId: t.id }, m.version);
+        removeMaterial(person.id, m.id); reloadMaterials(t.id); whisper(`已移至「${t.nameCn}」`, 2200);
+      },
+    });
+  } else if (id === 'copy') {
+    if (isSilver && mwNativeUI?.copySensitive) await mwNativeUI.copySensitive(m.body || ''); else await copyText(m.body || '');
+    whisper(isSilver ? '已仅限本机复制（5 分钟自动清除）' : '已复制文字', 2000);
+  } else if (id === 'chat') actions.openChat?.(person.id, { materialId: m.id });
+  else if (id === 'share' && !isSilver) await sharePayload?.({ title: `${person.nameCn} · 手帐`, text: m.body || '' });
+  else if (id === 'delete') {
+    const backup = { ...m }; removeMaterial(person.id, m.id); let undone = false;
+    showUndoToast('已删除这条手帐', () => { undone = true; upsertMaterial(person.id, backup); }, { onExpire: () => { if (!undone) api.deleteMaterial(m.id).catch(() => {}); } });
+  }
+}
+
+function renderOnThisDayCard(person, items) {
+  if (!person || person.tier !== 'gold' || onThisDayDismissed.has(person.id)) return null;
+  const today = todayIso(), curYear = Number(today.slice(0, 4)), curMmDd = today.slice(5, 10);
+  const match = (items || []).find((m) => { const d = String(m.happenedOn || m.createdAt || ''); return d.length >= 10 && Number(d.slice(0, 4)) < curYear && d.slice(5, 10) === curMmDd; });
+  if (!match) return null;
+  const diff = curYear - Number(String(match.happenedOn || match.createdAt).slice(0, 4));
+  return h('section', { class: 'mw-otd-card on-this-day-card', 'aria-label': '往年今日' },
+    h('button', { type: 'button', class: 'mw-otd-close on-this-day-close', 'aria-label': '收起往年今日', text: '×', onClick: (e) => { e.stopPropagation(); onThisDayDismissed.add(person.id); renderJournal(store.get()); } }),
+    h('p', { class: 'mw-otd-body on-this-day-body', text: clip(match.body || match.snippet || '', 90) }),
+    h('footer', { class: 'mw-otd-foot mat-foot' },
+      h('span', { class: 'mw-dot is-gold', 'aria-hidden': 'true' }),
+      h('time', { class: 'mat-sign', text: `${diff === 1 ? '去年今日' : `${diff} 年前的今天`} · ${formatDateFullCn(match.happenedOn || match.createdAt)}` }),
     ),
   );
 }
 
-function promptCapsules(person) {
-  return h('div', { class: 'prompt-capsules' },
-    h('p', { class: 'prompt-intro', text: `这一页还空着。想到「${person.nameCn}」的什么，说一句就好：` }),
-    ...PROMPTS.map((p) => h('button', { type: 'button', class: 'prompt-capsule', onClick: () => { haptic('light'); actions.openTextCapture({ personId: person.id, prompt: p }); } }, h('span', { class: 'cap-dot', 'aria-hidden': 'true', text: '✎' }), h('span', { text: p }))),
-  );
+async function runSemanticSearch(personId, q) {
+  searchAc?.abort();
+  const trimmed = String(q || '').trim();
+  if (!trimmed && activeFacet === 'all') { searchHits = null; renderJournal(store.get()); return; }
+  searchAc = new AbortController();
+  const query = { q: trimmed || undefined, limit: 40, ...(activeFacet === 'pinned' ? { pinned: true } : activeFacet !== 'all' ? { kind: activeFacet } : {}) };
+  try {
+    const res = typeof api.personSearch === 'function' ? await api.personSearch(personId, query, { signal: searchAc.signal }) : await client.get(`/persons/${encodeURIComponent(personId)}/search`, { query, signal: searchAc.signal });
+    // BC6: unpack nested hit.material alongside matchKind & matchedTerms!
+    const unpacked = (res?.items || []).map((hit) => ({ ...(hit?.material || hit), matchKind: hit?.matchKind, matchedTerms: hit?.matchedTerms || [] }));
+    searchHits = { query: trimmed, items: unpacked, expandedTerms: res?.expandedTerms || [] };
+    renderJournal(store.get());
+  } catch (err) { if (err?.name !== 'AbortError') whisper(err?.message || '搜索未能完成', 2400); }
 }
 
-/* ---------------- Right-Edge Physical Paper Index Tabs (DOM-stable mid-scrub) ---------------- */
-function scrollToMonth(ym, { instant = false } = {}) {
-  const scroll = $('#journalScroll');
-  const el = scroll?.querySelector(`.month-chapter[data-month="${CSS.escape(ym)}"]`);
-  if (!scroll || !el) return;
-  const top = el.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop - 102;
-  scroll.scrollTo({ top: Math.max(0, top), behavior: instant || prefersReducedMotion() ? 'auto' : 'smooth' });
-  setActiveMonthUi(ym);
-}
+const openSearch = () => { haptic('light'); store.set({ searchOpen: true }); requestAnimationFrame(() => $('#spotlightInput')?.focus({ preventScroll: true })); };
+const closeSearch = () => { searchAc?.abort(); searchHits = null; activeFacet = 'all'; const i = $('#spotlightInput'); if (i) i.value = ''; store.set({ searchOpen: false, searchQuery: '' }); };
 
-function setActiveMonthUi(ym) {
-  if (!ym) return;
-  activeMonthYm = ym;
-  const ch = currentChapters.find((c) => c.ym === ym);
-  if (ch && $('#folioMonthLabel')) $('#folioMonthLabel').textContent = ch.label;
-  const pinnedMode = store.get().journalFilter === 'pinned';
-  for (const btn of $('#paperEdgeTabs')?.querySelectorAll('.paper-edge-tab[data-month]') || []) {
-    const active = !pinnedMode && btn.dataset.month === ym;
-    btn.classList.toggle('is-active', active);
-    if (active) btn.setAttribute('aria-current', 'location');
-    else btn.removeAttribute('aria-current');
+function setScale(nextScale, { anchorEl = null, targetYm = '' } = {}) {
+  const clamped = Math.max(1, Math.min(3, nextScale));
+  if (clamped === scale && !targetYm) return;
+  const scroller = $('#journalScroll');
+  if (clamped > scale && scroller) scaleStack.push({ scale, scrollTop: scroller.scrollTop, ym: activeMonthYm });
+  scale = clamped;
+  if (targetYm) activeMonthYm = targetYm;
+  if (scroller) scroller.scrollTop = 0;
+  haptic(clamped === 3 ? 'yearDetent' : 'porcelainTick');
+  if (anchorEl && flipScaleMorph) flipScaleMorph({ fromEl: anchorEl, toEl: scroller, onDone: () => {} });
+  lastRenderKey = '';
+  renderJournal(store.get());
+  if (clamped === 1 && targetYm) {
+    const s = store.get();
+    const items = s.materials[s.activePersonId]?.items || [];
+    const idx = items.findIndex((m) => String(m.happenedOn || m.createdAt || '').startsWith(targetYm));
+    if (idx > 0 && river?.scrollToIndex) requestAnimationFrame(() => river?.scrollToIndex(idx, { behavior: 'auto' }));
   }
 }
 
-function syncActiveMonthFromScroll() {
-  const scroll = $('#journalScroll');
-  if (!scroll || store.get().view !== 'journal') return;
-  const chapters = scroll.querySelectorAll('.month-chapter[data-month]');
-  if (!chapters.length) return;
-  const topLine = scroll.getBoundingClientRect().top + 115;
-  let picked = chapters[0].dataset.month;
-  for (const ch of chapters) { if (ch.getBoundingClientRect().top <= topLine) picked = ch.dataset.month; else break; }
-  if (picked && picked !== activeMonthYm) setActiveMonthUi(picked);
+function syncScrubber(personId) {
+  if (!scrubber) return;
+  const data = bucketsCache.get(personId), mats = store.get().materials[personId]?.items || [];
+  const months = (data?.buckets || []).map((b) => ({ ym: b.bucket || `${b.year}-${String(b.month).padStart(2, '0')}`, year: b.year, month: b.month, label: `${b.year} · ${b.month}月`, count: b.count || 0 }));
+  scrubber.update({ months, totalSlips: Math.max(data?.totalCount || 0, mats.length), activeYm: activeMonthYm });
 }
 
-function activateEdgeTab(tab, { instant = false } = {}) {
-  if (!tab) return;
-  if (tab.classList.contains('is-pin-tab')) {
-    const next = instant ? 'pinned' : store.get().journalFilter === 'pinned' ? 'all' : 'pinned';
-    if (store.get().journalFilter !== next) store.set({ journalFilter: next });
-    $('#journalScroll').scrollTop = 0;
-    return;
-  }
-  const ym = tab.dataset.month;
-  if (!ym) return;
-  if (store.get().journalFilter === 'pinned') { store.set({ journalFilter: 'all' }); requestAnimationFrame(() => scrollToMonth(ym, { instant })); }
-  else scrollToMonth(ym, { instant });
-}
-
-function renderPaperTabs(s, allItems, allChapters) {
-  const host = $('#paperEdgeTabs');
-  const pinnedCount = allItems.filter((m) => m.pinned && m.presentation !== 'question').length;
-  const show = s.view === 'journal' && !s.searchOpen && allItems.length >= 2 && (allChapters.length >= 2 || pinnedCount > 0);
-  host.hidden = !show;
-  $('#journalCanvas').classList.toggle('has-edge-tabs', show);
-  if (!show) { delete host.dataset.tabKeys; clear(host); return; }
-
-  const isPin = s.journalFilter === 'pinned';
-  const curYm = activeMonthYm || allChapters[0]?.ym || '';
-  const tabKeys = `${pinnedCount > 0 ? 'pin|' : ''}${allChapters.map((c) => `${c.ym}:${c.shortLabel}`).join('|')}`;
-  if (host.dataset.tabKeys === tabKeys && host.children.length > 0) {
-    const pinBtn = host.querySelector('.is-pin-tab');
-    if (pinBtn) { pinBtn.classList.toggle('is-active', isPin); pinBtn.setAttribute('aria-pressed', String(isPin)); }
-    for (const btn of host.querySelectorAll('.paper-edge-tab[data-month]')) {
-      const act = !isPin && btn.dataset.month === curYm;
-      btn.classList.toggle('is-active', act);
-      act ? btn.setAttribute('aria-current', 'location') : btn.removeAttribute('aria-current');
-    }
-    return;
-  }
-
-  host.dataset.tabKeys = tabKeys;
-  clear(host);
-  const onTap = (e) => { if (!host.dataset.suppressClick) { haptic('selection'); activateEdgeTab(e.currentTarget); } };
-  if (pinnedCount > 0) {
-    host.appendChild(h('button', { type: 'button', class: ['paper-edge-tab', 'is-pin-tab', isPin && 'is-active'], dataset: { label: '铜钉留存' }, 'aria-pressed': String(isPin), onClick: onTap }, h('span', { class: 'tab-brass-dot', 'aria-hidden': 'true' }), h('span', { text: '置顶' })));
-  }
-  for (const ch of allChapters) {
-    const isAct = !isPin && curYm === ch.ym;
-    host.appendChild(h('button', { type: 'button', class: ['paper-edge-tab', isAct && 'is-active'], dataset: { month: ch.ym, label: ch.label }, 'aria-current': isAct ? 'location' : null, text: ch.shortLabel, onClick: onTap }));
-  }
-}
-
-/* ---------------- Cover Vellum Pocket (Live Brief + Full Editable Memory) ---------------- */
-function jumpToRecord(recordId) {
-  if (!recordId) return;
-  closeSheet({ silentHaptic: true });
-  const s = store.get();
-  if (s.journalFilter !== 'all' || s.searchOpen) { closeSearch(); store.set({ journalFilter: 'all' }); pendingFlash = recordId; return; }
-  requestAnimationFrame(() => { if (!flashMaterial(recordId)) whisper('这条记录在更早的页里，再往前翻翻就能看到', 2600); });
-}
-
-function buildEditableVellumItems(rawFacts, rawReminders) {
-  const facts = (rawFacts || []).filter((f) => f && f.status !== 'rejected');
-  const reminders = (rawReminders || []).filter((r) => r && r.status !== 'cancelled' && r.status !== 'completed');
-  const factById = new Map(facts.map((f) => [f.id, f]));
-  const used = new Set();
-  const dateLines = [];
-  const isGlance = (f) => Boolean(f && (f.status === 'pending' || f.needsGlance));
-  for (const r of reminders) {
-    const linked = r.factId ? factById.get(r.factId) : null;
-    if (linked) used.add(linked.id);
-    dateLines.push({ kind: 'reminder', id: r.id, version: r.version, status: r.status, when: formatReminderDateCn(r) || formatFactDateCn(linked), text: r.title || linked?.content || '', recordId: linked?.recordId || null, pending: r.status === 'proposed' || isGlance(linked), linkedFact: linked ? { id: linked.id, version: linked.version, pending: isGlance(linked) } : null });
-  }
-  for (const f of facts) {
-    if (!used.has(f.id) && (f.type === 'date' || f.triggerDate || f.isLunar)) {
-      used.add(f.id);
-      dateLines.push({ kind: 'fact', id: f.id, version: f.version, status: f.status, when: formatFactDateCn(f), text: f.content || '', recordId: f.recordId || null, pending: isGlance(f) });
-    }
-  }
-  const detailLines = facts.filter((f) => !used.has(f.id)).map((f) => ({ kind: 'fact', id: f.id, version: f.version, status: f.status, when: '', text: f.content || '', recordId: f.recordId || null, pending: isGlance(f) }));
-  return { dateLines, detailLines };
-}
-
-function renderVellumRow(item, { onRemoved, onMutated }) {
-  const lineBtn = h('button', { type: 'button', class: ['vellum-line', item.pending && 'is-pending', !item.recordId && 'is-static'], onClick: () => jumpToRecord(item.recordId) },
-    item.when ? h('span', { class: 'vellum-line-when', text: item.when }) : h('span', { class: 'vellum-line-dot', 'aria-hidden': 'true' }),
-    h('span', { class: 'vellum-line-text', text: item.text }),
-  );
-  const ctrl = h('span', { class: 'vellum-row-ctrl' });
-  const rowEl = h('div', { class: 'vellum-row' }, lineBtn, ctrl);
-
-  const makeInkBtn = (factRef, onDone) => {
-    const b = h('button', { type: 'button', class: 'vellum-micro-btn is-ink', text: '落墨', 'aria-label': `确认落墨：${item.text}` });
-    b.addEventListener('click', async () => {
-      b.disabled = true;
-      try {
-        const res = await api.patchFact(factRef.id, { status: 'confirmed' }, factRef.version);
-        if (res?.version != null) factRef.version = res.version;
-        haptic('success'); onDone(b); onMutated?.(); whisper('好，已经落墨', 2000);
-      } catch (err) { b.disabled = false; haptic('warning'); whisper(err.message, 2600); }
-    });
-    return b;
-  };
-
-  const mountForget = () => {
-    let armed = false, timer = 0;
-    const b = h('button', { type: 'button', class: 'vellum-micro-btn is-forget', text: '淡忘', 'aria-label': `淡忘：${item.text}` });
-    const reset = () => { armed = false; b.textContent = '淡忘'; b.classList.remove('is-armed'); };
-    b.addEventListener('click', async () => {
-      if (!armed) { armed = true; haptic('warning'); b.textContent = '再点淡忘'; b.classList.add('is-armed'); timer = setTimeout(reset, 3500); return; }
-      clearTimeout(timer); b.disabled = true;
-      try {
-        await api.patchFact(item.id, { status: 'rejected' }, item.version);
-        haptic('warning'); rowEl.remove(); onRemoved?.(); onMutated?.(); whisper('已轻轻淡忘这条小事', 2000);
-      } catch (err) { b.disabled = false; reset(); whisper(err.message, 2600); }
-    });
-    ctrl.replaceChildren(b);
-  };
-
-  if (item.kind === 'reminder' && item.id) {
-    if (item.linkedFact?.pending) {
-      ctrl.appendChild(makeInkBtn(item.linkedFact, (b) => { item.linkedFact.pending = false; item.pending = item.status === 'proposed'; lineBtn.classList.toggle('is-pending', item.pending); b.remove(); }));
-    }
-    const sync = (b) => { const on = item.status === 'active'; b.textContent = on ? '已开' : '已停'; b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(on)); };
-    const remBtn = h('button', { type: 'button', class: 'vellum-micro-btn is-rem', 'aria-label': `切换提醒：${item.text}` });
-    sync(remBtn);
-    remBtn.addEventListener('click', async () => {
-      remBtn.disabled = true;
-      const next = item.status === 'active' ? 'paused' : 'active';
-      try {
-        const res = await api.patchReminder(item.id, { status: next }, item.version);
-        item.status = res?.status || next;
-        if (res?.version != null) item.version = res.version;
-        item.pending = item.status === 'proposed' || Boolean(item.linkedFact?.pending);
-        lineBtn.classList.toggle('is-pending', item.pending);
-        haptic('selection'); sync(remBtn); onMutated?.(); whisper(item.status === 'active' ? '提醒已开启' : '提醒已暂停', 1800);
-      } catch (err) { haptic('warning'); whisper(err.message, 2600); } finally { remBtn.disabled = false; }
-    });
-    ctrl.appendChild(remBtn);
-  } else if (item.kind === 'fact' && item.id && item.pending) {
-    ctrl.appendChild(makeInkBtn(item, () => { item.status = 'confirmed'; item.pending = false; lineBtn.classList.remove('is-pending'); mountForget(); }));
-  } else if (item.kind === 'fact' && item.id) mountForget();
-  return rowEl;
-}
-
-async function openVellumPocket(person) {
-  if (!person) return;
-  haptic('light');
+function renderEmptyState(person) {
   const tier = person.tier || 'crystal';
-  const content = h('div', { class: 'vellum-content' }, h('p', { class: 'vellum-loading', text: '正在展开手帐衬纸…' }));
-  const header = h('header', { class: 'vellum-head' },
-    h('span', { class: ['mono-seal', tier === 'silver' && 'is-cloaked'], style: tier === 'silver' ? {} : sealStyle(person), text: monogramOf(person), 'aria-hidden': 'true' }),
-    h('div', { class: 'vellum-head-meta' }, h('h2', { class: 'vellum-name', text: person.nameCn }), h('p', { class: 'vellum-tier-whisper', text: person.roleTag ? `${person.roleTag} · ${TIER_LABEL[tier].short}` : `${TIER_LABEL[tier].arrow} · ${TIER_LABEL[tier].short}` })),
+  const emblem = tier === 'gold' ? h('div', { class: 'empty-cupid-medallion' }, h('img', { src: CUPID_IMG, alt: '', draggable: 'false' })) : createOrb({ size: 'starter', state: 'idle' });
+  return h('div', { class: ['journal-empty-state', `tier-${tier}`] }, emblem, h('p', { class: 'empty-state-title', text: `关于「${person.nameCn}」的这一页还空着` }),
+    h('div', { class: 'empty-starter-row' }, ...(EMPTY_STARTERS[tier] || EMPTY_STARTERS.gold).map((prompt) => h('button', { type: 'button', class: 'empty-starter-chip', text: prompt, onClick: () => { haptic('light'); actions.openTextCapture?.({ personId: person.id, prompt }); } }))));
+}
+
+function buildHero(person, reminders) {
+  const tier = person.tier || 'crystal', veiled = isSilverVeiled(person.id);
+  const refreshRem = () => fetchReminders(person.id, { force: true }).then(() => renderJournal(store.get()));
+  return h('header', { class: ['journal-hero', `tier-${tier}`] },
+    h('div', { class: 'journal-hero-top' }, h('h1', { class: 'journal-hero-name', text: person.nameCn }), person.roleTag ? h('span', { class: 'journal-tier-tag journal-hero-tag', text: person.roleTag }) : null,
+      tier === 'silver' ? h('button', { type: 'button', class: ['silver-veil-toggle', veiled && 'is-veiled'], text: veiled ? '显示正文' : '隐藏内容', onClick: () => { haptic('rigid'); silverVeilByPerson.set(person.id, !veiled); lastRenderKey = ''; renderJournal(store.get()); } }) : null),
+    h('div', { class: 'journal-scale-bar', role: 'tablist', 'aria-label': '手帐时间尺度' },
+      ...[[1, '纸页'], [2, '月册'], [3, '年轮']].map(([sc, lbl]) => h('button', { type: 'button', role: 'tab', class: ['scale-pill-btn', 'journal-scale-btn', scale === sc && 'is-active'], 'aria-selected': String(scale === sc), text: lbl, onClick: () => setScale(sc) })),
+      h('button', { type: 'button', class: 'vellum-entry-link', text: tier === 'silver' ? '关键节点 ›' : '人物档案 ›', onClick: () => openVellumPocket(person, { onJumpToRecord: (rid) => { scale = 1; closeSearch(); requestAnimationFrame(() => flashMaterial(rid)); }, onMutated: refreshRem }) })),
+    renderUpcomingRibbon(person, reminders, { onOpenVellum: () => openVellumPocket(person, { onMutated: refreshRem }), onMutated: refreshRem }),
   );
-  openSheet({ label: `${person.nameCn}的手帐衬纸`, body: h('div', { class: ['vellum-pocket', `tier-${tier}`] }, header, content) });
-
-  const [brief, factsRes, remRes] = await Promise.all([api.brief(person.id).catch(() => null), api.facts(person.id, { limit: 100 }).catch(() => ({ items: [] })), api.reminders(person.id).catch(() => ({ items: [] }))]);
-  if (!content.isConnected) return;
-  clear(content);
-
-  const briefHost = h('div', { class: 'vellum-brief-host' });
-  const renderBrief = (b) => {
-    clear(briefHost);
-    const headline = String(b?.headline || '').trim();
-    if (!headline) { briefHost.hidden = true; return; }
-    briefHost.hidden = false;
-    const prompt = String(b?.prompt || '').trim() || headline;
-    briefHost.appendChild(h('section', { class: 'vellum-brief-card', 'aria-label': '丘比特的小提醒' },
-      h('p', { class: 'vellum-brief-headline' }, h('span', { class: 'vellum-brief-spark', 'aria-hidden': 'true', text: '✦' }), h('span', { text: headline })),
-      b?.subline ? h('p', { class: 'vellum-brief-subline', text: b.subline }) : null,
-      h('button', { type: 'button', class: 'vellum-brief-cta', text: BRIEF_CTA[tier] || BRIEF_CTA.gold, onClick: () => { haptic('light'); closeSheet({ silentHaptic: true }); actions.openChat(person.id, { initialPrompt: prompt }); } }),
-    ));
-  };
-  const onMutated = () => { reloadMaterials(person.id); api.brief(person.id).then((fresh) => { if (briefHost.isConnected) renderBrief(fresh); }).catch(() => {}); };
-  renderBrief(brief);
-  content.appendChild(briefHost);
-
-  const { dateLines, detailLines } = buildEditableVellumItems(factsRes?.items, remRes?.items);
-  const checkEmpty = () => { if (!content.querySelector('.vellum-row') && !briefHost.querySelector('.vellum-brief-card')) content.appendChild(h('p', { class: 'vellum-empty', text: `关于「${person.nameCn}」的日子与小事，会慢慢浮现在这张衬纸上。` })); };
-  const mountSection = (title, items) => {
-    if (!items.length) return;
-    const sec = h('section', { class: 'vellum-section' }, h('h3', { class: 'vellum-sec-title', text: title }));
-    for (const item of items) sec.appendChild(renderVellumRow(item, { onRemoved: () => { if (!sec.querySelector('.vellum-row')) sec.remove(); checkEmpty(); }, onMutated }));
-    content.appendChild(sec);
-  };
-  mountSection('记挂的日子', dateLines);
-  mountSection(tier === 'silver' ? '边界与留痕' : '记住的小事', detailLines);
-  checkEmpty();
 }
 
-function openMonthBookGrid(person) {
-  if (!person || currentChapters.length < 2) return;
-  haptic('light');
-  const grid = h('div', { class: 'month-book-grid' }, ...currentChapters.map((ch) => h('button', {
-    type: 'button', class: ['month-page-card', activeMonthYm === ch.ym && 'is-current'],
-    onClick: () => {
-      haptic('selection'); closeSheet({ silentHaptic: true });
-      if (store.get().journalFilter === 'pinned') { store.set({ journalFilter: 'all' }); requestAnimationFrame(() => scrollToMonth(ch.ym)); }
-      else scrollToMonth(ch.ym);
-    },
-  }, h('div', { class: 'month-page-top' }, h('strong', { text: ch.label }), h('span', { text: `${ch.items.length} 页` })), h('p', { class: 'month-page-excerpt', text: clip(ch.items[0]?.body || ch.items[0]?.snippet || '', 34) || '几句随手记' }))));
-  openSheet({ title: '翻到哪一月', sub: `${person.nameCn}的手帐 · 共 ${currentChapters.length} 个月份`, body: grid });
-}
-
-/* ---------------- Spotlight Search & Page Rendering ---------------- */
-function openSearch() { haptic('light'); store.set({ searchOpen: true }); requestAnimationFrame(() => $('#spotlightInput')?.focus({ preventScroll: true })); }
-function closeSearch() { const inp = $('#spotlightInput'); if (inp) inp.value = ''; store.set({ searchOpen: false, searchQuery: '' }); }
-
-function renderPage(s) {
-  const scroll = $('#journalScroll');
-  const person = s.people[s.activePersonId];
-  clear(scroll);
-  if (!person) return;
-
-  const mats = s.materials[person.id];
-  const allItems = mats?.items || [];
-  const pending = s.pending.filter((p) => p.pageId === person.id);
-  const query = s.searchOpen ? s.searchQuery.trim() : '';
-  const allChapters = groupMaterialsByMonth(allItems);
-  currentChapters = allChapters;
-  if (!activeMonthYm || !allChapters.some((c) => c.ym === activeMonthYm)) activeMonthYm = allChapters[0]?.ym || '';
-
-  let visible = allItems;
-  if (query) visible = allItems.filter((m) => matchesMaterialQuery(m, query));
-  else if (s.journalFilter === 'pinned') visible = allItems.filter((m) => m.pinned && m.presentation !== 'question');
-
-  const countEl = $('#spotlightCount');
-  if (countEl) { countEl.hidden = !query; if (query) countEl.textContent = `${visible.length} 处`; }
-
-  const flow = h('div', { class: 'page-flow' });
-  if (s.journalFilter === 'pinned' && !query) flow.appendChild(h('div', { class: 'pinned-filter-whisper' }, h('span', { text: `铜钉留存 · ${visible.length} 页` }), h('button', { type: 'button', class: 'filter-reset-link', text: '看全部', onClick: () => store.set({ journalFilter: 'all' }) })));
-  if (!query && s.journalFilter === 'all') for (const p of pending) flow.appendChild(renderPendingSlip(p));
-  for (const ch of groupMaterialsByMonth(visible)) flow.appendChild(renderChapter(ch, person, query));
-
-  if (query && !visible.length) flow.appendChild(h('div', { class: 'search-empty-whisper' }, h('p', { text: `这一页里暂时没找到「${query}」` }), mats?.hasMore ? h('button', { type: 'button', class: 'load-more-btn', text: '再往前翻翻找找', onClick: () => loadMaterials(person.id, { append: true }) }) : null));
-  else if (s.journalFilter === 'pinned' && !visible.length) flow.appendChild(h('p', { class: 'page-end-mark', text: '还没有用铜钉留下的记录' }));
-  else if (mats?.loaded && !allItems.length && !pending.length) flow.appendChild(promptCapsules(person));
-  else if (!mats?.loaded) flow.appendChild(h('p', { class: 'page-end-mark', text: '正在翻开…' }));
-
-  if (mats?.hasMore && !query) flow.appendChild(h('button', { type: 'button', class: 'load-more-btn', text: '再往前翻翻', onClick: () => loadMaterials(person.id, { append: true }) }));
-  else if (visible.length > 2) flow.appendChild(h('p', { class: 'page-end-mark', 'aria-hidden': 'true', text: '· · ·' }));
-
-  const heroEl = !query && s.journalFilter === 'all' ? photoHero(person) : null;
-  heroEl ? scroll.append(heroEl, flow) : scroll.append(flow);
-
-  renderPaperTabs(s, allItems, allChapters);
-  const showMonth = s.view === 'journal' && !s.searchOpen && allChapters.length >= 2;
-  $('#folioMonthBtn').hidden = !showMonth;
-  if (showMonth) $('#folioMonthLabel').textContent = (allChapters.find((c) => c.ym === activeMonthYm) || allChapters[0]).label;
-
-  if (pendingFlash && allItems.length) {
-    const id = pendingFlash; pendingFlash = null;
-    requestAnimationFrame(() => { if (!flashMaterial(id)) whisper('那一页可能被翻到更早的地方了', 2400); });
+function renderScale2or3(scroll, person, hero) {
+  clear(scroll); scroll.appendChild(hero);
+  const data = bucketsCache.get(person.id);
+  if (!data) { scroll.appendChild(h('p', { class: 'page-end-mark', text: '正在整理时间册…' })); fetchBuckets(person.id).then(() => { lastRenderKey = ''; renderJournal(store.get()); }); return; }
+  const buckets = data.buckets || [];
+  if (!buckets.length) { scroll.appendChild(renderEmptyState(person)); return; }
+  if (scale === 2) {
+    const grid = h('div', { class: 'scale2-grid' });
+    for (const b of buckets) grid.appendChild(renderScale2Card(b, person, { onSelect: (bk) => setScale(1, { targetYm: bk.bucket || `${bk.year}-${String(bk.month).padStart(2, '0')}` }) }));
+    scroll.appendChild(grid); return;
   }
+  const byYear = new Map();
+  for (const b of buckets) { if (!byYear.has(b.year)) byYear.set(b.year, { year: b.year, months: [], totalCount: 0 }); const g = byYear.get(b.year); g.months.push(b); g.totalCount += b.count || 0; }
+  const list = h('div', { class: 'scale3-list' });
+  for (const yg of [...byYear.values()].sort((a, b) => b.year - a.year)) list.appendChild(renderScale3Card(yg, person, { onSelect: () => setScale(2) }));
+  scroll.appendChild(list);
+}
+
+let lastRenderedPersonId = '';
+function renderPage(s) {
+  const scroll = $('#journalScroll'), person = s.people[s.activePersonId];
+  if (!scroll || !person) return;
+  if (person.id !== lastRenderedPersonId) {
+    lastRenderedPersonId = person.id;
+    if (!pendingFlash) scroll.scrollTop = 0;
+  }
+  const mats = s.materials[person.id], allItems = mats?.items || [], pending = s.pending.filter((p) => p.pageId === person.id);
+  const hero = buildHero(person, remindersCache.get(person.id) || []);
+  if (scale !== 1) { river?.destroy?.(); river = null; renderScale2or3(scroll, person, hero); return; }
+
+  const query = s.searchOpen ? s.searchQuery.trim() : '';
+  const visible = s.searchOpen && searchHits ? searchHits.items : allItems;
+  const countEl = $('#spotlightCount');
+  if (countEl) { countEl.hidden = !s.searchOpen; if (s.searchOpen) countEl.textContent = `${visible.length} 条`; }
+
+  const headerStack = h('div', { class: 'journal-header-stack' }, hero);
+  if (s.searchOpen) {
+    const facets = [['all', '全部'], ...(person.tier !== 'silver' ? [['photo', '照片']] : []), ['voice', '语音'], ['pinned', '置顶']];
+    headerStack.appendChild(h('div', { class: 'search-facet-row' }, ...facets.map(([f, lbl]) => h('button', { type: 'button', class: ['search-facet-chip', activeFacet === f && 'is-active', activeFacet === f && 'is-selected'], text: lbl, onClick: () => { activeFacet = f; runSemanticSearch(person.id, store.get().searchQuery); } }))));
+    if (searchHits?.expandedTerms?.length) headerStack.appendChild(h('p', { class: 'search-synonym-whisper', text: `同时检索：${searchHits.expandedTerms.slice(0, 4).join(' · ')}` }));
+  } else {
+    const otd = renderOnThisDayCard(person, allItems);
+    if (otd) headerStack.appendChild(otd);
+    for (const p of pending) headerStack.appendChild(renderPendingSlip(p));
+  }
+
+  clear(scroll);
+  // Guarantee normal-flow relative containing block BELOW headerStack so .vr-row NEVER overlaps hero/ribbon/topbar!
+  const stage = h('div', { class: 'journal-virtual-stage journal-river-stage', style: { position: 'relative', width: '100%' } });
+  scroll.append(headerStack, stage);
+  heroObserver?.disconnect();
+  if (typeof IntersectionObserver === 'function') {
+    heroObserver = new IntersectionObserver((es) => {
+      const collapsed = !es[0]?.isIntersecting;
+      $('#topbar')?.classList.toggle('is-collapsed', collapsed);
+      $('#folioBar')?.classList.toggle('is-visible', collapsed);
+    }, { root: scroll, threshold: 0.1 });
+    heroObserver.observe(hero);
+  }
+
+  river?.destroy?.();
+  if (!visible.length) {
+    river = null;
+    if (s.searchOpen) stage.append(h('p', { class: 'search-empty-whisper', text: query ? `这一页里暂时没找到「${query}」` : '输入关键词或选上方标签检索' }), h('button', { type: 'button', class: 'sheet-btn quiet', text: '去其他人物手帐里找', onClick: () => { closeSearch(); actions.openPeopleSheet?.({ query }); } }));
+    else if (mats?.loaded && !pending.length) stage.appendChild(renderEmptyState(person));
+    else if (!mats?.loaded) stage.appendChild(h('p', { class: 'page-end-mark', text: '正在翻开…' }));
+    return;
+  }
+
+  const ctx = { query, silverVeiled: isSilverVeiled(person.id), onToggleVeil: (v) => { silverVeilByPerson.set(person.id, v); lastRenderKey = ''; renderJournal(store.get()); }, onContextMenu: (m, cardEl) => handleSlipContextMenu(m, cardEl, person) };
+  if (typeof createVirtualRiver === 'function') {
+    river = createVirtualRiver({ scroller: scroll, stage, headerEl: headerStack, renderItem: (m) => renderMaterial(m, person, ctx), estimateHeight: (m) => (m.type === 'photo' && person.tier !== 'silver' ? 320 : m.type === 'voice' ? 148 : 112) });
+    river.setItems(visible);
+  } else {
+    const frag = document.createDocumentFragment();
+    for (const m of visible) frag.appendChild(renderMaterial(m, person, ctx));
+    stage.appendChild(frag);
+  }
+  if (mats?.hasMore && !s.searchOpen) scroll.appendChild(h('button', { type: 'button', class: 'load-more-btn', text: '载入更早记录', onClick: () => loadMaterials(person.id, { append: true }) }));
+  syncScrubber(person.id);
+  if (pendingFlash) { const tid = pendingFlash; pendingFlash = null; requestAnimationFrame(() => flashMaterial(tid)); }
 }
 
 function renderChrome(s) {
-  const app = $('#app');
-  const person = s.view === 'journal' ? s.people[s.activePersonId] : null;
-  const items = person ? s.materials[person.id]?.items || [] : [];
-  app.dataset.viewMode = s.view === 'directory' ? 'casual-directory' : 'person-journal';
-  app.dataset.arrowTier = person?.tier || 'crystal';
-  app.dataset.journalEdition = s.edition;
-
-  $('#folioSubject').textContent = s.view === 'directory' ? '记繁琐' : person ? person.nameCn : '';
-  const subjBtn = $('#folioSubjectBtn');
-  subjBtn.disabled = !person;
-  subjBtn.classList.toggle('is-interactive', Boolean(person));
-  $('#backToCasual').hidden = !(s.view === 'journal' && person && person.tier === 'crystal');
-
-  const searchBtn = $('#searchToggleBtn');
-  searchBtn.hidden = !(s.view === 'journal' && person && items.length > 0);
-  searchBtn.classList.toggle('is-active', Boolean(s.searchOpen));
-
-  const spotVisible = Boolean(s.searchOpen && s.view === 'journal' && person);
-  $('#spotlightBar').hidden = !spotVisible;
-  $('#journalCanvas').classList.toggle('is-searching', spotVisible);
-  if (s.view !== 'journal') { $('#folioMonthBtn').hidden = true; $('#paperEdgeTabs').hidden = true; $('#journalCanvas').classList.remove('has-edge-tabs'); }
-
-  const q = $('#questionEntry');
-  q.hidden = !(s.questionCount > 0);
-  if (!q.hidden) { clear(q); q.append(h('b', { text: String(s.questionCount) }), h('span', { text: '张便签等你看一眼' })); }
+  const app = $('#app'), person = s.people[s.activePersonId] || null;
+  const tier = person?.tier || 'gold';
+  document.documentElement.dataset.arrowTier = tier;
+  if (app) { app.dataset.viewMode = scale === 2 ? 'scale-months' : scale === 3 ? 'scale-years' : 'person-journal'; app.dataset.arrowTier = tier; app.dataset.journalEdition = s.edition || 'cotton'; }
+  if ($('#folioSubject')) $('#folioSubject').textContent = person ? person.nameCn : '心络';
+  if ($('#folioMonthBtn')) {
+    $('#folioMonthBtn').hidden = !person;
+    if ($('#folioMonthLabel')) $('#folioMonthLabel').textContent = scale === 3 ? '年轮 ▾' : scale === 2 ? '月册 ▾' : (activeMonthYm ? `${Number(activeMonthYm.slice(5, 7))}月 ▾` : '月册 ▾');
+  }
+  if ($('#searchToggleBtn')) { $('#searchToggleBtn').hidden = !person; $('#searchToggleBtn').classList.toggle('is-active', Boolean(s.searchOpen)); }
+  if ($('#spotlightBar')) $('#spotlightBar').hidden = !s.searchOpen;
+  $('#journalCanvas')?.classList.toggle('is-searching', Boolean(s.searchOpen));
+  const qEntry = $('#questionEntry');
+  if (qEntry) { const n = (s.questionCount || 0) + (s.inboxCount || 0); qEntry.hidden = !(n > 0); if (!qEntry.hidden) qEntry.textContent = `${n} 条待确认 ›`; }
 }
 
 export function renderJournal(s) {
   renderChrome(s);
-  const person = s.view === 'journal' ? s.people[s.activePersonId] : null;
-  const key = person
-    ? [person.id, person.tier, person.nameCn, person.version, s.journalFilter, s.searchOpen, s.searchQuery, s.materials[person.id], s.pending.filter((p) => p.pageId === person.id).map((p) => `${p.id}:${p.state}`).join(',')]
-    : ['none'];
+  const person = s.people[s.activePersonId] || null;
   const arrowKey = person ? `${person.id}:${person.tier}` : '';
   if (arrowKey !== renderJournal.arrowKey) { renderJournal.arrowKey = arrowKey; renderArrow(person); }
-  const k = key.map((x) => (typeof x === 'object' ? identity(x) : String(x))).join('|');
-  if (k === lastKey) return;
-  lastKey = k;
+  const mats = person ? s.materials[person.id] : null;
+  const key = [person?.id || '', person?.tier || '', person?.nameCn || '', scale, s.searchOpen, s.searchQuery, activeFacet, searchHits?.items?.length ?? -1, mats?.items?.length ?? -1, mats?.loaded, s.pending.length, isSilverVeiled(person?.id), (remindersCache.get(person?.id) || []).length].join('|');
+  if (key === lastRenderKey) return;
+  lastRenderKey = key;
   if (person) renderPage(s);
 }
 
-const ids = new WeakMap();
-let seq = 0;
-function identity(obj) { if (!obj) return 'null'; if (!ids.has(obj)) ids.set(obj, ++seq); return `o${ids.get(obj)}`; }
-
 export function initJournal() {
-  initNativeBridge();
-  mastHead();
-  $('#settingsBtn').append(svg(GEAR_SVG));
-  $('#searchToggleBtn').append(svg(SEARCH_SVG));
-  $('#spotlightIcon').append(svg(SEARCH_SVG));
-  $('#spotlightClose').append(svg(CLOSE_SVG));
+  actions.stopActiveAudio = stopActiveAudio;
+  if ($('#settingsBtn') && !$('#settingsBtn').children.length) $('#settingsBtn').append(svg(GEAR_SVG));
+  if ($('#searchToggleBtn') && !$('#searchToggleBtn').children.length) $('#searchToggleBtn').append(svg(SEARCH_SVG));
+  if ($('#spotlightIcon') && !$('#spotlightIcon').children.length) $('#spotlightIcon').append(svg(SEARCH_SVG));
+  if ($('#spotlightClose') && !$('#spotlightClose').children.length) $('#spotlightClose').append(svg(CLOSE_SVG));
 
-  $('#backToCasual').addEventListener('click', () => { haptic('light'); closePeek({ silentHaptic: true }); closeSearch(); actions.openDirectory(); });
-  $('#questionEntry').addEventListener('click', () => { haptic('light'); openQuestionNotes(); });
-  $('#folioSubjectBtn').addEventListener('click', () => { const s = store.get(); if (s.view === 'journal') openVellumPocket(s.people[s.activePersonId]); });
-  $('#folioMonthBtn').addEventListener('click', () => { const s = store.get(); if (s.view === 'journal') openMonthBookGrid(s.people[s.activePersonId]); });
-  $('#searchToggleBtn').addEventListener('click', () => (store.get().searchOpen ? closeSearch() : openSearch()));
-  $('#spotlightClose').addEventListener('click', () => { haptic('light'); closeSearch(); });
-  $('#spotlightInput').addEventListener('input', (e) => store.set({ searchQuery: e.target.value }));
-  $('#spotlightInput').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeSearch(); } });
-  $('#journalScroll').addEventListener('scroll', () => { if (!scrollRaf) scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; syncActiveMonthFromScroll(); }); }, { passive: true });
-  attachEdgeTabScrub({ navEl: $('#paperEdgeTabs'), canvasEl: $('#journalCanvas'), onSelectTab: (tab, opts) => activateEdgeTab(tab, opts), getLabel: (tab) => tab.dataset.label || tab.textContent || '' });
+  $('#questionEntry')?.addEventListener('click', () => { haptic('light'); actions.openArchiveHistory?.({ filter: 'pending' }); });
+  $('#folioSubjectBtn')?.addEventListener('click', () => { const p = store.get().people[store.get().activePersonId]; if (p) openVellumPocket(p, { onMutated: () => fetchReminders(p.id, { force: true }).then(() => renderJournal(store.get())) }); });
+  $('#folioMonthBtn')?.addEventListener('click', () => setScale(scale === 1 ? 2 : scale === 2 ? 3 : 1));
+  $('#searchToggleBtn')?.addEventListener('click', () => (store.get().searchOpen ? closeSearch() : openSearch()));
+  $('#spotlightClose')?.addEventListener('click', () => { haptic('light'); closeSearch(); });
+  $('#spotlightInput')?.addEventListener('input', (e) => {
+    const q = e.target.value; store.set({ searchQuery: q });
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => { const pid = store.get().activePersonId; if (pid) runSemanticSearch(pid, q); }, 180);
+  });
+  $('#spotlightInput')?.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeSearch(); } });
 
+  const scroller = $('#journalScroll');
+  scrubber = createGhostScrubber({ hostEl: $('#journalCanvas'), onJumpMonth: (t) => { activeMonthYm = t.ym; renderChrome(store.get()); }, onBackToLatest: () => scrollJournalToTop(true) });
+  scroller?.addEventListener('scroll', () => scrubber?.notifyScroll(scroller.scrollTop, activeMonthYm), { passive: true });
+  if (scroller && typeof attachJournalPinch === 'function') {
+    pinchAc?.abort(); pinchAc = new AbortController();
+    attachJournalPinch({ scroller, virtualRiver: { setPinchHold: (v) => river?.setPinchHold?.(v) }, onZoomOut: () => setScale(scale + 1), onZoomIn: () => setScale(scale - 1), signal: pinchAc.signal });
+  }
   store.subscribe(renderJournal);
   renderJournal(store.get());
 }

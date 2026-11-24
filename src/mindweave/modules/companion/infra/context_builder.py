@@ -12,13 +12,14 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mindweave.ai.schemas.contracts import (
     CompanionChatInput,
     ContextFactItem,
     ContextMaterialItem,
+    ContextReminderItem,
     ConversationTurn,
 )
 from mindweave.core.crypto import EnvelopeCipher
@@ -36,6 +37,13 @@ from mindweave.modules.companion.domain.output_guard import sanitize_text
 from mindweave.modules.companion.domain.tier_policy import (
     BudgetCandidateFact,
     trim_facts_to_token_budget,
+)
+from mindweave.modules.memory.domain.temporal_intent import parse_temporal_intent
+from mindweave.modules.memory.domain.zh_search import search_inverted_index
+from mindweave.modules.memory.domain.zh_synonyms import expand_query_concepts
+from mindweave.modules.memory.infra.search_cache import (
+    PersonSearchIndexCache,
+    build_person_search_index,
 )
 from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
@@ -64,8 +72,17 @@ _ZH_STOP_CHARS: frozenset[str] = frozenset(
 )
 
 _TOKEN_RUN_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+|[a-z0-9]+")
+_WEEKDAY_ZH: tuple[str, ...] = (
+    "星期一",
+    "星期二",
+    "星期三",
+    "星期四",
+    "星期五",
+    "星期六",
+    "星期日",
+)
 
-DEFAULT_RECALL_CANDIDATE_LIMIT = 200
+DEFAULT_RECALL_CANDIDATE_LIMIT = 3000
 DEFAULT_RECALL_TOP_K = 5
 
 
@@ -151,7 +168,7 @@ class RecallCandidateRecord:
 
 @dataclass(frozen=True, slots=True)
 class RecalledRecord:
-    """Ranked raw record recall result with its BM25 + recency + pinned score."""
+    """Ranked raw record recall result with its BM25 + synonym + temporal + pinned score."""
 
     candidate: RecallCandidateRecord
     score: float
@@ -167,11 +184,11 @@ def recall_relevant_records(
     k1: float = 1.2,
     b: float = 0.75,
 ) -> list[RecalledRecord]:
-    """Rank decrypted person-scoped records via Chinese-aware BM25 (`k1=1.2, b=0.75`) + recency + pinned boost.
+    """Rank decrypted person-scoped records via Chinese BM25 + concept synonyms + temporal + pinned boost.
 
     Defensively excludes soft-deleted (`deleted_at IS NOT NULL`) and venting quarantine
     (`review_state == 'held'`) records before computing corpus statistics, and returns only
-    records with strictly positive lexical overlap (`score > 0`) not in `exclude_record_ids`.
+    records with strictly positive lexical/synonym overlap (`score > 0`) not in `exclude_record_ids`.
     """
     if top_k <= 0:
         return []
@@ -209,8 +226,10 @@ def recall_relevant_records(
     avgdl = total_len / n_docs
 
     query_tf = Counter(query_tokens)
+    expanded_synonyms = expand_query_concepts(query_strong_terms, query) - set(query_tokens)
     excluded = set(exclude_record_ids)
     ref_date = reference_date or date.today()
+    inferred_from, inferred_to = parse_temporal_intent(query, ref_date)
 
     scored: list[tuple[float, int, str, RecalledRecord]] = []
     for idx, cand in enumerate(eligible):
@@ -221,20 +240,36 @@ def recall_relevant_records(
             continue
         tf_map = doc_tfs[idx]
 
-        if query_strong_terms and not any(st in tf_map for st in query_strong_terms):
+        has_exact_strong = bool(
+            not query_strong_terms or any(st in tf_map for st in query_strong_terms)
+        )
+        has_synonym_hit = bool(
+            expanded_synonyms and any(syn in tf_map for syn in expanded_synonyms)
+        )
+        if not has_exact_strong and not has_synonym_hit:
             continue
 
         bm25_score = 0.0
-        for term, q_cnt in query_tf.items():
-            tf_val = tf_map.get(term, 0)
-            if tf_val <= 0:
-                continue
-            df_val = doc_freq.get(term, 0)
-            # Non-negative Lucene BM25 IDF (safe even when corpus has N=1 or N=2 records)
-            idf = math.log(1.0 + (n_docs - df_val + 0.5) / (df_val + 0.5))
-            denom = tf_val + k1 * (1.0 - b + b * (dl / avgdl))
-            term_weight = 2.0 if len(term) >= 2 else 1.0
-            bm25_score += term_weight * q_cnt * idf * (tf_val * (k1 + 1.0)) / denom
+        if has_exact_strong:
+            for term, q_cnt in query_tf.items():
+                tf_val = tf_map.get(term, 0)
+                if tf_val <= 0:
+                    continue
+                df_val = doc_freq.get(term, 0)
+                idf = math.log(1.0 + (n_docs - df_val + 0.5) / (df_val + 0.5))
+                denom = tf_val + k1 * (1.0 - b + b * (dl / avgdl))
+                term_weight = 2.0 if len(term) >= 2 else 1.0
+                bm25_score += term_weight * q_cnt * idf * (tf_val * (k1 + 1.0)) / denom
+
+        if has_synonym_hit:
+            for syn in expanded_synonyms:
+                tf_val = tf_map.get(syn, 0)
+                if tf_val <= 0:
+                    continue
+                df_val = doc_freq.get(syn, 0)
+                idf = math.log(1.0 + (n_docs - df_val + 0.5) / (df_val + 0.5))
+                denom = tf_val + k1 * (1.0 - b + b * (dl / avgdl))
+                bm25_score += 0.90 * idf * (tf_val * (k1 + 1.0)) / denom
 
         if bm25_score <= 0.0:
             continue
@@ -242,16 +277,28 @@ def recall_relevant_records(
         rec_date = cand.happened_on or (
             cand.created_at.date() if cand.created_at is not None else None
         )
+        in_temporal_win = (
+            rec_date is not None
+            and inferred_from is not None
+            and inferred_to is not None
+            and inferred_from <= rec_date <= inferred_to
+        )
         if rec_date is not None:
             age_days = max(0, (ref_date - rec_date).days)
-            recency_factor = math.exp(-age_days / 180.0)
+            # Volatility-aware decay: pinned slips & explicitly queried past windows never decay
+            recency_factor = (
+                1.0 if (cand.pinned or in_temporal_win) else math.exp(-age_days / 180.0)
+            )
             date_ord = rec_date.toordinal()
         else:
             recency_factor = 0.0
             date_ord = 0
 
-        pinned_boost = 1.12 if cand.pinned else 1.0
-        final_score = bm25_score * (1.0 + 0.15 * recency_factor) * pinned_boost
+        pinned_boost = 1.15 if cand.pinned else 1.0
+        temporal_boost = 1.55 if in_temporal_win else 1.0
+        final_score = (
+            bm25_score * (1.0 + 0.15 * recency_factor) * pinned_boost * temporal_boost
+        )
         scored.append(
             (
                 -final_score,
@@ -291,6 +338,7 @@ class BuiltCompanionContext:
     record_catalog: dict[UUID, CitationRecordMeta]
     timezone: str
     late_night_care_enabled: bool
+    alias_to_record_id: dict[str, UUID] = field(default_factory=dict)
     total_records_scanned: int = 0
     confirmed_facts_count: int = 0
     active_reminders_count: int = 0
@@ -317,6 +365,7 @@ class ContextBuilder:
         recent_turn_limit: int = 12,
         recall_top_k: int = DEFAULT_RECALL_TOP_K,
         recall_candidate_limit: int = DEFAULT_RECALL_CANDIDATE_LIMIT,
+        search_cache: PersonSearchIndexCache | None = None,
     ) -> None:
         self._cipher = cipher
         self._default_timezone = default_timezone
@@ -325,6 +374,7 @@ class ContextBuilder:
         self._recent_turn_limit = recent_turn_limit
         self._recall_top_k = recall_top_k
         self._recall_candidate_limit = recall_candidate_limit
+        self._search_cache = search_cache
 
     def _decrypt_record_meta(
         self,
@@ -433,6 +483,19 @@ class ContextBuilder:
         tz_name = pref_row.timezone if pref_row is not None else self._default_timezone
         late_night_care_enabled = pref_row.late_night_care_enabled if pref_row is not None else True
 
+        try:
+            tz_info: ZoneInfo | None = ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            tz_info = None
+
+        if now_utc is not None:
+            local_now = now_utc.astimezone(tz_info) if tz_info is not None else now_utc
+        else:
+            local_now = datetime.now(tz_info) if tz_info is not None else datetime.now()
+        local_today = local_now.date()
+        weekday_zh = _WEEKDAY_ZH[local_today.weekday()]
+        local_time_str = local_now.strftime("%H:%M")
+
         # 2. Verify EVERY requested referenced_material_id belongs to (scope.user_id, scope.person_id)
         #    and is neither soft-deleted nor held in venting quarantine (blocks cross-person injection!)
         dedup_ref_ids = list(dict.fromkeys(referenced_material_ids))
@@ -462,13 +525,15 @@ class ContextBuilder:
                 clean_title, body, clean_snippet = self._decrypt_record_meta(
                     scope=scope, dek=dek, rec=rec
                 )
-                happened_str = rec.happened_on.isoformat() if rec.happened_on is not None else None
+                ref_happened_str: str | None = (
+                    rec.happened_on.isoformat() if rec.happened_on is not None else None
+                )
                 record_catalog[rec.id] = CitationRecordMeta(
                     record_id=rec.id,
                     kind=rec.kind,
                     title=clean_title,
                     snippet=clean_snippet,
-                    happened_on=happened_str,
+                    happened_on=ref_happened_str,
                 )
                 referenced_materials.append(
                     ContextMaterialItem(
@@ -476,7 +541,7 @@ class ContextBuilder:
                         kind=rec.kind,
                         title=mask_hard_pii(clean_title).masked_text,
                         body=mask_hard_pii(body).masked_text,
-                        happened_on=happened_str,
+                        happened_on=ref_happened_str,
                     )
                 )
 
@@ -512,6 +577,7 @@ class ContextBuilder:
 
         candidate_facts: list[BudgetCandidateFact] = []
         fact_backing_records: dict[UUID, RecordRow] = {}
+        fact_id_to_record_id: dict[UUID, UUID] = {}
 
         for fact_row, rec_row in fact_pairs:
             content = self._cipher.decrypt_str(
@@ -528,21 +594,33 @@ class ContextBuilder:
             elif fact_row.trigger_date is not None:
                 fact_happened_str = fact_row.trigger_date.isoformat()
 
+            is_unlinked = rec_row is None
             effective_rec_id = rec_row.id if rec_row is not None else fact_row.id
             if rec_row is not None:
                 fact_backing_records[rec_row.id] = rec_row
+                fact_id_to_record_id[fact_row.id] = rec_row.id
+
+            fact_type_enum = FactType(fact_row.type)
+            is_expired_one_off = bool(
+                fact_type_enum is FactType.DATE
+                and fact_row.trigger_date is not None
+                and fact_row.trigger_date < local_today
+                and not fact_row.is_lunar
+            )
 
             candidate_facts.append(
                 BudgetCandidateFact(
                     fact_id=fact_row.id,
                     record_id=effective_rec_id,
-                    fact_type=FactType(fact_row.type),
+                    fact_type=fact_type_enum,
                     content=content,
                     happened_on=fact_happened_str,
+                    is_expired_one_off=is_expired_one_off,
+                    is_unlinked=is_unlinked,
                 )
             )
 
-        # 4. Token-budget trimming (~4,000 tokens / ~6,000 chars): taboo/date/promise ALWAYS first!
+        # 4. Token-budget trimming: active taboo/date/promise capped so preferences never starve (BUG-CC-7)
         trimmed_facts = trim_facts_to_token_budget(
             candidate_facts,
             max_tokens=self._max_fact_tokens,
@@ -558,10 +636,11 @@ class ContextBuilder:
                     fact_type=tf.fact_type,
                     content=mask_hard_pii(tf.content).masked_text,
                     happened_on=tf.happened_on,
+                    is_unlinked_fact=tf.is_unlinked,
                 )
             )
             backing_rec = fact_backing_records.get(tf.record_id)
-            if backing_rec is not None and backing_rec.id not in record_catalog:
+            if not tf.is_unlinked and backing_rec is not None and backing_rec.id not in record_catalog:
                 clean_title, _body, clean_snippet = self._decrypt_record_meta(
                     scope=scope, dek=dek, rec=backing_rec
                 )
@@ -577,23 +656,12 @@ class ContextBuilder:
                     ),
                 )
 
-        try:
-            tz_info = ZoneInfo(tz_name)
-        except ZoneInfoNotFoundError:
-            tz_info = None
-
-        if now_utc is not None:
-            local_today = (
-                now_utc.astimezone(tz_info).date() if tz_info is not None else now_utc.date()
-            )
-        else:
-            local_today = datetime.now(tz_info).date() if tz_info is not None else date.today()
-
         scanned_record_ids: set[UUID] = set(record_catalog.keys())
 
-        # 4b. D4 Raw Record Recall: in-memory decrypted BM25 + time-decay over person-scoped slips.
-        #     Strictly scoped to (user_id, person_id), physically excluding soft-deleted records,
-        #     held venting records, and records whose only facts are pending/rejected/superseded (I1 & I4).
+        # 4b. Long-horizon Raw Record Recall (up to 3,000 slips, zero 200-slip cliff!).
+        #     Uses shared watermark-gated `PersonSearchIndexCache` when available (O(1) on hit,
+        #     decrypting ONLY the top-K <= 5 matched slips!), while strictly enforcing I1 & I4
+        #     (excluding soft-deleted, held venting, and pending-only records).
         if self._recall_top_k > 0 and user_message.strip():
             has_any_fact = exists(
                 select(1).where(
@@ -609,77 +677,250 @@ class ContextBuilder:
                     FactRow.invalid_at.is_(None),
                 )
             )
-            recall_rows = (
-                await session.scalars(
-                    select(RecordRow)
-                    .where(
-                        RecordRow.user_id == scope.user_id,
-                        RecordRow.person_id == scope.person_id,
-                        RecordRow.deleted_at.is_(None),
-                        RecordRow.review_state != RecordReviewState.HELD.value,
-                        or_(
-                            RecordRow.review_state == RecordReviewState.NOTE_ONLY.value,
-                            ~has_any_fact,
-                            has_active_confirmed_fact,
-                        ),
-                    )
-                    .order_by(RecordRow.created_at.desc(), RecordRow.id.desc())
-                    .limit(self._recall_candidate_limit)
+            if self._search_cache is not None:
+                eligible_id_rows = list(
+                    (
+                        await session.scalars(
+                            select(RecordRow.id)
+                            .where(
+                                RecordRow.user_id == scope.user_id,
+                                RecordRow.person_id == scope.person_id,
+                                RecordRow.deleted_at.is_(None),
+                                RecordRow.review_state != RecordReviewState.HELD.value,
+                                or_(
+                                    RecordRow.review_state == RecordReviewState.NOTE_ONLY.value,
+                                    ~has_any_fact,
+                                    has_active_confirmed_fact,
+                                ),
+                            )
+                            .order_by(RecordRow.created_at.desc(), RecordRow.id.desc())
+                            .limit(self._recall_candidate_limit)
+                        )
+                    ).all()
                 )
-            ).all()
+                eligible_id_set = set(eligible_id_rows)
+                scanned_record_ids.update(eligible_id_set)
 
-            scanned_record_ids.update(rec.id for rec in recall_rows)
+                if eligible_id_set:
+                    # 1ms watermark matching MemoryService.search_person_materials (`include_held=False`)
+                    wm_row = (
+                        await session.execute(
+                            select(func.count(RecordRow.id), func.max(RecordRow.updated_at)).where(
+                                RecordRow.user_id == scope.user_id,
+                                RecordRow.person_id == scope.person_id,
+                                RecordRow.deleted_at.is_(None),
+                                RecordRow.review_state != RecordReviewState.HELD.value,
+                            )
+                        )
+                    ).one()
+                    watermark = (int(wm_row[0] or 0), wm_row[1])
+                    entry = self._search_cache.get(
+                        user_id=scope.user_id,
+                        person_id=scope.person_id,
+                        include_held=False,
+                        watermark=watermark,
+                    )
+                    if entry is None:
+                        raw_index_rows = (
+                            await session.execute(
+                                select(
+                                    RecordRow.id,
+                                    RecordRow.kind,
+                                    RecordRow.title_enc,
+                                    RecordRow.body_enc,
+                                    RecordRow.happened_on,
+                                    RecordRow.created_at,
+                                    RecordRow.pinned,
+                                    RecordRow.review_state,
+                                )
+                                .where(
+                                    RecordRow.user_id == scope.user_id,
+                                    RecordRow.person_id == scope.person_id,
+                                    RecordRow.deleted_at.is_(None),
+                                    RecordRow.review_state != RecordReviewState.HELD.value,
+                                )
+                                .order_by(
+                                    RecordRow.happened_on.desc(),
+                                    RecordRow.created_at.desc(),
+                                    RecordRow.id.desc(),
+                                )
+                                .limit(self._recall_candidate_limit)
+                            )
+                        ).all()
+                        entry = build_person_search_index(
+                            user_id=scope.user_id,
+                            person_id=scope.person_id,
+                            watermark=watermark,
+                            cipher=self._cipher,
+                            dek=dek,
+                            rows=[
+                                (r[0], r[1], r[2], r[3], r[4], r[5], bool(r[6]), str(r[7]))
+                                for r in raw_index_rows
+                            ],
+                        )
+                        self._search_cache.put(
+                            user_id=scope.user_id,
+                            person_id=scope.person_id,
+                            include_held=False,
+                            entry=entry,
+                        )
 
-            if recall_rows:
-                recall_candidates: list[RecallCandidateRecord] = []
-                for rec in recall_rows:
-                    clean_title, body, clean_snippet = self._decrypt_record_meta(
-                        scope=scope, dek=dek, rec=rec
+                    compact_hits, _expanded, _inferred = search_inverted_index(
+                        vocab=entry.vocab,
+                        inv_postings=entry.inv_postings,
+                        docs=entry.docs,
+                        avgdl=entry.avgdl,
+                        query=user_message,
+                        today=local_today,
+                        person_names=[person_name],
+                        top_k=self._recall_top_k,
+                        eligible_record_ids=eligible_id_set,
+                        exclude_record_ids=set(dedup_ref_ids),
                     )
-                    recall_candidates.append(
-                        RecallCandidateRecord(
-                            record_id=rec.id,
-                            kind=rec.kind,
-                            title=clean_title,
-                            body=body,
-                            snippet=clean_snippet,
-                            happened_on=rec.happened_on,
-                            pinned=bool(rec.pinned),
-                            created_at=rec.created_at,
-                            review_state=rec.review_state,
-                            deleted_at=rec.deleted_at,
+                    if compact_hits:
+                        hit_ids = [h.record_id for h in compact_hits]
+                        matched_rows = (
+                            await session.scalars(
+                                select(RecordRow).where(
+                                    RecordRow.user_id == scope.user_id,
+                                    RecordRow.person_id == scope.person_id,
+                                    RecordRow.id.in_(hit_ids),
+                                    RecordRow.deleted_at.is_(None),
+                                    RecordRow.review_state != RecordReviewState.HELD.value,
+                                )
+                            )
+                        ).all()
+                        matched_by_id = {r.id: r for r in matched_rows}
+                        for hit_id in hit_ids:
+                            matched_rec = matched_by_id.get(hit_id)
+                            if matched_rec is None:
+                                continue
+                            clean_title, body, clean_snippet = self._decrypt_record_meta(
+                                scope=scope, dek=dek, rec=matched_rec
+                            )
+                            hit_happened_str: str | None = (
+                                matched_rec.happened_on.isoformat()
+                                if matched_rec.happened_on is not None
+                                else None
+                            )
+                            if matched_rec.id not in record_catalog:
+                                record_catalog[matched_rec.id] = CitationRecordMeta(
+                                    record_id=matched_rec.id,
+                                    kind=matched_rec.kind,
+                                    title=clean_title,
+                                    snippet=clean_snippet,
+                                    happened_on=hit_happened_str,
+                                )
+                            referenced_materials.append(
+                                ContextMaterialItem(
+                                    record_id=matched_rec.id,
+                                    kind=matched_rec.kind,
+                                    title=mask_hard_pii(clean_title).masked_text,
+                                    body=mask_hard_pii(body).masked_text,
+                                    happened_on=hit_happened_str,
+                                )
+                            )
+            else:
+                recall_rows = (
+                    await session.scalars(
+                        select(RecordRow)
+                        .where(
+                            RecordRow.user_id == scope.user_id,
+                            RecordRow.person_id == scope.person_id,
+                            RecordRow.deleted_at.is_(None),
+                            RecordRow.review_state != RecordReviewState.HELD.value,
+                            or_(
+                                RecordRow.review_state == RecordReviewState.NOTE_ONLY.value,
+                                ~has_any_fact,
+                                has_active_confirmed_fact,
+                            ),
                         )
+                        .order_by(RecordRow.created_at.desc(), RecordRow.id.desc())
+                        .limit(self._recall_candidate_limit)
                     )
+                ).all()
+                scanned_record_ids.update(r.id for r in recall_rows)
+                if recall_rows:
+                    recall_candidates: list[RecallCandidateRecord] = []
+                    for rec in recall_rows:
+                        clean_title, body, clean_snippet = self._decrypt_record_meta(
+                            scope=scope, dek=dek, rec=rec
+                        )
+                        recall_candidates.append(
+                            RecallCandidateRecord(
+                                record_id=rec.id,
+                                kind=rec.kind,
+                                title=clean_title,
+                                body=body,
+                                snippet=clean_snippet,
+                                happened_on=rec.happened_on,
+                                pinned=bool(rec.pinned),
+                                created_at=rec.created_at,
+                                review_state=rec.review_state,
+                                deleted_at=rec.deleted_at,
+                            )
+                        )
+                    recalled_hits = recall_relevant_records(
+                        user_message,
+                        recall_candidates,
+                        top_k=self._recall_top_k,
+                        exclude_record_ids=dedup_ref_ids,
+                        reference_date=local_today,
+                    )
+                    for hit in recalled_hits:
+                        cand = hit.candidate
+                        cand_happened_str: str | None = (
+                            cand.happened_on.isoformat() if cand.happened_on is not None else None
+                        )
+                        if cand.record_id not in record_catalog:
+                            record_catalog[cand.record_id] = CitationRecordMeta(
+                                record_id=cand.record_id,
+                                kind=cand.kind,
+                                title=cand.title,
+                                snippet=cand.snippet,
+                                happened_on=cand_happened_str,
+                            )
+                        referenced_materials.append(
+                            ContextMaterialItem(
+                                record_id=cand.record_id,
+                                kind=cand.kind,
+                                title=mask_hard_pii(cand.title).masked_text,
+                                body=mask_hard_pii(cand.body).masked_text,
+                                happened_on=cand_happened_str,
+                            )
+                        )
 
-                recalled_hits = recall_relevant_records(
-                    user_message,
-                    recall_candidates,
-                    top_k=self._recall_top_k,
-                    exclude_record_ids=dedup_ref_ids,
-                    reference_date=local_today,
-                )
-                for hit in recalled_hits:
-                    cand = hit.candidate
-                    happened_str = (
-                        cand.happened_on.isoformat() if cand.happened_on is not None else None
+        # Assign deterministic short citation aliases `S1..SN` strictly for citable records
+        record_to_alias: dict[UUID, str] = {}
+        alias_to_record_id: dict[str, UUID] = {}
+
+        def _ensure_alias(rid: UUID) -> str:
+            existing = record_to_alias.get(rid)
+            if existing is not None:
+                return existing
+            alias = f"S{len(record_to_alias) + 1}"
+            record_to_alias[rid] = alias
+            alias_to_record_id[alias] = rid
+            return alias
+
+        referenced_materials = [
+            mat.model_copy(update={"alias": _ensure_alias(mat.record_id)})
+            if mat.record_id in record_catalog
+            else mat
+            for mat in referenced_materials
+        ]
+        confirmed_fact_items = [
+            fact.model_copy(
+                update={
+                    "alias": (
+                        _ensure_alias(fact.record_id)
+                        if (not fact.is_unlinked_fact and fact.record_id in record_catalog)
+                        else None
                     )
-                    if cand.record_id not in record_catalog:
-                        record_catalog[cand.record_id] = CitationRecordMeta(
-                            record_id=cand.record_id,
-                            kind=cand.kind,
-                            title=cand.title,
-                            snippet=cand.snippet,
-                            happened_on=happened_str,
-                        )
-                    referenced_materials.append(
-                        ContextMaterialItem(
-                            record_id=cand.record_id,
-                            kind=cand.kind,
-                            title=mask_hard_pii(cand.title).masked_text,
-                            body=mask_hard_pii(cand.body).masked_text,
-                            happened_on=happened_str,
-                        )
-                    )
+                }
+            )
+            for fact in confirmed_fact_items
+        ]
 
         # Collect unique chronological/ranked dates for recalled & attached raw materials
         recalled_dates: list[str] = []
@@ -736,10 +977,14 @@ class ContextBuilder:
                 column="content_enc",
                 row_id=mrow.id,
             )
+            turn_local = (
+                mrow.created_at.astimezone(tz_info) if tz_info is not None else mrow.created_at
+            )
             recent_turns.append(
                 ConversationTurn(
                     role=mrow.role,
                     content=mask_hard_pii(turn_text).masked_text,
+                    created_at=turn_local.strftime("%Y-%m-%d %H:%M"),
                 )
             )
 
@@ -794,6 +1039,7 @@ class ContextBuilder:
         ).all()
 
         upcoming_reminders: list[dict[str, Any]] = []
+        prompt_reminders: list[ContextReminderItem] = []
         for rem in active_reminder_rows:
             raw_rem_title = self._cipher.decrypt_str(
                 dek,
@@ -818,17 +1064,21 @@ class ContextBuilder:
 
             days_until = (event_date - local_today).days if event_date is not None else None
             if days_until is None or days_until >= 0:
-                upcoming_reminders.append(
-                    {
-                        "id": str(rem.id),
-                        "title": clean_rem_title,
-                        "triggerDate": event_date.isoformat() if event_date is not None else None,
-                        "daysUntil": days_until,
-                        "isLunar": bool(rem.is_lunar),
-                        "rule": rem.rule,
-                        "status": rem.status,
-                    }
+                linked_rid = (
+                    fact_id_to_record_id.get(rem.fact_id) if rem.fact_id is not None else None
                 )
+                src_alias = record_to_alias.get(linked_rid) if linked_rid is not None else None
+                rem_dict: dict[str, Any] = {
+                    "id": str(rem.id),
+                    "title": clean_rem_title,
+                    "triggerDate": event_date.isoformat() if event_date is not None else None,
+                    "daysUntil": days_until,
+                    "isLunar": bool(rem.is_lunar),
+                    "rule": rem.rule,
+                    "status": rem.status,
+                    "sourceAlias": src_alias,
+                }
+                upcoming_reminders.append(rem_dict)
 
         upcoming_reminders.sort(
             key=lambda item: (
@@ -836,6 +1086,16 @@ class ContextBuilder:
                 item["daysUntil"] if item["daysUntil"] is not None else 999999,
             )
         )
+        for item in upcoming_reminders[:10]:
+            prompt_reminders.append(
+                ContextReminderItem(
+                    title=mask_hard_pii(str(item["title"])).masked_text,
+                    trigger_date=item.get("triggerDate"),
+                    days_until=item.get("daysUntil"),
+                    is_lunar=bool(item.get("isLunar", False)),
+                    source_alias=item.get("sourceAlias"),
+                )
+            )
 
         chat_input = CompanionChatInput(
             person_id=scope.person_id,
@@ -843,6 +1103,11 @@ class ContextBuilder:
             tier=tier,
             role_tag=mask_hard_pii(role_tag).masked_text,
             traits=[mask_hard_pii(t).masked_text for t in traits],
+            local_date=local_today.isoformat(),
+            weekday_zh=weekday_zh,
+            local_time=local_time_str,
+            timezone_name=tz_name,
+            upcoming_reminders=prompt_reminders,
             confirmed_facts=confirmed_fact_items,
             referenced_materials=referenced_materials,
             rolling_summary=rolling_summary,
@@ -863,6 +1128,7 @@ class ContextBuilder:
             record_catalog=record_catalog,
             timezone=tz_name,
             late_night_care_enabled=late_night_care_enabled,
+            alias_to_record_id=alias_to_record_id,
             total_records_scanned=len(scanned_record_ids),
             confirmed_facts_count=len(confirmed_fact_items),
             active_reminders_count=len(active_reminder_rows),

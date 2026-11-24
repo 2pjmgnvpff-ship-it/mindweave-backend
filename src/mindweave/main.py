@@ -72,6 +72,19 @@ class AiRuntimeStatusResponse(CamelModel):
     voice_asr_ready: bool = Field(default=True)
 
 
+class UnifiedRuntimeStatusResponse(CamelModel):
+    environment: str
+    ai_primary_provider: str
+    ai_fallback_provider: str
+    live_model_configured: bool
+    cloud_llm_ready: bool
+    voice_asr_ready: bool
+    native_speech_supported: bool = True
+    email_provider: str
+    email_delivery_ready: bool
+    database_mode: str
+
+
 _LIVE_PROVIDER_KEY_ATTRS: dict[str, str] = {
     "gemini": "gemini_api_key",
     "dashscope": "dashscope_api_key",
@@ -87,6 +100,29 @@ def _is_live_model_configured(settings: Settings) -> bool:
         if key_attr is not None and bool(str(getattr(settings, key_attr, "")).strip()):
             return True
     return False
+
+
+def _is_cloud_asr_ready(settings: Settings) -> bool:
+    """Return True iff a multimodal cloud ASR provider (gemini/dashscope/ark) has a non-blank key."""
+    asr_provider = (
+        settings.ai_primary_provider
+        if settings.ai_asr_provider == "inherit"
+        else settings.ai_asr_provider
+    )
+    if asr_provider == "gemini":
+        return bool(settings.gemini_api_key.strip())
+    if asr_provider == "dashscope":
+        return bool(settings.dashscope_api_key.strip())
+    if asr_provider == "ark":
+        return bool(settings.ark_api_key.strip())
+    return False
+
+
+def _detect_database_mode(settings: Settings) -> str:
+    url = settings.app_database_url.lower()
+    if "127.0.0.1:55432" in url or "localhost:55432" in url:
+        return "embedded"
+    return "external"
 
 
 def _resolve_request_id(raw_header: str | None) -> str:
@@ -127,7 +163,10 @@ def create_app(
 
             embedded_runner = build_default_worker_runner(app_container)
             worker_task = asyncio.create_task(
-                embedded_runner.run_forever(poll_interval=0.5),
+                embedded_runner.run_forever(
+                    poll_interval=0.5,
+                    install_signal_handlers=False,
+                ),
                 name="mindweave-embedded-worker",
             )
         logger.info(
@@ -135,6 +174,7 @@ def create_app(
             service=resolved_settings.service_name,
             environment=resolved_settings.environment,
             ai_primary_provider=resolved_settings.ai_primary_provider,
+            email_provider=resolved_settings.email_provider,
             embed_worker_in_api=resolved_settings.embed_worker_in_api,
         )
         try:
@@ -146,6 +186,15 @@ def create_app(
                     await worker_task
                 except asyncio.CancelledError:
                     pass
+            otp_sender = app_container.extras.get("otp_sender")
+            if otp_sender is not None and hasattr(otp_sender, "aclose"):
+                try:
+                    await otp_sender.aclose()
+                except Exception as exc:
+                    logger.warning(
+                        "app.shutdown.otp_sender_close_failed",
+                        error_type=type(exc).__name__,
+                    )
             if owns_container:
                 await app_container.db.dispose()
             logger.info("app.shutdown", service=resolved_settings.service_name)
@@ -168,7 +217,14 @@ def create_app(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Request-Id", "ETag"],
+        expose_headers=[
+            "X-Request-Id",
+            "ETag",
+            "Retry-After",
+            "Content-Range",
+            "Accept-Ranges",
+            "Content-Length",
+        ],
     )
 
     @app.middleware("http")
@@ -184,7 +240,7 @@ def create_app(
         try:
             response = await call_next(request)
         except AppError as exc:
-            # Ensure AppErrors caught inside middleware chains still render RFC 7807 + X-Request-Id
+            # Ensure AppErrors caught inside middleware chains still render RFC 7807 + X-Request-Id + headers
             response = problem_response(
                 status_code=exc.status_code,
                 error_code=exc.error_code,
@@ -193,6 +249,7 @@ def create_app(
                 instance=str(request.url.path),
                 request_id=req_id,
                 extensions=exc.extensions,
+                headers=exc.headers,
             )
         except Exception as exc:
             logger.error(
@@ -235,6 +292,8 @@ def create_app(
 
     @app.get("/readyz", response_model=ReadinessStatusResponse, tags=["ops"])
     async def readyz(request: Request) -> ReadinessStatusResponse | JSONResponse:
+        from mindweave.modules.identity.infra.email_sender import is_real_email_sender
+
         active_container = get_container(request)
         try:
             async with active_container.db.system_session() as sys_sess:
@@ -252,6 +311,20 @@ def create_app(
                 instance=str(request.url.path),
                 request_id=req_id,
             )
+
+        if active_container.settings.environment in ("staging", "prod_cn"):
+            otp_sender = active_container.extras.get("otp_sender")
+            if not is_real_email_sender(otp_sender):
+                req_id = getattr(request.state, "request_id", None)
+                return problem_response(
+                    status_code=503,
+                    error_code="service_not_ready",
+                    title="Service Not Ready",
+                    detail="Real outbound email OTP provider is not configured.",
+                    instance=str(request.url.path),
+                    request_id=req_id,
+                )
+
         return ReadinessStatusResponse(status="ready", database="ok")
 
     if resolved_settings.environment in ("dev", "test"):
@@ -273,11 +346,39 @@ def create_app(
             voice_asr_ready=True,
         )
 
+    async def meta_runtime_status(request: Request) -> UnifiedRuntimeStatusResponse:
+        from mindweave.modules.identity.infra.email_sender import is_real_email_sender
+
+        active_container = get_container(request)
+        active_settings = active_container.settings
+        live_ready = _is_live_model_configured(active_settings)
+        otp_sender = active_container.extras.get("otp_sender")
+        return UnifiedRuntimeStatusResponse(
+            environment=active_settings.environment,
+            ai_primary_provider=active_settings.ai_primary_provider,
+            ai_fallback_provider=active_settings.ai_fallback_provider,
+            live_model_configured=live_ready,
+            cloud_llm_ready=live_ready,
+            voice_asr_ready=_is_cloud_asr_ready(active_settings),
+            native_speech_supported=True,
+            email_provider=active_settings.email_provider,
+            email_delivery_ready=is_real_email_sender(otp_sender),
+            database_mode=_detect_database_mode(active_settings),
+        )
+
     app.add_api_route(
         f"{canonical_prefix}/meta/ai-status",
         meta_ai_status,
         methods=["GET"],
         response_model=AiRuntimeStatusResponse,
+        tags=["ops"],
+        include_in_schema=False,
+    )
+    app.add_api_route(
+        f"{canonical_prefix}/meta/runtime-status",
+        meta_runtime_status,
+        methods=["GET"],
+        response_model=UnifiedRuntimeStatusResponse,
         tags=["ops"],
         include_in_schema=False,
     )
@@ -287,6 +388,14 @@ def create_app(
             meta_ai_status,
             methods=["GET"],
             response_model=AiRuntimeStatusResponse,
+            tags=["ops"],
+            include_in_schema=False,
+        )
+        app.add_api_route(
+            "/api/v1/meta/runtime-status",
+            meta_runtime_status,
+            methods=["GET"],
+            response_model=UnifiedRuntimeStatusResponse,
             tags=["ops"],
             include_in_schema=False,
         )

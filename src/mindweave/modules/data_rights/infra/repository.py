@@ -39,8 +39,10 @@ from mindweave.shared.enums import (
     UNASSIGNED_PERSON_SLUG,
     CaptureStatus,
     FactStatus,
+    RecordKind,
     RecordReviewState,
     ReminderStatus,
+    Tier,
 )
 from mindweave.shared.scopes import UserScope
 
@@ -271,11 +273,20 @@ class DataRightsRepository:
                 .order_by(PersonRow.tier.asc(), PersonRow.rank.asc())
             )
         ).all()
+        silver_person_ids: set[UUID] = {
+            p.id for p in person_rows if p.tier == Tier.SILVER.value
+        }
         persons: list[dict[str, Any]] = []
         for p in person_rows:
-            _track_media(p.avatar_object_key)
-            _track_media(p.main_photo_object_key)
-            _track_media(p.sub_photo_object_key)
+            is_silver = p.id in silver_person_ids
+            if is_silver:
+                _exclude_media(p.avatar_object_key)
+                _exclude_media(p.main_photo_object_key)
+                _exclude_media(p.sub_photo_object_key)
+            else:
+                _track_media(p.avatar_object_key)
+                _track_media(p.main_photo_object_key)
+                _track_media(p.sub_photo_object_key)
             persons.append(
                 {
                     "id": str(p.id),
@@ -328,10 +339,10 @@ class DataRightsRepository:
                         column="traits_enc",
                         row_id=p.id,
                     ),
-                    "hasPhoto": p.has_photo,
-                    "avatarObjectKey": p.avatar_object_key,
-                    "mainPhotoObjectKey": p.main_photo_object_key,
-                    "subPhotoObjectKey": p.sub_photo_object_key,
+                    "hasPhoto": False if is_silver else p.has_photo,
+                    "avatarObjectKey": None if is_silver else p.avatar_object_key,
+                    "mainPhotoObjectKey": None if is_silver else p.main_photo_object_key,
+                    "subPhotoObjectKey": None if is_silver else p.sub_photo_object_key,
                     "visualTokens": p.visual_tokens,
                     "version": p.version,
                     "archivedAt": _iso(p.archived_at),
@@ -397,6 +408,7 @@ class DataRightsRepository:
         ).all()
         deleted_or_held_record_ids: set[UUID] = set()
         deleted_person_capture_ids: set[UUID] = set()
+        silver_photo_capture_ids: set[UUID] = set()
         surviving_capture_ids: set[UUID] = set()
         surviving_record_texts_by_capture: dict[UUID, list[str]] = {}
         materials: list[dict[str, Any]] = []
@@ -429,7 +441,19 @@ class DataRightsRepository:
                     surviving_record_texts_by_capture.setdefault(rec.capture_id, []).append(
                         dec_body.strip()
                     )
-            _track_media(rec.media_object_key)
+            is_silver_photo = (
+                rec.person_id is not None
+                and rec.person_id in silver_person_ids
+                and rec.kind == RecordKind.PHOTO.value
+            )
+            if is_silver_photo:
+                _exclude_media(rec.media_object_key)
+                if rec.capture_id is not None:
+                    silver_photo_capture_ids.add(rec.capture_id)
+                exported_media_key: str | None = None
+            else:
+                _track_media(rec.media_object_key)
+                exported_media_key = rec.media_object_key
             materials.append(
                 {
                     "id": str(rec.id),
@@ -454,7 +478,7 @@ class DataRightsRepository:
                         column="snippet_enc",
                         row_id=rec.id,
                     ),
-                    "mediaObjectKey": rec.media_object_key,
+                    "mediaObjectKey": exported_media_key,
                     "audioOffsetMs": rec.audio_offset_ms,
                     "audioDurationMs": rec.audio_duration_ms,
                     "stampCode": rec.stamp_code,
@@ -552,7 +576,15 @@ class DataRightsRepository:
                 _exclude_media(c.image_object_key)
                 continue
             _track_media(c.audio_object_key)
-            _track_media(c.image_object_key)
+            cloak_capture_image = (
+                c.scoped_person_id is not None and c.scoped_person_id in silver_person_ids
+            ) or c.id in silver_photo_capture_ids
+            if cloak_capture_image:
+                _exclude_media(c.image_object_key)
+                exported_capture_image_key: str | None = None
+            else:
+                _track_media(c.image_object_key)
+                exported_capture_image_key = c.image_object_key
 
             raw_text = _decrypt_opt_str(
                 cipher,
@@ -677,7 +709,7 @@ class DataRightsRepository:
                     "scopedPersonId": _public_person_id(c.scoped_person_id),
                     "status": c.status,
                     "audioObjectKey": c.audio_object_key,
-                    "imageObjectKey": c.image_object_key,
+                    "imageObjectKey": exported_capture_image_key,
                     "keepOriginalMedia": c.keep_original_media,
                     "durationMs": c.duration_ms,
                     "rawText": raw_text,

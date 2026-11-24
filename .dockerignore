@@ -5,12 +5,15 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+.hypothesis
 .data
 .env
+.env.*
 tests
 docs
 ios
 .v10_reference
 web/_v10_reference
 web/tests
+web/screenshots
 web/node_modules

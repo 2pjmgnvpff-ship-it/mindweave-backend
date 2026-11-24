@@ -9,13 +9,13 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     TARGETED_DEVICE_FAMILY: "1,2"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_USER_SCRIPT_SANDBOXING: "YES"
-    SWIFT_STRICT_CONCURRENCY: targeted
 
 targets:
   MindWeave:
@@ -29,6 +29,21 @@ targets:
       - path: MindWeave/Resources/Assets.xcassets
       - path: MindWeave/WebBundle
         type: folder
+    dependencies:
+      - sdk: WebKit.framework
+      - sdk: Speech.framework
+      - sdk: AVFoundation.framework
+      - sdk: Accelerate.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: Network.framework
+      - sdk: CoreHaptics.framework
+      - sdk: PhotosUI.framework
+      - sdk: ImageIO.framework
+      - sdk: LinkPresentation.framework
+      - sdk: UserNotifications.framework
+      - sdk: QuickLook.framework
+      - sdk: SafariServices.framework
+      - sdk: UniformTypeIdentifiers.framework
     settings:
       base:
         PRODUCT_NAME: MindWeave
@@ -44,9 +59,11 @@ targets:
         Debug:
           SWIFT_OPTIMIZATION_LEVEL: "-Onone"
           GCC_OPTIMIZATION_LEVEL: "0"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) DEBUG"
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
           SWIFT_COMPILATION_MODE: wholemodule
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited)"
           ENABLE_BITCODE: "NO"
           STRIP_INSTALLED_PRODUCT: "YES"
 schemes:

@@ -25,12 +25,19 @@ class DatabaseManager:
     """Manages separate `app` (NOBYPASSRLS) and `system` (BYPASSRLS) connection pools."""
 
     def __init__(self, *, app_url: str, system_url: str, echo: bool = False) -> None:
+        connect_args = {
+            "server_settings": {
+                "jit": "off",
+                "application_name": "mindweave-api",
+            }
+        }
         self._app_engine: AsyncEngine = create_async_engine(
             app_url,
             echo=echo,
             pool_pre_ping=True,
             pool_size=10,
             max_overflow=10,
+            connect_args=connect_args,
         )
         self._system_engine: AsyncEngine = create_async_engine(
             system_url,
@@ -38,6 +45,7 @@ class DatabaseManager:
             pool_pre_ping=True,
             pool_size=5,
             max_overflow=5,
+            connect_args=connect_args,
         )
         self._app_factory = async_sessionmaker(
             self._app_engine,

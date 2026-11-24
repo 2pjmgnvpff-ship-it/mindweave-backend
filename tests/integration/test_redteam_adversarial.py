@@ -472,7 +472,7 @@ async def test_rt08_sse_cancellation_wedges_idempotency_key_in_progress(
         async def stream_companion_reply(
             self, *, scope: PersonScope, payload: Any, session: Any = None
         ) -> Any:
-            yield "<reply>第一段"
+            yield "<reply>第一段，"
             await asyncio.sleep(10)
             yield "第二段</reply>"
 

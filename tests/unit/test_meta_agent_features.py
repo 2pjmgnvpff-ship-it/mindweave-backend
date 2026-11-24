@@ -436,20 +436,20 @@ async def test_streaming_agent_step_truthful_counts_recall_dates_and_crisis_isol
         assert steps[0] == {
             "step": 1,
             "phase": "scan",
-            "label": "翻阅「妈妈」的 3 页手帐",
+            "label": "正在翻看关于「妈妈」的手帐…",
             "count": 3,
         }
         assert steps[1] == {
             "step": 2,
             "phase": "facts",
-            "label": "核对 2 条已记住的细节与 1 项日程",
+            "label": "正在整理相关细节与日程…",
             "count": 3,
         }
         assert steps[2]["step"] == 3
         assert steps[2]["phase"] == "recall"
         assert steps[2]["count"] >= 1
         assert "2025-12-21" in steps[2]["detail"]
-        assert "命中" in steps[2]["label"]
+        assert steps[2]["label"] == "已找到相关手帐记录"
 
         # Verify zero dev jargon or UUID leakage in agent_step frames
         step_blob = json.dumps(steps, ensure_ascii=False)
@@ -787,7 +787,7 @@ async def test_voice_transcribe_conversational_asr_zero_records_and_homophone_se
         assert body["transcript"] == "陈经理说约了周六喝桂花乌龙"
         assert isinstance(body["durationMs"], int) and body["durationMs"] > 0
 
-        # 2. Real opaque PCM WAV audio -> FakeAdapter returns crisp context-grounded Chinese question!
+        # 2. Real opaque PCM WAV audio on FakeAdapter -> Invariant I13 forbids fabricating fake text!
         opaque_wav = build_demo_wav_bytes()
         resp_q = await client.post(
             "/v1/voice/transcribe",
@@ -795,11 +795,9 @@ async def test_voice_transcribe_conversational_asr_zero_records_and_homophone_se
             files={"audio": ("cupid_q.wav", opaque_wav, "audio/wav")},
             data={"activePersonId": str(mom_id)},
         )
-        assert resp_q.status_code == 200
+        assert resp_q.status_code == 502
         q_body = resp_q.json()
-        assert "妈妈" in q_body["transcript"]
-        assert "复查" in q_body["transcript"]
-        assert q_body["corrected"] == q_body["transcript"]
+        assert q_body["code"] in {"ai_upstream_error", "asr_provider_unavailable"}
 
         # 3. Silent fixture -> empty transcript (zero hallucination)
         silent_wav = _make_wav_with_text_fixture("SILENCE")
@@ -1088,6 +1086,7 @@ async def test_person_brief_gold_silver_crystal_tiers_and_strict_rls_isolation(
 async def test_fake_adapter_transcribe_preserves_existing_and_supports_chat_audio() -> None:
     from mindweave.ai.schemas.contracts import TranscribeInput
     from mindweave.core.config import Settings
+    from mindweave.core.errors import UpstreamAIError
 
     gw = ModelGateway(
         Settings(environment="test", ai_primary_provider="fake"),
@@ -1096,15 +1095,28 @@ async def test_fake_adapter_transcribe_preserves_existing_and_supports_chat_audi
     scope = UserScope(new_id())
     wav_bytes = build_demo_wav_bytes()
 
-    # Active person with checkup context -> crisp Chinese question for Cupid Chat
+    # Invariant I13: Opaque binary audio MUST raise an honest UpstreamAIError (NEVER fabricate fake text!)
+    with pytest.raises(UpstreamAIError):
+        await gw.transcribe(
+            scope=scope,
+            payload=TranscribeInput(
+                audio_bytes=wav_bytes,
+                mime_type="audio/wav",
+                active_person_name="妈妈",
+                known_person_names=["妈妈", "陈经理"],
+                recent_context_snippets=["11月28日骨科复查右膝盖"],
+            ),
+        )
+
+    # Explicit TEXT: test fixture still passes through deterministically with ASR post-processing
+    fixture_wav = _make_wav_with_text_fixture("妈妈下周六复查要注意什么？")
     out = await gw.transcribe(
         scope=scope,
         payload=TranscribeInput(
-            audio_bytes=wav_bytes,
+            audio_bytes=fixture_wav,
             mime_type="audio/wav",
             active_person_name="妈妈",
             known_person_names=["妈妈", "陈经理"],
-            recent_context_snippets=["11月28日骨科复查右膝盖"],
         ),
     )
     assert "妈妈" in out.corrected_transcript
@@ -1399,13 +1411,12 @@ async def test_r2_defect3_offline_streaming_xml_supplements_and_copyable_drafts(
         ]
     )
     assert "<reply>" in gold_stream and "</reply>" in gold_stream
-    assert "<whisper>" in gold_stream and "</whisper>" in gold_stream
     assert "<perspectives>" in gold_stream and "</perspectives>" in gold_stream
     assert "<suggestions>" in gold_stream and "</suggestions>" in gold_stream
     for bad in forbidden_meta:
         assert bad not in gold_stream
 
-    # 2. Silver tier streams <reply>, <whisper>, <suggestions>, NEVER <perspectives>, and copyable drafts
+    # 2. Silver tier streams <reply>, <suggestions>, NEVER <perspectives>, and copyable drafts
     silver_in = CompanionChatInput(
         person_id=new_id(),
         person_name="陈经理",
@@ -1434,13 +1445,14 @@ async def test_r2_defect3_offline_streaming_xml_supplements_and_copyable_drafts(
         ]
     )
     assert "<reply>" in silver_stream and "</reply>" in silver_stream
-    assert "<whisper>" in silver_stream and "<suggestions>" in silver_stream
+    assert "<suggestions>" in silver_stream
     assert "<perspectives>" not in silver_stream
     assert "「" in silver_stream
     for bad in forbidden_meta:
         assert bad not in silver_stream
 
-    # 3. derive_stream_supplements produces real copyable drafts (and [] on unrecorded gap)
+    # 3. V2 derive_stream_supplements NEVER fabricates canned suggestions or kitsch whispers;
+    # it accurately flags has_unrecorded_gap while deferring genuine suggestions to the LLM stream.
     for tier_enum in (Tier.GOLD, Tier.SILVER, Tier.CRYSTAL):
         ci = CompanionChatInput(
             person_id=new_id(),
@@ -1459,10 +1471,9 @@ async def test_r2_defect3_offline_streaming_xml_supplements_and_copyable_drafts(
         sup = derive_stream_supplements(
             ci, cleaned_reply="记着她喜欢桂花乌龙茶。", verified_record_ids=[]
         )
-        assert len(sup.actionable_suggestions) == 1
-        assert sup.actionable_suggestions[0].startswith("「")
-        for bad in forbidden_meta:
-            assert bad not in sup.actionable_suggestions[0]
+        assert sup.has_unrecorded_gap is False
+        assert sup.whisper_note is None
+        assert sup.actionable_suggestions == []
 
         sup_gap = derive_stream_supplements(
             ci,
@@ -1470,6 +1481,7 @@ async def test_r2_defect3_offline_streaming_xml_supplements_and_copyable_drafts(
             verified_record_ids=[],
         )
         assert sup_gap.has_unrecorded_gap is True
+        assert sup_gap.whisper_note is None
         assert sup_gap.actionable_suggestions == []
 
 
@@ -1872,20 +1884,20 @@ async def test_r2_defect7_polish_step2_labels_brief_date_dedup_and_openapi_schem
             recalled_dates=["2026-11-16"],
         )
 
-    # 1. Step 2 cleanly omits zero side (`与 0 项日程` / `0 条已记住的细节与`) or omits step 2 entirely
+    # 1. Step 2 cleanly adapts to facts-only / reminders-only / both without zero-telemetry counts
     steps_facts_only = _build_agent_step_events(_make_ctx(facts_cnt=3, rem_cnt=0))
-    assert steps_facts_only[1]["label"] == "核对 3 条已记住的细节"
+    assert steps_facts_only[1]["label"] == "正在整理相关细节…"
     assert "0 项日程" not in steps_facts_only[1]["label"]
 
     steps_rems_only = _build_agent_step_events(_make_ctx(facts_cnt=0, rem_cnt=2))
-    assert steps_rems_only[1]["label"] == "核对 2 项日程"
+    assert steps_rems_only[1]["label"] == "正在查看近期日程…"
     assert "0 条" not in steps_rems_only[1]["label"]
 
     steps_neither = _build_agent_step_events(_make_ctx(facts_cnt=0, rem_cnt=0))
     assert [s["phase"] for s in steps_neither] == ["scan", "recall"]
 
     steps_both = _build_agent_step_events(_make_ctx(facts_cnt=2, rem_cnt=1))
-    assert steps_both[1]["label"] == "核对 2 条已记住的细节与 1 项日程"
+    assert steps_both[1]["label"] == "正在整理相关细节与日程…"
 
     # 2. Brief prompt & item actionPrompt never duplicate date (`12月6日12月6日...`)
     manual_clock.set(datetime(2026, 11, 25, 2, 0, 0, tzinfo=UTC))

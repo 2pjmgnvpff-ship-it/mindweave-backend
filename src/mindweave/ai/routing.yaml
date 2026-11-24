@@ -1,6 +1,6 @@
 # MindWeave AI Model Gateway Declarative Task Routing (ADR-001 / ADR-007)
 # Semantic response caching is strictly forbidden across all tasks (Invariant I9 / Not-To-Do #6).
-version: "1.0"
+version: "2.0"
 semantic_cache_enabled: false
 
 circuit_breaker:
@@ -18,10 +18,12 @@ tasks:
     prompt_id: transcribe_audio
     temperature: 0.0
     timeout_seconds: 18.0
+    thinking_level: LOW
+    max_output_tokens: 4096
     models:
       fake: fake-asr-v1
-      gemini: gemini-2.5-flash
-      dashscope: qwen-audio-turbo
+      gemini: gemini-3.8-flash
+      dashscope: qwen3-omni-flash
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
 
@@ -29,9 +31,11 @@ tasks:
     prompt_id: parse_screenshot
     temperature: 0.1
     timeout_seconds: 18.0
+    thinking_level: LOW
+    max_output_tokens: 4096
     models:
       fake: fake-vision-v1
-      gemini: gemini-2.5-flash
+      gemini: gemini-3.8-flash
       dashscope: qwen-vl-max
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
@@ -40,9 +44,11 @@ tasks:
     prompt_id: extract_record
     temperature: 0.1
     timeout_seconds: 18.0
+    thinking_level: LOW
+    max_output_tokens: 8192
     models:
       fake: fake-extract-v1.1
-      gemini: gemini-2.5-flash
+      gemini: gemini-3.8-flash
       dashscope: qwen-plus
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
@@ -50,10 +56,12 @@ tasks:
   ask_relationship:
     prompt_id: ask_relationship
     temperature: 0.3
-    timeout_seconds: 18.0
+    timeout_seconds: 25.0
+    thinking_level: MEDIUM
+    max_output_tokens: 4096
     models:
       fake: fake-companion-v1.1
-      gemini: gemini-2.5-flash
+      gemini: gemini-3.8-flash
       dashscope: qwen-plus
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
@@ -62,9 +70,11 @@ tasks:
     prompt_id: safety_classify
     temperature: 0.0
     timeout_seconds: 5.0
+    thinking_level: MINIMAL
+    max_output_tokens: 1024
     models:
       fake: fake-safety-v1.0
-      gemini: gemini-2.5-flash
+      gemini: gemini-3.5-flash-lite
       dashscope: qwen-plus
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat
@@ -73,9 +83,11 @@ tasks:
     prompt_id: summarize_thread
     temperature: 0.2
     timeout_seconds: 12.0
+    thinking_level: MINIMAL
+    max_output_tokens: 1024
     models:
       fake: fake-summary-v1.0
-      gemini: gemini-2.5-flash
+      gemini: gemini-3.5-flash-lite
       dashscope: qwen-plus
       ark: doubao-1-5-pro-32k
       deepseek: deepseek-chat

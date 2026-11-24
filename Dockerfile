@@ -1,6 +1,6 @@
 # Multi-stage non-root Python 3.12 container built with `uv` (Google Cloud Run & Docker ready)
 
-FROM ghcr.io/astral-sh/uv:0.5.14 AS uv_bin
+FROM ghcr.io/astral-sh/uv:0.13.7 AS uv_bin
 
 # ----------------------------------------------------------------------------
 # Stage 1: Dependency & wheel builder

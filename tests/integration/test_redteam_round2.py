@@ -349,7 +349,7 @@ async def test_r2_hardening_capture_undo_reverts_graph_and_restores_superseded_f
         open_inbox = (await client.get("/v1/inbox?status=open", headers=headers)).json()["items"]
         assert all(i["captureId"] != cap2_id for i in open_inbox)
 
-        # Undo after 5s window -> 409 undo_window_expired
+        # Undo after 30s window -> 409 undo_window_expired
         cap3 = await client.post(
             "/v1/captures?sync=true",
             headers={**headers, "Idempotency-Key": str(uuid4())},
@@ -361,7 +361,7 @@ async def test_r2_hardening_capture_undo_reverts_graph_and_restores_superseded_f
             },
         )
         assert cap3.status_code == 201
-        manual_clock.advance(seconds=10)
+        manual_clock.advance(seconds=31)
         undo_late = await client.post(
             f"/v1/captures/{cap3.json()['captureId']}:undo",
             headers={**headers, "Idempotency-Key": str(uuid4())},

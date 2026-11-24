@@ -581,9 +581,535 @@
         "title": "BriefItemSchema",
         "type": "object"
       },
+      "CaptureAddSlipRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "factType": {
+            "$ref": "#/components/schemas/FactType",
+            "default": "note"
+          },
+          "happenedOn": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Happenedon"
+          },
+          "inheritCaptureAudio": {
+            "default": true,
+            "title": "Inheritcaptureaudio",
+            "type": "boolean"
+          },
+          "newPersonName": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Newpersonname"
+          },
+          "newPersonTier": {
+            "$ref": "#/components/schemas/Tier",
+            "default": "crystal"
+          },
+          "personId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personid"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "triggerDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggerdate"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "CaptureAddSlipRequest",
+        "type": "object"
+      },
+      "CaptureAddSlipResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "affectedPersonIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Affectedpersonids",
+            "type": "array"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "happenedOn": {
+            "title": "Happenedon",
+            "type": "string"
+          },
+          "hasMedia": {
+            "default": false,
+            "title": "Hasmedia",
+            "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RecordKind"
+          },
+          "materialId": {
+            "format": "uuid",
+            "title": "Materialid",
+            "type": "string"
+          },
+          "mediaUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediaurl"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "personName": {
+            "title": "Personname",
+            "type": "string"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "materialId",
+          "captureId",
+          "personId",
+          "personName",
+          "tier",
+          "kind",
+          "title",
+          "body",
+          "snippet",
+          "happenedOn"
+        ],
+        "title": "CaptureAddSlipResponse",
+        "type": "object"
+      },
+      "CaptureCandidatePersonDto": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "title": "Displayname",
+            "type": "string"
+          },
+          "distinguishingCue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distinguishingcue"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier",
+            "default": "crystal"
+          }
+        },
+        "required": [
+          "personId",
+          "displayName"
+        ],
+        "title": "CaptureCandidatePersonDto",
+        "type": "object"
+      },
+      "CaptureHistoryItemDto": {
+        "additionalProperties": false,
+        "properties": {
+          "activeSlipCount": {
+            "default": 0,
+            "title": "Activeslipcount",
+            "type": "integer"
+          },
+          "audioUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audiourl"
+          },
+          "canQuickUndo": {
+            "default": false,
+            "title": "Canquickundo",
+            "type": "boolean"
+          },
+          "captureId": {
+            "format": "uuid",
+            "title": "Captureid",
+            "type": "string"
+          },
+          "completedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completedat"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "dur": {
+            "default": "",
+            "title": "Dur",
+            "type": "string"
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durationms"
+          },
+          "hasAudio": {
+            "default": false,
+            "title": "Hasaudio",
+            "type": "boolean"
+          },
+          "hasImage": {
+            "default": false,
+            "title": "Hasimage",
+            "type": "boolean"
+          },
+          "imageUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imageurl"
+          },
+          "pendingCount": {
+            "default": 0,
+            "title": "Pendingcount",
+            "type": "integer"
+          },
+          "personSummaries": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureHistoryPersonSummaryDto"
+            },
+            "title": "Personsummaries",
+            "type": "array"
+          },
+          "routeMode": {
+            "$ref": "#/components/schemas/RouteMode"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CaptureSource"
+          },
+          "splits": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureHistorySplitDto"
+            },
+            "title": "Splits",
+            "type": "array"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CaptureStatus"
+          },
+          "transcript": {
+            "default": "",
+            "title": "Transcript",
+            "type": "string"
+          },
+          "transcriptHtml": {
+            "default": "",
+            "title": "Transcripthtml",
+            "type": "string"
+          },
+          "undoDeadline": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undodeadline"
+          }
+        },
+        "required": [
+          "captureId",
+          "source",
+          "routeMode",
+          "status",
+          "createdAt"
+        ],
+        "title": "CaptureHistoryItemDto",
+        "type": "object"
+      },
+      "CaptureHistoryPersonSummaryDto": {
+        "additionalProperties": false,
+        "properties": {
+          "monogram": {
+            "title": "Monogram",
+            "type": "string"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "personName": {
+            "title": "Personname",
+            "type": "string"
+          },
+          "slipCount": {
+            "title": "Slipcount",
+            "type": "integer"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          }
+        },
+        "required": [
+          "personId",
+          "personName",
+          "tier",
+          "monogram",
+          "slipCount"
+        ],
+        "title": "CaptureHistoryPersonSummaryDto",
+        "type": "object"
+      },
+      "CaptureHistorySplitDto": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "factIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Factids",
+            "type": "array"
+          },
+          "glanceHint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Glancehint"
+          },
+          "happenedOn": {
+            "title": "Happenedon",
+            "type": "string"
+          },
+          "hasMedia": {
+            "default": false,
+            "title": "Hasmedia",
+            "type": "boolean"
+          },
+          "inboxItemId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inboxitemid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RecordKind"
+          },
+          "materialId": {
+            "format": "uuid",
+            "title": "Materialid",
+            "type": "string"
+          },
+          "mediaUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediaurl"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "personName": {
+            "title": "Personname",
+            "type": "string"
+          },
+          "presentation": {
+            "$ref": "#/components/schemas/Presentation",
+            "default": "ink"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "materialId",
+          "personId",
+          "personName",
+          "tier",
+          "kind",
+          "title",
+          "body",
+          "happenedOn"
+        ],
+        "title": "CaptureHistorySplitDto",
+        "type": "object"
+      },
       "CaptureResponse": {
         "additionalProperties": false,
         "properties": {
+          "audioUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audiourl"
+          },
+          "candidatePersons": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureCandidatePersonDto"
+            },
+            "title": "Candidatepersons",
+            "type": "array"
+          },
           "captureId": {
             "format": "uuid",
             "title": "Captureid",
@@ -616,6 +1142,38 @@
               }
             ]
           },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Durationms"
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "extractionMode": {
+            "default": "cloud_llm",
+            "title": "Extractionmode",
+            "type": "string"
+          },
+          "hasAudio": {
+            "default": false,
+            "title": "Hasaudio",
+            "type": "boolean"
+          },
           "inboxItemIds": {
             "items": {
               "format": "uuid",
@@ -623,6 +1181,11 @@
             },
             "title": "Inboxitemids",
             "type": "array"
+          },
+          "needsCloudRefinement": {
+            "default": false,
+            "title": "Needscloudrefinement",
+            "type": "boolean"
           },
           "pendingCount": {
             "default": 0,
@@ -734,6 +1297,22 @@
             ],
             "title": "Glancehint"
           },
+          "happenedOn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Happenedon"
+          },
+          "hasMedia": {
+            "default": false,
+            "title": "Hasmedia",
+            "type": "boolean"
+          },
           "inboxItemId": {
             "anyOf": [
               {
@@ -751,10 +1330,31 @@
             "title": "Isnewperson",
             "type": "boolean"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RecordKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "materialId": {
             "format": "uuid",
             "title": "Materialid",
             "type": "string"
+          },
+          "mediaUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mediaurl"
           },
           "personId": {
             "format": "uuid",
@@ -769,12 +1369,50 @@
             "$ref": "#/components/schemas/Presentation",
             "default": "ink"
           },
+          "selfCorrectedFrom": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selfcorrectedfrom"
+          },
+          "snippet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snippet"
+          },
           "tag": {
             "title": "Tag",
             "type": "string"
           },
           "tier": {
             "$ref": "#/components/schemas/Tier"
+          },
+          "triggerDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggerdate"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
@@ -806,6 +1444,14 @@
       "CaptureUndoResponse": {
         "additionalProperties": false,
         "properties": {
+          "affectedPersonIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Affectedpersonids",
+            "type": "array"
+          },
           "cancelledReminderCount": {
             "title": "Cancelledremindercount",
             "type": "integer"
@@ -1480,6 +2126,39 @@
         "title": "CupidLayout",
         "type": "string"
       },
+      "CursorPage_CaptureHistoryItemDto_": {
+        "additionalProperties": false,
+        "properties": {
+          "hasMore": {
+            "default": false,
+            "title": "Hasmore",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureHistoryItemDto"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "CursorPage[CaptureHistoryItemDto]",
+        "type": "object"
+      },
       "CursorPage_ChatMessageDto_": {
         "additionalProperties": false,
         "properties": {
@@ -1787,6 +2466,21 @@
             "title": "Challengeid",
             "type": "string"
           },
+          "cooldownSeconds": {
+            "default": 0,
+            "title": "Cooldownseconds",
+            "type": "integer"
+          },
+          "delivered": {
+            "default": false,
+            "title": "Delivered",
+            "type": "boolean"
+          },
+          "deliveryStatus": {
+            "default": "dev_bypass",
+            "title": "Deliverystatus",
+            "type": "string"
+          },
           "devOtpCode": {
             "anyOf": [
               {
@@ -1801,6 +2495,11 @@
           "expiresIn": {
             "title": "Expiresin",
             "type": "integer"
+          },
+          "provider": {
+            "default": "noop",
+            "title": "Provider",
+            "type": "string"
           }
         },
         "required": [
@@ -2471,6 +3170,17 @@
             "title": "Displayname",
             "type": "string"
           },
+          "distinguishingCue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distinguishingcue"
+          },
           "monogram": {
             "title": "Monogram",
             "type": "string"
@@ -2781,6 +3491,27 @@
         "title": "InboxResolveResponse",
         "type": "object"
       },
+      "InferredDateRangeDto": {
+        "additionalProperties": false,
+        "properties": {
+          "from": {
+            "format": "date",
+            "title": "From",
+            "type": "string"
+          },
+          "to": {
+            "format": "date",
+            "title": "To",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "InferredDateRangeDto",
+        "type": "object"
+      },
       "LogoutRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3045,6 +3776,18 @@
             ],
             "title": "Happenedon"
           },
+          "personId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personid"
+          },
           "pinned": {
             "anyOf": [
               {
@@ -3102,6 +3845,18 @@
               }
             ],
             "title": "Title"
+          },
+          "triggerDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggerdate"
           }
         },
         "title": "MaterialPatchRequest",
@@ -3785,6 +4540,107 @@
         "title": "PersonPatchRequest",
         "type": "object"
       },
+      "PersonSearchHitDto": {
+        "additionalProperties": false,
+        "properties": {
+          "highlightSnippet": {
+            "default": "",
+            "title": "Highlightsnippet",
+            "type": "string"
+          },
+          "matchKind": {
+            "default": "exact_lexical",
+            "title": "Matchkind",
+            "type": "string"
+          },
+          "matchedFactSnippets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matchedfactsnippets",
+            "type": "array"
+          },
+          "matchedTerms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Matchedterms",
+            "type": "array"
+          },
+          "material": {
+            "$ref": "#/components/schemas/MaterialDto"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "material",
+          "score"
+        ],
+        "title": "PersonSearchHitDto",
+        "type": "object"
+      },
+      "PersonSearchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expandedTerms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expandedterms",
+            "type": "array"
+          },
+          "inferredDateRange": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InferredDateRangeDto"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PersonSearchHitDto"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "scannedCount": {
+            "default": 0,
+            "title": "Scannedcount",
+            "type": "integer"
+          },
+          "searchMode": {
+            "default": "hybrid_lexical",
+            "title": "Searchmode",
+            "type": "string"
+          },
+          "totalMatched": {
+            "default": 0,
+            "title": "Totalmatched",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "personId",
+          "query"
+        ],
+        "title": "PersonSearchResponse",
+        "type": "object"
+      },
       "PersonState": {
         "enum": [
           "active",
@@ -4167,6 +5023,18 @@
               }
             ],
             "title": "Nextleadday"
+          },
+          "nextOccurrenceDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextoccurrencedate"
           },
           "onceDate": {
             "anyOf": [
@@ -4569,6 +5437,162 @@
         "title": "TimeStatus",
         "type": "string"
       },
+      "TimelineBucketDto": {
+        "additionalProperties": false,
+        "properties": {
+          "bucket": {
+            "title": "Bucket",
+            "type": "string"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "coverPhotoUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverphotourl"
+          },
+          "coverRecordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Coverrecordid"
+          },
+          "highlightQuote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highlightquote"
+          },
+          "highlightRecordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Highlightrecordid"
+          },
+          "latestHappenedOn": {
+            "format": "date",
+            "title": "Latesthappenedon",
+            "type": "string"
+          },
+          "month": {
+            "title": "Month",
+            "type": "integer"
+          },
+          "photoCount": {
+            "default": 0,
+            "title": "Photocount",
+            "type": "integer"
+          },
+          "pinnedCount": {
+            "default": 0,
+            "title": "Pinnedcount",
+            "type": "integer"
+          },
+          "voiceCount": {
+            "default": 0,
+            "title": "Voicecount",
+            "type": "integer"
+          },
+          "weeklyCounts": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Weeklycounts",
+            "type": "array"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "bucket",
+          "year",
+          "month",
+          "count",
+          "latestHappenedOn"
+        ],
+        "title": "TimelineBucketDto",
+        "type": "object"
+      },
+      "TimelineBucketsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineBucketDto"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "personId": {
+            "format": "uuid",
+            "title": "Personid",
+            "type": "string"
+          },
+          "totalCount": {
+            "default": 0,
+            "title": "Totalcount",
+            "type": "integer"
+          },
+          "years": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineYearSummaryDto"
+            },
+            "title": "Years",
+            "type": "array"
+          }
+        },
+        "required": [
+          "personId"
+        ],
+        "title": "TimelineBucketsResponse",
+        "type": "object"
+      },
+      "TimelineYearSummaryDto": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "year": {
+            "title": "Year",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "year",
+          "count"
+        ],
+        "title": "TimelineYearSummaryDto",
+        "type": "object"
+      },
       "UpdatePreferencesRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4864,8 +5888,15 @@
       },
       "VoiceIngestResponse": {
         "additionalProperties": false,
-        "description": "Exact V10 `/voice/ingest` compatibility contract + M2 pending/undo/crisis extensions.",
+        "description": "Exact V10 `/voice/ingest` compatibility contract + V2 Spatial Receipt extensions.",
         "properties": {
+          "candidatePersons": {
+            "items": {
+              "$ref": "#/components/schemas/CaptureCandidatePersonDto"
+            },
+            "title": "Candidatepersons",
+            "type": "array"
+          },
           "crisisCard": {
             "anyOf": [
               {
@@ -4875,6 +5906,22 @@
                 "type": "null"
               }
             ]
+          },
+          "errorCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errorcode"
+          },
+          "extractionMode": {
+            "default": "cloud_llm",
+            "title": "Extractionmode",
+            "type": "string"
           },
           "inboxItemIds": {
             "items": {
@@ -4888,6 +5935,11 @@
             "format": "uuid",
             "title": "Jobid",
             "type": "string"
+          },
+          "needsCloudRefinement": {
+            "default": false,
+            "title": "Needscloudrefinement",
+            "type": "boolean"
           },
           "pendingCount": {
             "default": 0,
@@ -4903,6 +5955,11 @@
             },
             "title": "Splits",
             "type": "array"
+          },
+          "transcript": {
+            "default": "",
+            "title": "Transcript",
+            "type": "string"
           },
           "transcriptHtml": {
             "title": "Transcripthtml",
@@ -5325,6 +6382,96 @@
       }
     },
     "/v1/captures": {
+      "get": {
+        "operationId": "list_captures_v1_captures_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 30,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/CaptureSource"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeReverted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Includereverted",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CursorPage_CaptureHistoryItemDto_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List recent captures with live-hydrated slips and signed media URLs",
+        "tags": [
+          "capture"
+        ]
+      },
       "post": {
         "operationId": "create_capture_v1_captures_post",
         "parameters": [
@@ -5395,6 +6542,67 @@
       }
     },
     "/v1/captures/{capture_id}": {
+      "delete": {
+        "operationId": "delete_capture_v1_captures__capture_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureUndoResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete an entire capture batch from Recent Captures (no 5s/30s window restriction)",
+        "tags": [
+          "capture"
+        ]
+      },
       "get": {
         "operationId": "get_capture_v1_captures__capture_id__get",
         "parameters": [
@@ -5441,6 +6649,99 @@
         ]
       }
     },
+    "/v1/captures/{capture_id}/audio": {
+      "get": {
+        "operationId": "get_capture_audio_v1_captures__capture_id__audio_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "uid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Uid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "exp",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Exp"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Sig"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stream decrypted voice capture audio with RFC 9110 Range (206 Partial Content) support",
+        "tags": [
+          "capture"
+        ]
+      }
+    },
     "/v1/captures/{capture_id}/events": {
       "get": {
         "operationId": "stream_capture_events_v1_captures__capture_id__events_get",
@@ -5481,6 +6782,79 @@
           }
         ],
         "summary": "Stream Capture Events",
+        "tags": [
+          "capture"
+        ]
+      }
+    },
+    "/v1/captures/{capture_id}/slips": {
+      "post": {
+        "operationId": "add_slip_to_capture_v1_captures__capture_id__slips_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "capture_id",
+            "required": true,
+            "schema": {
+              "title": "Capture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureAddSlipRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaptureAddSlipResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Add a missed slip to an existing capture batch",
         "tags": [
           "capture"
         ]
@@ -8250,6 +9624,104 @@
               ],
               "title": "Kind"
             }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1900,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pinned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "happened",
+              "enum": [
+                "happened",
+                "created"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8523,6 +9995,186 @@
         ]
       }
     },
+    "/v1/persons/{person_id}/search": {
+      "get": {
+        "operationId": "search_person_materials_v1_persons__person_id__search_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "title": "Person Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/RecordKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pinned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1900,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Month"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeHeld",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Includeheld",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Search Person Materials",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
     "/v1/persons/{person_id}/tier": {
       "patch": {
         "operationId": "transition_person_tier_v1_persons__person_id__tier_patch",
@@ -8594,6 +10246,113 @@
         "summary": "Transition Person Tier",
         "tags": [
           "people"
+        ]
+      }
+    },
+    "/v1/persons/{person_id}/timeline-buckets": {
+      "get": {
+        "operationId": "get_person_timeline_buckets_v1_persons__person_id__timeline_buckets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "title": "Person Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "includeHeld",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Includeheld",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/RecordKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pinned",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pinned"
+            }
+          },
+          {
+            "in": "query",
+            "name": "year",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 2100,
+                  "minimum": 1900,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimelineBucketsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Person Timeline Buckets",
+        "tags": [
+          "memory"
         ]
       }
     },

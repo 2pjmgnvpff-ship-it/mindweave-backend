@@ -10,9 +10,13 @@ import {
   pickMimeType,
   extensionFor,
   levelFromTimeDomain,
+  isSlideUpCancel,
+  CANCEL_DY,
   MIN_HOLD_MS,
   MAX_HOLD_MS,
 } from '../scripts/voice-logic.js';
+import { getSolarTermForMonth, solarTermOnDate, formatLunarDateCn } from '../scripts/lib/solar-terms.js';
+import { createImeGuard } from '../scripts/lib/ime-guard.js';
 
 test('IME guard: Enter sends only when not composing and no Shift', () => {
   assert.equal(shouldSendOnEnter({ key: 'Enter' }), true);
@@ -23,6 +27,33 @@ test('IME guard: Enter sends only when not composing and no Shift', () => {
   assert.equal(shouldSendOnEnter(null), false);
 });
 
+test('lib/ime-guard.js blocks 120ms post-compositionend Enter tail and touch Return', () => {
+  const listeners = {};
+  const fakeTa = { addEventListener: (t, fn) => (listeners[t] = fn), removeEventListener: () => {} };
+  let sends = 0;
+  const guard = createImeGuard(fakeTa, { onSubmit: () => (sends += 1), isTouchDevice: false });
+  listeners.compositionstart();
+  assert.equal(guard.isBlocked(), true);
+  listeners.keydown({ key: 'Enter', isComposing: true, preventDefault() {} });
+  assert.equal(sends, 0);
+  listeners.compositionend();
+  // Immediate Enter right after compositionend (< 120ms Safari WebKit tail) must NOT send!
+  listeners.keydown({ key: 'Enter', isComposing: false, keyCode: 13, preventDefault() {} });
+  assert.equal(sends, 0);
+  guard.destroy();
+});
+
+test('lib/solar-terms.js matches HKO 2026-2027 solar-term dates & formats Chinese lunar dates', () => {
+  assert.equal(solarTermOnDate('2026-02-04'), '立春');
+  assert.equal(solarTermOnDate('2026-06-21'), '夏至');
+  assert.equal(solarTermOnDate('2026-10-23'), '霜降');
+  assert.equal(solarTermOnDate('2026-12-22'), '冬至');
+  assert.equal(solarTermOnDate('2027-02-04'), '立春');
+  assert.equal(getSolarTermForMonth(2026, 11), '立冬');
+  const lunar = formatLunarDateCn(new Date('2026-06-26T00:00:00Z'));
+  assert.ok(lunar.startsWith('农历'));
+});
+
 test('citation label never shows an id and uses Chinese date', () => {
   const label = citationLabel({ materialId: '3f0c-uuid', title: '膝盖疼', happenedOn: '2026-05-12' });
   assert.equal(label, '膝盖疼 · 5月12日');
@@ -31,7 +62,10 @@ test('citation label never shows an id and uses Chinese date', () => {
   assert.equal(formatDateCn('nope'), '');
 });
 
-test('voice min-hold: under 300ms is discarded, nothing written', () => {
+test('voice min-hold & single slide-up cancel (-72px): under 300ms discarded, dy < -72 cancels', () => {
+  assert.equal(CANCEL_DY, -72);
+  assert.equal(isSlideUpCancel(-80), true);
+  assert.equal(isSlideUpCancel(-40), false);
   assert.equal(decideRelease({ zone: 'current', durationMs: 120 }), 'too-short');
   assert.equal(decideRelease({ zone: 'global', durationMs: MIN_HOLD_MS - 1 }), 'too-short');
   assert.equal(decideRelease({ zone: 'current', durationMs: MIN_HOLD_MS }), 'submit');
@@ -39,23 +73,24 @@ test('voice min-hold: under 300ms is discarded, nothing written', () => {
   assert.equal(decideRelease({ zone: 'current', durationMs: NaN }), 'too-short');
 });
 
-test('voice zones: up = global, right/default = current, far = cancel', () => {
+test('voice zones: singleCancel defaults clean & routeFor preserves global vs current', () => {
   assert.equal(computeZone(0, 0), 'current');
-  assert.equal(computeZone(10, 5), 'current');
-  assert.equal(computeZone(0, 120), 'global');
-  assert.equal(computeZone(-30, 100), 'global');
-  assert.equal(computeZone(120, 20), 'current');
-  assert.equal(computeZone(160, 160), 'cancel');
-  assert.equal(computeZone(0, 200), 'cancel');
-});
-
-test('directory view defaults to global and never files to an arbitrary person', () => {
-  assert.equal(computeZone(0, 0, { directory: true }), 'global');
-  assert.equal(computeZone(120, 10, { directory: true }), 'global');
+  assert.equal(computeZone(0, 80, { singleCancel: true }), 'cancel');
   assert.deepEqual(routeFor('current', { activePersonId: 'p1', directory: true }), { routeMode: 'global', activePersonId: null });
   assert.deepEqual(routeFor('current', { activePersonId: 'p1' }), { routeMode: 'current', activePersonId: 'p1' });
   assert.deepEqual(routeFor('current', {}), { routeMode: 'global', activePersonId: null });
   assert.equal(routeFor('cancel', { activePersonId: 'p1' }), null);
+});
+
+test('voice-fsm.js enforces strict B4 single-session mutex and playback preemption', async () => {
+  const { voiceFsm } = await import('../scripts/voice-fsm.js');
+  const pb = voiceFsm.acquire('playback');
+  assert.ok(pb > 0);
+  assert.equal(voiceFsm.getState().activeSource, 'playback');
+  // Second playback blocked while active
+  assert.equal(voiceFsm.acquire('playback'), null);
+  voiceFsm.releasePlayback();
+  assert.equal(voiceFsm.getState().activeSource, 'none');
 });
 
 test('timer supports more than 59 seconds and caps at 120s', () => {

@@ -61,6 +61,7 @@ class MaterialDto(CamelModel):
 
 class MaterialCreateRequest(CamelModel):
     id: UUID | None = None
+    capture_id: UUID | None = None
     kind: RecordKind = RecordKind.NOTE
     title: str = Field(min_length=1, max_length=160)
     body: str = Field(min_length=1, max_length=10000)
@@ -72,13 +73,68 @@ class MaterialCreateRequest(CamelModel):
 
 
 class MaterialPatchRequest(CamelModel):
+    person_id: UUID | None = None
     title: str | None = Field(default=None, min_length=1, max_length=160)
     body: str | None = Field(default=None, min_length=1, max_length=10000)
     snippet: str | None = Field(default=None, max_length=300)
     stamp_code: str | None = Field(default=None, max_length=64)
     happened_on: date | None = None
+    trigger_date: date | None = None
     pinned: bool | None = None
     review_state: RecordReviewState | None = None
+
+
+class TimelineYearSummaryDto(CamelModel):
+    year: int
+    count: int
+
+
+class TimelineBucketDto(CamelModel):
+    bucket: str
+    year: int
+    month: int
+    count: int
+    weekly_counts: list[int] = Field(default_factory=lambda: [0, 0, 0, 0])
+    photo_count: int = 0
+    voice_count: int = 0
+    pinned_count: int = 0
+    latest_happened_on: date
+    cover_record_id: UUID | None = None
+    cover_photo_url: str | None = None
+    highlight_record_id: UUID | None = None
+    highlight_quote: str | None = None
+
+
+class TimelineBucketsResponse(CamelModel):
+    person_id: UUID
+    total_count: int = 0
+    years: list[TimelineYearSummaryDto] = Field(default_factory=list)
+    buckets: list[TimelineBucketDto] = Field(default_factory=list)
+
+
+class InferredDateRangeDto(CamelModel):
+    from_date: date = Field(alias="from", serialization_alias="from")
+    to_date: date = Field(alias="to", serialization_alias="to")
+
+
+class PersonSearchHitDto(CamelModel):
+    material: MaterialDto
+    score: float
+    match_kind: str = "exact_lexical"
+    matched_terms: list[str] = Field(default_factory=list)
+    highlight_snippet: str = ""
+    matched_fact_snippets: list[str] = Field(default_factory=list)
+
+
+class PersonSearchResponse(CamelModel):
+    person_id: UUID
+    query: str
+    search_mode: str = "hybrid_lexical"
+    inferred_date_range: InferredDateRangeDto | None = None
+    expanded_terms: list[str] = Field(default_factory=list)
+    total_matched: int = 0
+    scanned_count: int = 0
+    items: list[PersonSearchHitDto] = Field(default_factory=list)
 
 
 class FactDto(CamelModel):
@@ -152,6 +208,7 @@ class InboxCandidatePersonDto(CamelModel):
     monogram: str
     tier: Tier
     role_tag: str = ""
+    distinguishing_cue: str | None = None
     state: PersonState = PersonState.ACTIVE
 
 

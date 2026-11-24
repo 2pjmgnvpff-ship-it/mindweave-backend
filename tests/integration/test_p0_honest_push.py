@@ -58,6 +58,10 @@ def test_summarize_push_receipts_never_counts_log_only_as_delivered() -> None:
 def test_log_only_push_adapters_are_a_startup_error_outside_dev(environment: str) -> None:
     prod_safe = {
         "ai_primary_provider": "deepseek",
+        "deepseek_api_key": "sk-test-valid",
+        "email_provider": "resend",
+        "resend_api_key": "re_test_valid",
+        "email_from_address": "noreply@mail.mindweave.app",
         "kek_hex": "ab" * 32,
         "jwt_secret": "x" * 48,
         "allow_dev_mock_apple_auth": False,

@@ -68,7 +68,7 @@ async def test_ai_calls_persisted_with_zero_pii_and_strict_rls_isolation(
             ),
             session=session_a,
         )
-        assert prompt_ver == "extract_record@1.2.0"
+        assert prompt_ver == "extract_record@1.3.0"
         assert len(ext_out.facts) >= 1
 
         chat_out, chat_ver, _ = await gw.generate_companion_reply(
@@ -89,7 +89,7 @@ async def test_ai_calls_persisted_with_zero_pii_and_strict_rls_isolation(
             ),
             session=session_a,
         )
-        assert chat_ver == "ask_relationship@1.3.0"
+        assert chat_ver == "ask_relationship@1.4.0"
         assert chat_out.cited_record_ids == [rec_a_id]
 
         # Streaming reply also records zero-PII metering row

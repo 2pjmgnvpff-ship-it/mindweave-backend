@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from starlette.datastructures import FormData, UploadFile
 
@@ -31,6 +32,8 @@ from mindweave.modules.memory.application.dto import (
     MaterialCreateRequest,
     MaterialDto,
     MaterialPatchRequest,
+    PersonSearchResponse,
+    TimelineBucketsResponse,
 )
 from mindweave.modules.memory.application.service import MemoryService
 from mindweave.modules.memory.infra.repository import expire_stale_venting_items
@@ -44,7 +47,81 @@ from mindweave.shared.scopes import UserScope
 
 router = APIRouter(tags=["memory"])
 
-__all__ = ["expire_stale_venting_items", "router"]
+__all__ = ["build_range_media_response", "expire_stale_venting_items", "router"]
+
+
+def build_range_media_response(
+    plaintext: bytes,
+    content_type: str,
+    range_header: str | None,
+) -> Response:
+    """Build RFC 9110 `200`/`206 Partial Content`/`416` media response for iOS Safari & WKWebView."""
+    total = len(plaintext)
+    base_headers = {
+        "Cache-Control": "private, no-store",
+        "Accept-Ranges": "bytes",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if not range_header or not range_header.strip().lower().startswith("bytes="):
+        return Response(
+            content=plaintext,
+            status_code=200,
+            media_type=content_type,
+            headers={**base_headers, "Content-Length": str(total)},
+        )
+
+    if total == 0:
+        return Response(
+            status_code=416,
+            headers={**base_headers, "Content-Range": "bytes */0"},
+        )
+
+    spec = range_header.strip()[6:].split(",", 1)[0].strip()
+    start_s, sep, end_s = spec.partition("-")
+    if not sep:
+        return Response(
+            status_code=416,
+            headers={**base_headers, "Content-Range": f"bytes */{total}"},
+        )
+    try:
+        if not start_s and end_s:
+            suffix = int(end_s)
+            if suffix <= 0:
+                raise ValueError("invalid suffix")
+            start = max(0, total - suffix)
+            end = total - 1
+        elif start_s and not end_s:
+            start = int(start_s)
+            end = total - 1
+        elif start_s and end_s:
+            start = int(start_s)
+            end = int(end_s)
+        else:
+            raise ValueError("empty range")
+    except ValueError:
+        return Response(
+            status_code=416,
+            headers={**base_headers, "Content-Range": f"bytes */{total}"},
+        )
+
+    if start < 0 or start >= total or end < start:
+        return Response(
+            status_code=416,
+            headers={**base_headers, "Content-Range": f"bytes */{total}"},
+        )
+
+    end = min(end, total - 1)
+    chunk = plaintext[start : end + 1]
+    return Response(
+        content=chunk,
+        status_code=206,
+        media_type=content_type,
+        headers={
+            **base_headers,
+            "Content-Range": f"bytes {start}-{end}/{total}",
+            "Content-Length": str(len(chunk)),
+        },
+    )
 
 
 def _reject_null_bytes_in_form(form: FormData) -> None:
@@ -96,6 +173,7 @@ async def _parse_material_create_request(
                 break
 
         raw_id = form.get("id")
+        raw_capture_id = form.get("captureId") or form.get("capture_id")
         raw_kind = form.get("kind") or ("photo" if photo_bytes is not None else "note")
         raw_title = form.get("title")
         raw_body = form.get("body")
@@ -107,6 +185,7 @@ async def _parse_material_create_request(
         try:
             dto = MaterialCreateRequest(
                 id=UUID(str(raw_id)) if raw_id else None,
+                capture_id=UUID(str(raw_capture_id)) if raw_capture_id else None,
                 kind=RecordKind(str(raw_kind)),
                 title=str(raw_title or ""),
                 body=str(raw_body or ""),
@@ -128,8 +207,62 @@ async def _parse_material_create_request(
 
 
 # ============================================================================
-# Materials Endpoints
+# Materials, Timeline Buckets & Encrypted Hybrid Search Endpoints
 # ============================================================================
+
+
+@router.get("/persons/{person_id}/timeline-buckets", response_model=TimelineBucketsResponse)
+async def get_person_timeline_buckets(
+    person_id: str,
+    include_held: bool = Query(default=False, alias="includeHeld"),
+    kind: RecordKind | None = Query(default=None),
+    pinned: bool | None = Query(default=None),
+    year: int | None = Query(default=None, ge=1900, le=2100),
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> TimelineBucketsResponse:
+    pid = parse_uuid_param(person_id, field_name="person_id")
+    svc = MemoryService(container)
+    return await svc.get_person_timeline_buckets(
+        scope=scope,
+        person_id=pid,
+        include_held=include_held,
+        kind=kind,
+        pinned=pinned,
+        year=year,
+    )
+
+
+@router.get("/persons/{person_id}/search", response_model=PersonSearchResponse)
+async def search_person_materials(
+    person_id: str,
+    q: str = Query(min_length=1, max_length=200),
+    kind: RecordKind | None = Query(default=None),
+    pinned: bool | None = Query(default=None),
+    year: int | None = Query(default=None, ge=1900, le=2100),
+    month: str | None = Query(default=None),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    include_held: bool = Query(default=False, alias="includeHeld"),
+    limit: int = Query(default=20, ge=1, le=50),
+    scope: UserScope = Depends(get_current_user_scope),
+    container: AppContainer = Depends(get_container),
+) -> PersonSearchResponse:
+    pid = parse_uuid_param(person_id, field_name="person_id")
+    svc = MemoryService(container)
+    return await svc.search_person_materials(
+        scope=scope,
+        person_id=pid,
+        query=q,
+        kind=kind,
+        pinned=pinned,
+        year=year,
+        month=month,
+        date_from=date_from,
+        date_to=date_to,
+        include_held=include_held,
+        limit=limit,
+    )
 
 
 @router.get("/persons/{person_id}/materials", response_model=CursorPage[MaterialDto])
@@ -139,6 +272,12 @@ async def list_person_materials(
     limit: int = Query(default=20, ge=1, le=100),
     include_held: bool = Query(default=False, alias="includeHeld"),
     kind: RecordKind | None = Query(default=None),
+    month: str | None = Query(default=None),
+    year: int | None = Query(default=None, ge=1900, le=2100),
+    date_from: date | None = Query(default=None, alias="from"),
+    date_to: date | None = Query(default=None, alias="to"),
+    pinned: bool | None = Query(default=None),
+    sort: Literal["happened", "created"] = Query(default="happened"),
     scope: UserScope = Depends(get_current_user_scope),
     container: AppContainer = Depends(get_container),
 ) -> CursorPage[MaterialDto]:
@@ -151,6 +290,12 @@ async def list_person_materials(
         limit=limit,
         include_held=include_held,
         kind=kind,
+        month=month,
+        year=year,
+        date_from=date_from,
+        date_to=date_to,
+        pinned=pinned,
+        sort=sort,
     )
 
 
@@ -278,19 +423,17 @@ async def delete_material(
 @router.get("/materials/{material_id}/media")
 async def stream_material_media(
     material_id: str,
+    request: Request,
     scope: UserScope = Depends(get_media_user_scope),
     container: AppContainer = Depends(get_container),
-) -> StreamingResponse:
+) -> Response:
     mid = parse_uuid_param(material_id, field_name="material_id")
     svc = MemoryService(container)
     plaintext, content_type = await svc.get_material_media(scope=scope, material_id=mid)
-    return StreamingResponse(
-        iter([plaintext]),
-        media_type=content_type,
-        headers={
-            "Cache-Control": "private, no-store",
-            "Content-Length": str(len(plaintext)),
-        },
+    return build_range_media_response(
+        plaintext=plaintext,
+        content_type=content_type,
+        range_header=request.headers.get("range"),
     )
 
 

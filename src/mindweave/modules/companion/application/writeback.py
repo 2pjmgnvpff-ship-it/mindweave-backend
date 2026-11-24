@@ -67,13 +67,19 @@ def _resolve_gateway(
     container: AppContainer,
     explicit: ModelGatewayPort | None = None,
 ) -> ModelGatewayPort:
-    if explicit is not None:
-        return explicit
-    for key in ("model_gateway", "gateway", "ai_gateway"):
-        candidate = container.extras.get(key)
-        if candidate is not None:
-            return candidate  # type: ignore[no-any-return]
-    raise UpstreamAIError("ModelGatewayPort is not configured on AppContainer")
+    gw: ModelGatewayPort | None = explicit
+    if gw is None:
+        for key in ("model_gateway", "gateway", "ai_gateway"):
+            candidate = container.extras.get(key)
+            if candidate is not None:
+                gw = candidate
+                break
+    if gw is None:
+        raise UpstreamAIError("ModelGatewayPort is not configured on AppContainer")
+    meter = getattr(gw, "meter", None)
+    if meter is not None and hasattr(meter, "bind_db"):
+        meter.bind_db(container.db)
+    return gw
 
 
 def _parse_iso_date(raw: str | None) -> date | None:
@@ -100,6 +106,7 @@ async def _load_normalized_records_for_person(
     dek: bytes,
     user_id: UUID,
     person_id: UUID,
+    limit: int = 40,
 ) -> dict[str, RecordRow]:
     rows = (
         await session.scalars(
@@ -109,7 +116,8 @@ async def _load_normalized_records_for_person(
                 RecordRow.person_id == person_id,
                 RecordRow.deleted_at.is_(None),
             )
-            .order_by(RecordRow.created_at.asc(), RecordRow.id.asc())
+            .order_by(RecordRow.created_at.desc(), RecordRow.id.desc())
+            .limit(limit)
         )
     ).all()
     by_norm: dict[str, RecordRow] = {}

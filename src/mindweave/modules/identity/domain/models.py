@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 from mindweave.shared.enums import ConsentKind
@@ -54,6 +55,16 @@ class RefreshTokenState(StrEnum):
     VALID = "valid"
     EXPIRED = "expired"
     REPLAY_DETECTED = "replay_detected"
+
+
+@dataclass(frozen=True, slots=True)
+class EmailDeliveryReceipt:
+    """Honest provider delivery receipt for an issued email OTP."""
+
+    delivered: bool
+    provider: str
+    delivery_status: Literal["delivered", "dev_bypass"]
+    provider_message_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

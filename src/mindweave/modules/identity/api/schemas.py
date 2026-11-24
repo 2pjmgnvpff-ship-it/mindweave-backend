@@ -34,6 +34,10 @@ class EmailOtpRequest(CamelModel):
 class EmailOtpChallengeResponse(CamelModel):
     challenge_id: UUID
     expires_in: int
+    delivered: bool = False
+    delivery_status: str = "dev_bypass"
+    provider: str = "noop"
+    cooldown_seconds: int = 0
     dev_otp_code: str | None = None
 
 

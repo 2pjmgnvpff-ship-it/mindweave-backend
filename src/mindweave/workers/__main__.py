@@ -14,6 +14,7 @@ from mindweave.core.config import get_settings
 from mindweave.core.dependencies import AppContainer
 from mindweave.core.logging import configure_logging, get_logger
 from mindweave.core.orm import (
+    CaptureRow,
     ExportJobRow,
     FactRow,
     IdempotencyKeyRow,
@@ -22,12 +23,14 @@ from mindweave.core.orm import (
     RecordRow,
     UserRow,
 )
+from mindweave.core.storage import filter_unreferenced_blob_keys
 from mindweave.modules.capture.application.service import handle_process_capture_job
 from mindweave.modules.companion.application.writeback import register_companion_worker_handlers
 from mindweave.modules.data_rights.application.service import build_export_archive
 from mindweave.modules.memory.application.service import MemoryService
 from mindweave.modules.reminders.application.service import scan_and_deliver_due_reminders
 from mindweave.shared.enums import (
+    CaptureStatus,
     ExportStatus,
     FactStatus,
     InboxItemKind,
@@ -124,6 +127,7 @@ async def _default_purge_soft_deleted(container: AppContainer) -> None:
     now = _ensure_utc(container.clock.now())
     cutoff = now - timedelta(days=container.settings.soft_delete_retention_days)
     blob_keys_to_delete: set[str] = set()
+    safe_keys_to_delete: list[str] = []
     async with container.db.system_session() as sys_sess:
         await sys_sess.execute(delete(IdempotencyKeyRow).where(IdempotencyKeyRow.expires_at <= now))
 
@@ -163,6 +167,31 @@ async def _default_purge_soft_deleted(container: AppContainer) -> None:
         for key in expired_record_keys:
             if key:
                 blob_keys_to_delete.add(key)
+
+        stale_captures = (
+            await sys_sess.execute(
+                select(
+                    CaptureRow.id,
+                    CaptureRow.audio_object_key,
+                    CaptureRow.image_object_key,
+                ).where(
+                    CaptureRow.status == CaptureStatus.REVERTED.value,
+                    CaptureRow.created_at <= cutoff,
+                )
+            )
+        ).all()
+        if stale_captures:
+            stale_capture_ids = [cid for cid, _, _ in stale_captures]
+            for _, audio_key, image_key in stale_captures:
+                if audio_key:
+                    blob_keys_to_delete.add(audio_key)
+                if image_key:
+                    blob_keys_to_delete.add(image_key)
+            await sys_sess.execute(
+                update(CaptureRow)
+                .where(CaptureRow.id.in_(stale_capture_ids))
+                .values(audio_object_key=None, image_object_key=None)
+            )
 
         expired_persons = (
             await sys_sess.execute(
@@ -220,7 +249,11 @@ async def _default_purge_soft_deleted(container: AppContainer) -> None:
             delete(UserRow).where(UserRow.deleted_at.is_not(None), UserRow.deleted_at <= cutoff)
         )
 
-    for key in sorted(blob_keys_to_delete):
+        # Reference-count check AFTER row deletions so shared voice audio blobs still referenced
+        # by a sibling non-deleted RecordRow or active CaptureRow are NEVER destroyed!
+        safe_keys_to_delete = await filter_unreferenced_blob_keys(sys_sess, blob_keys_to_delete)
+
+    for key in safe_keys_to_delete:
         await container.storage.delete_object(object_key=key)
     for uid in expired_user_ids:
         await container.storage.delete_user_prefix(user_id=uid)

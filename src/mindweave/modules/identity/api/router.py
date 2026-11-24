@@ -40,8 +40,19 @@ router = APIRouter(tags=["identity"])
 _optional_bearer = HTTPBearer(auto_error=False)
 
 
-def _client_ip(request: Request) -> str | None:
+def _trusted_client_ip(request: Request, *, trusted_proxy_hops: int = 0) -> str | None:
+    """Extract client IP honoring configured trusted_proxy_hops (0=direct, 1=Cloud Run, 2=GCLB)."""
+    if trusted_proxy_hops > 0:
+        xff = request.headers.get("x-forwarded-for", "")
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-trusted_proxy_hops] if len(parts) >= trusted_proxy_hops else parts[0]
     return request.client.host if request.client is not None else None
+
+
+def _client_ip(request: Request, container: AppContainer | None = None) -> str | None:
+    hops = container.settings.trusted_proxy_hops if container is not None else 0
+    return _trusted_client_ip(request, trusted_proxy_hops=hops)
 
 
 @router.post("/auth/apple", response_model=AuthTokensResponse)
@@ -55,7 +66,7 @@ async def auth_apple(
         identity_token=payload.identity_token,
         authorization_code=payload.authorization_code,
         display_email=payload.display_email,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     return AuthTokensResponse(
         user_id=result.user_id,
@@ -66,6 +77,28 @@ async def auth_apple(
     )
 
 
+async def _handle_request_email_otp(
+    payload: EmailOtpRequest,
+    request: Request,
+    container: AppContainer,
+) -> EmailOtpChallengeResponse:
+    service = IdentityService(container)
+    result = await service.request_email_otp(
+        email=payload.email,
+        purpose=payload.purpose,
+        client_ip=_client_ip(request, container),
+    )
+    return EmailOtpChallengeResponse(
+        challenge_id=result.challenge_id,
+        expires_in=result.expires_in,
+        delivered=result.delivered,
+        delivery_status=result.delivery_status,
+        provider=result.provider,
+        cooldown_seconds=result.cooldown_seconds,
+        dev_otp_code=result.dev_otp_code,
+    )
+
+
 @router.post(
     "/auth/email/otp:request",
     response_model=EmailOtpChallengeResponse,
@@ -73,18 +106,24 @@ async def auth_apple(
 )
 async def request_email_otp(
     payload: EmailOtpRequest,
+    request: Request,
     container: AppContainer = Depends(get_container),
 ) -> EmailOtpChallengeResponse:
-    service = IdentityService(container)
-    result = await service.request_email_otp(
-        email=payload.email,
-        purpose=payload.purpose,
-    )
-    return EmailOtpChallengeResponse(
-        challenge_id=result.challenge_id,
-        expires_in=result.expires_in,
-        dev_otp_code=result.dev_otp_code,
-    )
+    return await _handle_request_email_otp(payload, request, container)
+
+
+@router.post(
+    "/auth/email/request-otp",
+    response_model=EmailOtpChallengeResponse,
+    response_model_exclude_none=True,
+    include_in_schema=False,
+)
+async def request_email_otp_alias(
+    payload: EmailOtpRequest,
+    request: Request,
+    container: AppContainer = Depends(get_container),
+) -> EmailOtpChallengeResponse:
+    return await _handle_request_email_otp(payload, request, container)
 
 
 @router.post(
@@ -107,7 +146,7 @@ async def verify_email_otp(
         email=payload.email,
         code=payload.code,
         authenticated_scope=authenticated_scope,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     if isinstance(result, AuthSessionResult):
         return AuthTokensResponse(
@@ -134,7 +173,7 @@ async def reauth_apple(
     result = await service.reauth_apple(
         scope,
         identity_token=payload.identity_token,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     return ReauthTokenResponse(
         reauth_token=result.reauth_token,
@@ -151,7 +190,7 @@ async def refresh_tokens(
     service = IdentityService(container)
     result = await service.refresh_session(
         refresh_token=payload.refresh_token,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     return RefreshTokensResponse(
         access_token=result.access_token,
@@ -171,7 +210,7 @@ async def logout(
     await service.logout(
         scope,
         refresh_token=payload.refresh_token if payload is not None else None,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     return LogoutResponse(ok=True)
 
@@ -205,7 +244,7 @@ async def record_my_consent(
         policy_version=payload.policy_version,
         granted=payload.granted,
         serializer=_serialize,
-        client_ip=_client_ip(request),
+        client_ip=_client_ip(request, container),
     )
     if hit is not None:
         return ConsentItemResponse.model_validate(hit.response_body)

@@ -1,16 +1,10 @@
-// dom.js — tiny DOM helpers. All dynamic text goes through textContent / text nodes.
+// dom.js — tiny DOM helpers. All dynamic text goes through textContent / text nodes (<= 160L).
 // Never assign HTML strings with data. The single exception is `svg()`, which only accepts
 // constant SVG markup that ships with the app (see static-svg comment below).
 
 const FORBIDDEN_PROPS = new Set(['innerHTML', 'outerHTML', 'insertAdjacentHTML']);
+const loadedStyles = new Map();
 
-/**
- * h('button', { class: 'x', text: '保存', onClick }, child, 'text', [more])
- * - `text` sets textContent
- * - `style` may be an object of CSS properties (custom props allowed)
- * - `dataset` sets data-* attributes
- * - on* functions become event listeners
- */
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
   applyProps(el, props || {});
@@ -91,10 +85,6 @@ export function decodeEntities(value) {
   return String(value ?? '').replace(/&(lt|gt|amp|quot|#39|#x27);/g, (m) => ENTITY_MAP[m] || m);
 }
 
-/**
- * The backend returns transcriptHtml that may contain only <mark> tags (already escaped).
- * We never trust it as HTML: split on <mark>…</mark> and build text nodes ourselves.
- */
 export function markedText(html) {
   const frag = document.createDocumentFragment();
   const source = String(html ?? '');
@@ -120,9 +110,6 @@ function stripTags(s) {
   return decodeEntities(String(s).replace(/<[^>]*>/g, ''));
 }
 
-/**
- * Wrap a constant SVG string (shipped with the app, never user data) in a span.
- */
 export function svg(staticMarkup, className) {
   const span = document.createElement('span');
   if (className) span.className = className;
@@ -135,14 +122,38 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 export function prefersReducedMotion() {
+  if (typeof document !== 'undefined' && document.documentElement?.classList?.contains('mw-reduce-motion')) {
+    return true;
+  }
   return Boolean(globalThis.matchMedia && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 
-/** Restart a CSS animation class on an element. */
 export function replayClass(el, cls, ms = 700) {
   if (!el) return;
   el.classList.remove(cls);
   void el.offsetWidth;
   el.classList.add(cls);
   setTimeout(() => el.classList.remove(cls), ms);
+}
+
+/** Idempotently async-loads non-critical CSS (chat.css, sheets.css) on demand. */
+export function ensureStyle(href) {
+  if (!href || typeof document === 'undefined') return Promise.resolve();
+  if (loadedStyles.has(href)) return loadedStyles.get(href);
+  const existing = document.querySelector(`link[rel="stylesheet"][href="${href}"]`);
+  if (existing) {
+    const ready = Promise.resolve();
+    loadedStyles.set(href, ready);
+    return ready;
+  }
+  const promise = new Promise((resolve) => {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.onload = () => resolve();
+    link.onerror = () => resolve();
+    document.head.appendChild(link);
+  });
+  loadedStyles.set(href, promise);
+  return promise;
 }

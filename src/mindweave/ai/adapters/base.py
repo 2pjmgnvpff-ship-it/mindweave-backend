@@ -34,6 +34,8 @@ class AdapterCallRequest:
     media_bytes: bytes | None = None
     media_mime_type: str | None = None
     structured_context: dict[str, Any] | None = None
+    thinking_level: str | None = None
+    max_output_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,9 @@ class AdapterCallResponse:
     model: str
     input_tokens: int
     output_tokens: int
+    thoughts_tokens: int = 0
+    cached_tokens: int = 0
+    finish_reason: str | None = None
 
 
 class ProviderAdapter(Protocol):

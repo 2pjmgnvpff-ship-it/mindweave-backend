@@ -29,7 +29,7 @@ from mindweave.core.orm import (
 )
 from mindweave.core.security import hash_contact_lookup
 from mindweave.modules.identity.api.router import router as identity_router
-from mindweave.modules.identity.domain.models import OtpPurpose
+from mindweave.modules.identity.domain.models import EmailDeliveryReceipt, OtpPurpose
 from mindweave.modules.preferences.api.router import router as preferences_router
 from mindweave.shared.scopes import UserScope
 
@@ -47,9 +47,16 @@ class _CaptureOtpSender:
         otp_code: str,
         purpose: OtpPurpose,
         expires_in_seconds: int,
-    ) -> None:
+        challenge_id: UUID | None = None,
+    ) -> EmailDeliveryReceipt:
         del expires_in_seconds
         self.deliveries.append((email, otp_code, purpose))
+        return EmailDeliveryReceipt(
+            delivered=True,
+            provider="test_capture",
+            delivery_status="delivered",
+            provider_message_id=f"cap-{challenge_id}" if challenge_id else "cap-test",
+        )
 
 
 def _build_test_app(container: AppContainer) -> FastAPI:

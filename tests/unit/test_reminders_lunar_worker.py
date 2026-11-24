@@ -242,7 +242,7 @@ async def test_privacy_desensitized_push_copy_and_anti_parasocial_guardrails() -
         rule=ReminderRule.YEARLY,
         reminder_id=rid,
     )
-    assert copy_today.title == "心络 · 今日有一份心意备忘"
+    assert copy_today.title == "心络 · 今日有一条重要提醒"
     assert copy_today.body == "点开查看你记下的重要日子与准备清单"
     assert copy_today["deeplinkPath"] == f"/reminders/{rid}"
     validate_push_copy_safety(

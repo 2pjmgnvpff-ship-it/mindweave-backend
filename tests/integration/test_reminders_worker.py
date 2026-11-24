@@ -559,7 +559,7 @@ async def test_reminders_devices_api_lunar_delivery_zero_duplicates_rls_and_tele
         assert pushed.lead_day == 0
         assert "沈清秋" not in pushed.title and "沈清秋" not in pushed.body
         assert "银杏书签" not in pushed.title and "银杏书签" not in pushed.body
-        assert pushed.title == "心络 · 今日有一份心意备忘"
+        assert pushed.title == "心络 · 今日有一条重要提醒"
 
         # ONCE reminder with no remaining future slots transitioned to status='completed'
         completed_list = await client.get(

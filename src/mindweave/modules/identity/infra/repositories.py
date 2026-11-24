@@ -110,14 +110,42 @@ class IdentitySystemRepository:
         *,
         email_hmac: bytes,
         window_start: datetime,
+        exclude_failed: bool = False,
     ) -> int:
-        """Count all OTP challenges issued in the rate-limit window regardless of consumed_at."""
+        """Count OTP challenges issued in the rate-limit window."""
         stmt = select(func.count(EmailOtpChallengeRow.id)).where(
             EmailOtpChallengeRow.email_hmac == email_hmac,
             EmailOtpChallengeRow.created_at >= window_start,
         )
+        if exclude_failed:
+            stmt = stmt.where(EmailOtpChallengeRow.delivery_status != "failed")
         count = await session.scalar(stmt)
         return int(count or 0)
+
+    async def get_latest_otp_challenge_by_statuses(
+        self,
+        session: AsyncSession,
+        *,
+        email_hmac: bytes,
+        statuses: tuple[str, ...],
+        window_start: datetime,
+        purpose: OtpPurpose | None = None,
+    ) -> EmailOtpChallengeRow | None:
+        """Return the most recent OTP challenge matching statuses (and optional purpose) in window."""
+        conditions = [
+            EmailOtpChallengeRow.email_hmac == email_hmac,
+            EmailOtpChallengeRow.delivery_status.in_(statuses),
+            EmailOtpChallengeRow.created_at >= window_start,
+        ]
+        if purpose is not None:
+            conditions.append(EmailOtpChallengeRow.purpose == purpose.value)
+        stmt = (
+            select(EmailOtpChallengeRow)
+            .where(*conditions)
+            .order_by(EmailOtpChallengeRow.created_at.desc())
+            .limit(1)
+        )
+        return await session.scalar(stmt)
 
     async def invalidate_unconsumed_otp_challenges(
         self,
@@ -126,16 +154,19 @@ class IdentitySystemRepository:
         email_hmac: bytes,
         purpose: OtpPurpose,
         now: datetime,
+        exclude_challenge_id: UUID | None = None,
     ) -> int:
-        """Mark all prior unconsumed challenges for (email_hmac, purpose) as consumed before re-issuing."""
+        """Mark prior unconsumed non-failed challenges for (email_hmac, purpose) as consumed."""
+        conditions = [
+            EmailOtpChallengeRow.email_hmac == email_hmac,
+            EmailOtpChallengeRow.purpose == purpose.value,
+            EmailOtpChallengeRow.consumed_at.is_(None),
+            EmailOtpChallengeRow.delivery_status != "failed",
+        ]
+        if exclude_challenge_id is not None:
+            conditions.append(EmailOtpChallengeRow.id != exclude_challenge_id)
         result = await session.execute(
-            update(EmailOtpChallengeRow)
-            .where(
-                EmailOtpChallengeRow.email_hmac == email_hmac,
-                EmailOtpChallengeRow.purpose == purpose.value,
-                EmailOtpChallengeRow.consumed_at.is_(None),
-            )
-            .values(consumed_at=now)
+            update(EmailOtpChallengeRow).where(*conditions).values(consumed_at=now)
         )
         await session.flush()
         return int(result.rowcount or 0)  # type: ignore[attr-defined]
@@ -151,6 +182,8 @@ class IdentitySystemRepository:
         max_attempts: int,
         expires_at: datetime,
         now: datetime,
+        delivery_status: str = "pending",
+        delivery_provider: str | None = None,
     ) -> EmailOtpChallengeRow:
         row = EmailOtpChallengeRow(
             id=challenge_id,
@@ -161,11 +194,68 @@ class IdentitySystemRepository:
             max_attempts=max_attempts,
             expires_at=expires_at,
             consumed_at=None,
+            delivery_provider=delivery_provider,
+            delivery_status=delivery_status,
+            provider_message_id=None,
+            delivery_error_code=None,
             created_at=now,
         )
         session.add(row)
         await session.flush()
         return row
+
+    async def finalize_otp_challenge_delivered(
+        self,
+        session: AsyncSession,
+        *,
+        challenge_id: UUID,
+        email_hmac: bytes,
+        purpose: OtpPurpose,
+        delivery_provider: str,
+        delivery_status: str,
+        provider_message_id: str | None,
+        now: datetime,
+    ) -> None:
+        """Mark newly sent challenge delivered and invalidate prior unconsumed valid OTPs."""
+        await session.execute(
+            update(EmailOtpChallengeRow)
+            .where(EmailOtpChallengeRow.id == challenge_id)
+            .values(
+                delivery_provider=delivery_provider,
+                delivery_status=delivery_status,
+                provider_message_id=provider_message_id,
+                delivery_error_code=None,
+            )
+        )
+        await self.invalidate_unconsumed_otp_challenges(
+            session,
+            email_hmac=email_hmac,
+            purpose=purpose,
+            now=now,
+            exclude_challenge_id=challenge_id,
+        )
+
+    async def mark_otp_challenge_failed(
+        self,
+        session: AsyncSession,
+        *,
+        challenge_id: UUID,
+        delivery_provider: str | None,
+        error_code: str,
+        now: datetime,
+    ) -> None:
+        """Mark only the failed attempt row as failed+consumed without touching prior valid OTPs."""
+        await session.execute(
+            update(EmailOtpChallengeRow)
+            .where(EmailOtpChallengeRow.id == challenge_id)
+            .values(
+                delivery_provider=delivery_provider,
+                delivery_status="failed",
+                consumed_at=now,
+                delivery_error_code=error_code[:64],
+            )
+        )
+        await session.flush()
 
     async def get_otp_challenge_for_update(
         self,
@@ -178,6 +268,59 @@ class IdentitySystemRepository:
             .with_for_update()
         )
         return await session.scalar(stmt)
+
+    async def increment_otp_attempts_atomic(
+        self,
+        session: AsyncSession,
+        *,
+        challenge_id: UUID,
+        now: datetime,
+    ) -> int | None:
+        """Atomically increment attempts and lock on max_attempts (prevents CWE-362 brute-force)."""
+        row = (
+            await session.execute(
+                text(
+                    """
+                    UPDATE email_otp_challenges
+                    SET attempts = attempts + 1,
+                        consumed_at = CASE
+                            WHEN attempts + 1 >= max_attempts THEN :now
+                            ELSE consumed_at
+                        END
+                    WHERE id = :id AND consumed_at IS NULL
+                    RETURNING attempts
+                    """
+                ),
+                {"id": challenge_id, "now": now},
+            )
+        ).one_or_none()
+        return int(row[0]) if row is not None else None
+
+    async def consume_otp_challenge_atomic(
+        self,
+        session: AsyncSession,
+        *,
+        challenge_id: UUID,
+        now: datetime,
+    ) -> bool:
+        """Atomically mark a valid challenge consumed on first match (zero double-spend)."""
+        row = (
+            await session.execute(
+                text(
+                    """
+                    UPDATE email_otp_challenges
+                    SET attempts = attempts + 1,
+                        consumed_at = :now
+                    WHERE id = :id
+                      AND consumed_at IS NULL
+                      AND attempts < max_attempts
+                    RETURNING id
+                    """
+                ),
+                {"id": challenge_id, "now": now},
+            )
+        ).one_or_none()
+        return row is not None
 
     async def create_refresh_token(
         self,

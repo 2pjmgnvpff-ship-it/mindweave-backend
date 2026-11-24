@@ -35,7 +35,7 @@ test('colours come only from the palette', () => {
   for (const tier of ['gold', 'silver', 'crystal']) {
     for (let i = 0; i < 30; i++) {
       const d = decorFor({ id: `id-${i}`, date: '2026-01-0' + ((i % 9) + 1), tier });
-      assert.ok(PALETTE.tape[tier].includes(d.tapeColor));
+      assert.equal(d.rotation, 0);
       assert.ok(PALETTE.tab[tier].includes(d.tabColor));
       assert.ok(PALETTE.seal[tier].some(([bg, fg]) => bg === d.sealBg && fg === d.sealColor));
     }

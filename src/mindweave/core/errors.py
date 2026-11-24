@@ -21,13 +21,21 @@ class AppError(Exception):
         detail: str,
         *,
         error_code: str | None = None,
+        status_code: int | None = None,
+        title: str | None = None,
         extensions: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(detail)
         self.detail = detail
         if error_code is not None:
             self.error_code = error_code
+        if status_code is not None:
+            self.status_code = status_code
+        if title is not None:
+            self.title = title
         self.extensions: dict[str, Any] = extensions or {}
+        self.headers: dict[str, str] | None = dict(headers) if headers else None
 
 
 class ValidationFailedError(AppError):
@@ -108,6 +116,12 @@ class UpstreamAIError(AppError):
     title = "AI Provider Unavailable"
 
 
+class EmailDeliveryError(AppError):
+    status_code = 502
+    error_code = "email_delivery_failed"
+    title = "Email Delivery Failed"
+
+
 def problem_response(
     *,
     status_code: int,
@@ -117,6 +131,7 @@ def problem_response(
     instance: str,
     request_id: str | None = None,
     extensions: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     payload: dict[str, Any] = {
         "type": f"https://mindweave.local/problems/{error_code}",
@@ -134,6 +149,7 @@ def problem_response(
         status_code=status_code,
         content=payload,
         media_type="application/problem+json",
+        headers=headers,
     )
 
 
@@ -149,6 +165,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             instance=str(request.url.path),
             request_id=req_id,
             extensions=exc.extensions,
+            headers=exc.headers,
         )
 
     @app.exception_handler(RequestValidationError)

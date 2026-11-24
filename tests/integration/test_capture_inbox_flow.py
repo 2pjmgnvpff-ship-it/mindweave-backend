@@ -897,8 +897,8 @@ async def test_safety_crisis_card_async_sse_and_5s_undo_lifecycle(
         after_get = await client.get(f"/v1/captures/{cap_id}", headers=_auth(token))
         assert after_get.json()["status"] == "reverted"
 
-        # 5d. Undo AFTER 5-second window expires -> 409 undo_window_expired
-        manual_clock.advance(seconds=6)
+        # 5d. Undo AFTER 30-second window expires -> 409 undo_window_expired
+        manual_clock.advance(seconds=31)
         expired_undo = await client.post(
             f"/v1/captures/{c_json['captureId']}:undo",
             headers=_auth(token, idem="undo-expired"),

@@ -155,6 +155,10 @@ class _InMemoryCaptureSession:
         compiled = stmt.compile(dialect=postgresql.dialect())
         return str(compiled), dict(compiled.params)
 
+    async def execute(self, stmt: Any, *_args: Any, **_kwargs: Any) -> None:
+        self.last_statements.append(stmt)
+        return None
+
     async def scalar(self, stmt: Any) -> Any:
         self.last_statements.append(stmt)
         sql, params = self._compile(stmt)
@@ -203,6 +207,8 @@ class _InMemoryCaptureSession:
                 and (cap_id is None or r.capture_id == cap_id)
                 and (pid is None or r.person_id == pid)
             ]
+            if "SELECT records.person_id" in sql:
+                return _ScalarResult([r.person_id for r in rows_rec])
             return _ScalarResult(rows_rec)
         if "FROM inbox_items" in sql:
             cap_id = next((v for k, v in params.items() if k.startswith("capture_id")), None)
@@ -377,6 +383,11 @@ class _FakeGateway:
         return self.extract_fn(payload), "extract_record_v2.0", "fake-unit"
 
 
+class _FakeTokens:
+    def sign_media_path(self, path: str, **_kwargs: Any) -> str:
+        return f"{path}?sig=unit-test"
+
+
 class _FakeContainer:
     def __init__(
         self,
@@ -394,6 +405,7 @@ class _FakeContainer:
         self.clock = clock
         self.storage = _FakeStorage()
         self.idempotency = _FakeIdempotency()
+        self.tokens = _FakeTokens()
         self.extras: dict[str, Any] = {"gateway": gateway}
 
     async def load_user_dek(self, _session: Any, _scope: UserScope) -> bytes:

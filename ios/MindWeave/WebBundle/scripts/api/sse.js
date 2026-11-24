@@ -1,10 +1,12 @@
 // sse.js — POST-based Server-Sent-Events reader (fetch + ReadableStream).
-// EventSource cannot POST or send headers, so we parse `event:` / `data:` frames ourselves.
+// BC3 BUG-CC-6c: enforces a per-read idle watchdog (default 25_000 ms) that resets on
+// every received byte chunk (including `: keep-alive\n\n` heartbeats), avoiding silent hangs.
+
+export const DEFAULT_SSE_IDLE_MS = 25_000;
 
 /**
- * Incremental SSE parser. Feed it text chunks of any size; it emits complete events.
- * Handles \n, \r\n and \r line endings (including a \r\n split across chunks),
- * multi-line `data:` fields, comments (`:`), and missing trailing blank line at end().
+ * Incremental SSE parser. Handles \n, \r\n and \r line endings (including \r\n split across
+ * chunks), multi-line `data:` fields, comments (`:`), and missing trailing blank line at end().
  * @param {(evt: {event: string, data: any, raw: string, id?: string}) => void} onEvent
  */
 export function createSseParser(onEvent) {
@@ -39,7 +41,7 @@ export function createSseParser(onEvent) {
       dispatch();
       return;
     }
-    if (line.charCodeAt(0) === 58 /* ':' */) return; // comment / keep-alive
+    if (line.charCodeAt(0) === 58 /* ':' */) return; // comment / keep-alive heartbeat
     const idx = line.indexOf(':');
     const field = idx === -1 ? line : line.slice(0, idx);
     let value = idx === -1 ? '' : line.slice(idx + 1);
@@ -62,7 +64,7 @@ export function createSseParser(onEvent) {
           if (c === 10 || c === 13) break;
           i++;
         }
-        if (i >= len) break; // no complete line yet
+        if (i >= len) break;
         const c = buffer.charCodeAt(i);
         if (c === 13 && i === len - 1) break; // lone \r at end: wait to see if \n follows
         const line = buffer.slice(0, i);
@@ -82,29 +84,97 @@ export function createSseParser(onEvent) {
   };
 }
 
+function makeIdleError(ms) {
+  const err = new Error(`SSE stream idle timeout (${ms}ms)`);
+  err.name = 'SseIdleTimeoutError';
+  err.code = 'SSE_IDLE_TIMEOUT';
+  return err;
+}
+
+function makeAbortError() {
+  const err = new Error('The operation was aborted.');
+  err.name = 'AbortError';
+  return err;
+}
+
 /**
- * Read a fetch Response body as SSE and call onEvent per event.
- * Resolves when the stream ends; rejects on network errors (AbortError when aborted).
+ * Read a fetch Response body as SSE and invoke `onEvent` per event.
+ * Resets the per-read idle watchdog on every received chunk (including comments/heartbeats).
  */
-export async function readSseResponse(response, onEvent) {
+export async function readSseResponse(response, onEvent, { idleTimeoutMs = DEFAULT_SSE_IDLE_MS, signal } = {}) {
   const parser = createSseParser(onEvent);
-  const body = response.body;
+  const body = response?.body;
   if (!body || typeof body.getReader !== 'function') {
+    if (signal?.aborted) throw makeAbortError();
     parser.push(await response.text());
     parser.end();
     return;
   }
   const reader = body.getReader();
   const decoder = new TextDecoder('utf-8');
+  let idleTimer = null;
+
+  const readChunkWithWatchdog = () => {
+    if (signal?.aborted) return Promise.reject(makeAbortError());
+    const useWatchdog = Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0;
+    if (!useWatchdog && !signal) return reader.read();
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        if (idleTimer !== null) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reader.cancel('aborted').catch(() => {});
+        reject(makeAbortError());
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      if (useWatchdog) {
+        idleTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reader.cancel('sse_idle_timeout').catch(() => {});
+          reject(makeIdleError(idleTimeoutMs));
+        }, idleTimeoutMs);
+      }
+      reader.read().then(
+        (res) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(res);
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(err);
+        },
+      );
+    });
+  };
+
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readChunkWithWatchdog();
       if (done) break;
       parser.push(decoder.decode(value, { stream: true }));
     }
     parser.push(decoder.decode());
     parser.end();
   } finally {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
     try {
       reader.releaseLock();
     } catch {

@@ -6,12 +6,12 @@ Pure Python domain module — zero framework, database, or vendor SDK imports.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
 
-MarkerStyle = Literal["strip", "superscript", "footnote"]
+MarkerStyle = Literal["strip", "superscript", "footnote", "bracket"]
 
 _SUPERSCRIPT_DIGITS = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
@@ -22,16 +22,17 @@ _MAX_TAG_BUFFER_LEN = 512
 # Punctuation before which a stray ASCII space left by a stripped citation should be removed
 _CLOSING_OR_CLAUSE_PUNCT = frozenset("，。！？；：、,.!?;:)）】》”’」』›»—…")
 
-# Citation item prefix: rec_..., rec-..., rec:..., 记录#..., or bare 32/36-char hex UUID
+# Citation item prefix: rec_..., rec-..., rec:..., 记录#..., short alias S1/S2, or bare UUID
 _REC_PREFIX_RE = re.compile(
     r"^(?:rec[_:\-#]?|记录[#_:：]?)(?P<raw_id>[0-9a-zA-Z\-_]+)$",
     re.IGNORECASE,
 )
+_ALIAS_TOKEN_RE = re.compile(r"^[sS](?P<alias_num>[1-9]\d{0,3})$")
 _BARE_UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 _UNCLOSED_REC_TAIL_RE = re.compile(
-    r"^[\[【]\s*(?:rec[_:\-#]|记录[#_:：])[0-9a-zA-Z\-_,\s，、;；]*$",
+    r"^[\[【]\s*(?:rec[_:\-#]|记录[#_:：]|[sS][1-9]\d{0,3})(?:[0-9a-zA-Z\-_,\s，、;；]*)$",
     re.IGNORECASE,
 )
 _TOKEN_SPLIT_RE = re.compile(r"[,，、;；\s]+")
@@ -54,6 +55,8 @@ def _format_marker(index: int, style: MarkerStyle) -> str:
         return str(index).translate(_SUPERSCRIPT_DIGITS)
     if style == "footnote":
         return f"［{index}］"
+    if style == "bracket":
+        return f"[{index}]"
     return ""
 
 
@@ -69,7 +72,10 @@ def _parse_uuid_safe(raw: str) -> UUID | None:
         return None
 
 
-def _classify_bracket_tokens(inner: str) -> list[tuple[str, UUID | None]] | None:
+def _classify_bracket_tokens(
+    inner: str,
+    alias_map: Mapping[str, UUID] | None = None,
+) -> list[tuple[str, UUID | None]] | None:
     """Return list of `(raw_token, parsed_uuid_or_none)` if `inner` is a citation bracket, else `None`."""
     stripped = inner.strip()
     if not stripped:
@@ -83,6 +89,12 @@ def _classify_bracket_tokens(inner: str) -> list[tuple[str, UUID | None]] | None
         m = _REC_PREFIX_RE.match(part)
         if m is not None:
             classified.append((part, _parse_uuid_safe(m.group("raw_id"))))
+            continue
+        m_alias = _ALIAS_TOKEN_RE.match(part)
+        if m_alias is not None:
+            key = f"S{m_alias.group('alias_num')}"
+            resolved = alias_map.get(key) if alias_map is not None else None
+            classified.append((part, resolved))
             continue
         if _BARE_UUID_RE.match(part):
             classified.append((part, _parse_uuid_safe(part)))
@@ -117,7 +129,7 @@ class CitationProcessSummary:
     stripped_hallucinated_count: int
 
 
-_CANDIDATE_TAG_FIRST_CHARS = frozenset("rR记0123456789abcdefABCDEF")
+_CANDIDATE_TAG_FIRST_CHARS = frozenset("rRsS记0123456789abcdefABCDEF")
 
 
 class StreamingCitationProcessor:
@@ -128,11 +140,13 @@ class StreamingCitationProcessor:
       inline single/double-backtick code spans (`` `[rec_...]` ``) across chunk splits so bracket
       literals inside code blocks/spans are never altered.
     - Handles nested square brackets (e.g. `[重点：忌口 [rec_...] 必看]`) cleanly.
+    - Supports BOTH short source aliases (`[S1]`, `[S1, S2]`) and legacy UUID tags (`[rec_<uuid>]`,
+      `[记录#<uuid>]`, bare UUIDs) as a single source of truth.
     - Verifies every cited UUID against `allowed_record_ids`:
-      - Valid (`id in allowed_record_ids`): strips raw `[rec_<uuid>]` internal tag (or replaces
-        with clean superscript/footnote marker when configured) and emits deduplicated
+      - Valid (`id in allowed_record_ids`): strips raw internal tag (or replaces with clean
+        superscript/footnote/bracket marker when configured) and emits deduplicated
         `VerifiedCitation(index, record_id)`.
-      - Out-of-scope / hallucinated (`id not in allowed_record_ids` or malformed `rec_...`):
+      - Out-of-scope / hallucinated (`id not in allowed_record_ids` or malformed tag):
         strips the bogus tag completely and increments `stripped_hallucinated_count`.
     """
 
@@ -141,9 +155,15 @@ class StreamingCitationProcessor:
         allowed_record_ids: Iterable[UUID],
         *,
         marker_style: MarkerStyle = "strip",
+        alias_to_record_id: Mapping[str, UUID] | None = None,
     ) -> None:
         self._allowed: frozenset[UUID] = frozenset(allowed_record_ids)
         self._marker_style: MarkerStyle = marker_style
+        self._alias_map: dict[str, UUID] = (
+            {k.strip().upper(): v for k, v in alias_to_record_id.items()}
+            if alias_to_record_id is not None
+            else {}
+        )
 
         self._citation_map: dict[UUID, VerifiedCitation] = {}
         self._citations_ordered: list[VerifiedCitation] = []
@@ -398,7 +418,7 @@ class StreamingCitationProcessor:
 
             if ch in _CLOSE_BRACKETS:
                 inner = self._tag_buf[1:]
-                classified = _classify_bracket_tokens(inner)
+                classified = _classify_bracket_tokens(inner, self._alias_map)
                 if classified is None:
                     raw_full = self._tag_buf + ch
                     self._tag_buf = ""
@@ -621,7 +641,15 @@ class StreamingCitationProcessor:
         """Validate non-streaming `CompanionChatOutput.cited_record_ids` and merge valid ones."""
         newly_added: list[VerifiedCitation] = []
         for raw_id in cited_record_ids:
-            parsed = raw_id if isinstance(raw_id, UUID) else _parse_uuid_safe(str(raw_id))
+            if isinstance(raw_id, UUID):
+                parsed: UUID | None = raw_id
+            else:
+                raw_str = str(raw_id).strip()
+                m_alias = _ALIAS_TOKEN_RE.match(raw_str)
+                if m_alias is not None:
+                    parsed = self._alias_map.get(f"S{m_alias.group('alias_num')}")
+                else:
+                    parsed = _parse_uuid_safe(raw_str)
             if parsed is not None and parsed in self._allowed:
                 self._record_valid_citation(parsed, newly_added)
             else:
@@ -658,9 +686,14 @@ def process_complete_citations(
     *,
     declared_cited_ids: Sequence[UUID | str] = (),
     marker_style: MarkerStyle = "strip",
+    alias_to_record_id: Mapping[str, UUID] | None = None,
 ) -> CitationProcessSummary:
     """Process a complete reply string + optional declared `cited_record_ids`."""
-    proc = StreamingCitationProcessor(allowed_record_ids, marker_style=marker_style)
+    proc = StreamingCitationProcessor(
+        allowed_record_ids,
+        marker_style=marker_style,
+        alias_to_record_id=alias_to_record_id,
+    )
     step1 = proc.feed(text)
     step2 = proc.finalize()
     if declared_cited_ids:

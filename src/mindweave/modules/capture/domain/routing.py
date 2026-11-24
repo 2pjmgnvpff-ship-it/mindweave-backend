@@ -730,45 +730,152 @@ def _apply_clause_replacement(clause: str, replacement: str) -> str | None:
     return None
 
 
+_NEGATION_PIVOT_CORRECTION_RE = re.compile(
+    r"(?P<sep>[，,、；;\s]*)"
+    r"(?:啊|哦|呃|嗯)?[，,、\s]*"
+    r"(?P<repair_prefix>(?:不对|搞错了|说错了|讲错了|口误|记错了)[，,、\s]*)?"
+    r"(?:不是|并非)\s*(?P<rejected>[^，,。；;！!？?\n]{1,12}?)"
+    r"[，,、\s]*(?P<connector>改成|改到|改为|换成|其实是|应该是|而是|是)"
+    r"\s*(?P<replacement>[^，,。；;！!？?\n]+)"
+)
+_OVERRIDE_VERBS: frozenset[str] = frozenset({"改成", "改到", "改为", "换成"})
+_WEEK_MODIFIERS: tuple[str, ...] = ("下", "这", "本", "上")
+
+_TEMPORAL_WEEKDAY_PHRASE_RE = re.compile(
+    r"(?:下|这|本|上)?(?:周|星期|礼拜)[一二三四五六日天末]"
+    r"(?:(?:上午|下午|中午|晚上|早上|凌晨|傍晚)?"
+    r"(?:(?:\d{1,2}|[一二两三四五六七八九十]{1,2})[点时](?:半|\d{1,2}分?)?)?)?"
+)
+_EXISTING_WEEKDAY_SPAN_RE = re.compile(
+    r"(?:下|这|本|上)?(?:周|星期|礼拜)[一二三四五六日天末]"
+    r"(?:上午|下午|中午|晚上|早上|凌晨|傍晚)?"
+    r"(?:(?:\d{1,2}|[一二两三四五六七八九十]{1,2})[点时](?:半|\d{1,2}分?)?)?"
+)
+_PERSON_FOLLOWED_BY_PREDICATE_RE = re.compile(
+    r"^(?P<person>(?:小|老|阿|大)[\u4e00-\u9fff]|[\u4e00-\u9fff]{2,3}?)"
+    r"(?P<tail>(?:一起|吃晚饭|吃午饭|吃早饭|吃饭|喝|吃|去|看|买|送|做|聊|玩|见|说|打|开|学|走|住|谈).*)$"
+)
+_PERSON_PREP_TAIL_RE = re.compile(r"(?:和|跟|找|给|帮|陪|问|约)([\u4e00-\u9fff]{2,3})$")
+
+
+def _split_prev_clause(before: str) -> tuple[str, str]:
+    boundaries = list(_CLAUSE_BOUNDARY_RE.finditer(before))
+    if boundaries:
+        split_pos = boundaries[-1].end()
+        return before[:split_pos], before[split_pos:]
+    return "", before
+
+
+def _apply_clause_replacement_v2(clause: str, replacement: str) -> str | None:
+    if not clause or not replacement:
+        return None
+    # 0a. Weekday + optional period/clock phrase (e.g. "周三" -> "下周四晚上")
+    if _TEMPORAL_WEEKDAY_PHRASE_RE.fullmatch(replacement):
+        if replacement[0] in _WEEK_MODIFIERS:
+            replaced = _replace_last_match(_EXISTING_WEEKDAY_SPAN_RE, clause, replacement)
+        else:
+            replaced = _replace_last_match(_BARE_WEEKDAY_RE, clause, replacement)
+        if replaced is not None:
+            return replaced
+    # 0b. Person + trailing predicate (e.g. "刚跟阿哲，口误，是阿远吃晚饭" -> "刚跟阿远吃晚饭")
+    pm = _PERSON_FOLLOWED_BY_PREDICATE_RE.match(replacement)
+    if pm and _looks_like_person_name(pm.group("person")):
+        prep_tail = _PERSON_PREP_TAIL_RE.search(clause)
+        if prep_tail:
+            return f"{clause[: prep_tail.start(1)]}{replacement}"
+    return _apply_clause_replacement(clause, replacement)
+
+
 def apply_spoken_self_correction(text: str) -> str:
-    """Apply Chinese spoken self-correction hygiene without mutating clean text.
+    """Apply Chinese spoken self-correction hygiene without mutating clean text or contrast clauses.
 
     Handles natural voice repairs such as:
     - `"妈妈周五复查，不对，是周六"` -> `"妈妈周六复查"`
-    - `"小陈不能吃香菜，说错了，是阿远"` -> `"阿远不能吃香菜"`
-    - `"给林溪买草莓蛋糕，不对，是抹茶蛋糕"` -> `"给林溪买抹茶蛋糕"`
-    Clean transcripts without an explicit correction cue are returned verbatim.
+    - `"陈经理的评审会不是周三，改成下周四"` -> `"陈经理的评审会改成下周四"`
+    - `"给林溪买草莓蛋糕，搞错了，不是草莓蛋糕，换成抹茶蛋糕"` -> `"给林溪买抹茶蛋糕"`
+    - `"刚跟阿哲，口误，是阿远吃晚饭"` -> `"刚跟阿远吃晚饭"`
+    Preserves contrastive facts verbatim (e.g. `"妈妈不是不吃辣，是不能吃海鲜"`).
     """
     if not text or not text.strip():
         return text
 
     result = text
+
+    # Pass 1: Negation-pivot corrections ("不是X，改成/换成/是Y") with strict contrast guard
     for _ in range(5):
-        match = _SELF_CORRECTION_RE.search(result)
-        if match is None:
+        changed = False
+        for match in _NEGATION_PIVOT_CORRECTION_RE.finditer(result):
+            rejected = match.group("rejected").strip()
+            connector = match.group("connector").strip()
+            has_repair_prefix = bool(match.group("repair_prefix"))
+            has_override_verb = connector in _OVERRIDE_VERBS
+            raw_rep = match.group("replacement").strip()
+            rep_core = raw_rep.rstrip("吧哈啊呀哦啦呢了").strip() or raw_rep
+
+            before = result[: match.start()]
+            after = result[match.end() :]
+            prefix_before_clause, prev_clause = _split_prev_clause(before)
+            rejected_in_prev = bool(rejected and rejected in prev_clause)
+
+            # CRITICAL GUARD: NEVER rewrite bare contrastive "不是X，是/而是Y"!
+            if not (has_override_verb or has_repair_prefix or rejected_in_prev):
+                continue
+
+            if rejected_in_prev:
+                idx = prev_clause.rfind(rejected)
+                left = prev_clause[:idx]
+                right = prev_clause[idx + len(rejected) :]
+                if (
+                    left.endswith(_WEEK_MODIFIERS)
+                    and rep_core.startswith(_WEEK_MODIFIERS)
+                    and rejected.startswith(("周", "星期", "礼拜"))
+                ):
+                    left = left[:-1]
+                result = f"{prefix_before_clause}{left}{rep_core}{right}{after}"
+                changed = True
+                break
+
+            if not before.strip():
+                result = f"{rep_core}{after}"
+                changed = True
+                break
+
+            leading_ws_len = len(prev_clause) - len(prev_clause.lstrip())
+            leading_ws = prev_clause[:leading_ws_len]
+            trimmed_clause = prev_clause[leading_ws_len:]
+            corrected_clause = _apply_clause_replacement_v2(trimmed_clause, rep_core)
+            if corrected_clause is not None:
+                result = f"{prefix_before_clause}{leading_ws}{corrected_clause}{after}"
+                changed = True
+                break
+
+            if has_override_verb:
+                result = f"{before.rstrip('，,、 ')}{connector}{rep_core}{after}"
+                changed = True
+                break
+        if not changed:
             break
-        raw_rep = match.group("replacement").strip()
-        rep_core = raw_rep.rstrip("吧哈啊呀哦啦呢了").strip() or raw_rep
-        before = result[: match.start()]
-        after = result[match.end() :]
 
-        boundaries = list(_CLAUSE_BOUNDARY_RE.finditer(before))
-        if boundaries:
-            split_pos = boundaries[-1].end()
-            prefix_before_clause = before[:split_pos]
-            prev_clause = before[split_pos:]
-        else:
-            prefix_before_clause = ""
-            prev_clause = before
-
-        leading_ws_len = len(prev_clause) - len(prev_clause.lstrip())
-        leading_ws = prev_clause[:leading_ws_len]
-        trimmed_clause = prev_clause[leading_ws_len:]
-
-        corrected_clause = _apply_clause_replacement(trimmed_clause, rep_core)
-        if corrected_clause is None:
+    # Pass 2: Classic cue-only corrections ("不对/说错了/口误/记错了，改成/改到/是Y")
+    for _ in range(5):
+        changed = False
+        for match in _SELF_CORRECTION_RE.finditer(result):
+            raw_rep = match.group("replacement").strip()
+            rep_core = raw_rep.rstrip("吧哈啊呀哦啦呢了").strip() or raw_rep
+            before = result[: match.start()]
+            after = result[match.end() :]
+            prefix_before_clause, prev_clause = _split_prev_clause(before)
+            leading_ws_len = len(prev_clause) - len(prev_clause.lstrip())
+            leading_ws = prev_clause[:leading_ws_len]
+            trimmed_clause = prev_clause[leading_ws_len:]
+            corrected_clause = _apply_clause_replacement_v2(trimmed_clause, rep_core)
+            if corrected_clause is None:
+                continue
+            result = f"{prefix_before_clause}{leading_ws}{corrected_clause}{after}"
+            changed = True
             break
-        result = f"{prefix_before_clause}{leading_ws}{corrected_clause}{after}"
+        if not changed:
+            break
 
     return result
 

@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
-from mindweave.modules.identity.domain.models import OtpPurpose, VerifiedAppleIdentity
+from mindweave.modules.identity.domain.models import (
+    EmailDeliveryReceipt,
+    OtpPurpose,
+    VerifiedAppleIdentity,
+)
 
 
 class AppleTokenVerifierPort(Protocol):
@@ -29,4 +34,5 @@ class EmailOtpSenderPort(Protocol):
         otp_code: str,
         purpose: OtpPurpose,
         expires_in_seconds: int,
-    ) -> None: ...
+        challenge_id: UUID | None = None,
+    ) -> EmailDeliveryReceipt | None: ...

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hmac
+import inspect
+import math
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -12,6 +14,8 @@ from sqlalchemy.exc import IntegrityError
 
 from mindweave.core.dependencies import AppContainer
 from mindweave.core.errors import (
+    AppError,
+    EmailDeliveryError,
     ForbiddenError,
     RateLimitedError,
     UnauthorizedError,
@@ -33,6 +37,7 @@ from mindweave.modules.audit.application.service import AuditService
 from mindweave.modules.identity.domain.models import (
     AuthProvider,
     ConsentRecord,
+    EmailDeliveryReceipt,
     InvalidEmailError,
     InvalidPolicyVersionError,
     OtpChallengeState,
@@ -46,7 +51,10 @@ from mindweave.modules.identity.domain.models import (
 from mindweave.modules.identity.domain.ports import AppleTokenVerifierPort, EmailOtpSenderPort
 from mindweave.modules.identity.infra.apple_verifier import (
     AppleJwksTokenVerifier,
-    NoopEmailOtpSender,
+)
+from mindweave.modules.identity.infra.email_sender import (
+    build_email_otp_sender,
+    is_real_email_sender,
 )
 from mindweave.modules.identity.infra.repositories import (
     IdentitySystemRepository,
@@ -56,6 +64,12 @@ from mindweave.shared.enums import ConsentKind
 from mindweave.shared.scopes import UserScope
 
 logger = get_logger(__name__)
+
+
+def _as_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +85,10 @@ class AuthSessionResult:
 class OtpChallengeIssuedResult:
     challenge_id: UUID
     expires_in: int
+    delivered: bool = False
+    delivery_status: str = "dev_bypass"
+    provider: str = "noop"
+    cooldown_seconds: int = 0
     dev_otp_code: str | None = None
 
 
@@ -92,6 +110,8 @@ class IdentityService:
 
     OTP_RATE_LIMIT_CAPACITY: int = 5
     OTP_RATE_LIMIT_WINDOW_SECONDS: int = 60
+    OTP_FAILED_ABUSE_CAPACITY: int = 15
+    OTP_FAILED_ABUSE_WINDOW_SECONDS: int = 600
 
     def __init__(
         self,
@@ -121,7 +141,7 @@ class IdentityService:
         else:
             cached_sender = container.extras.get("otp_sender")
             if cached_sender is None:
-                cached_sender = NoopEmailOtpSender()
+                cached_sender = build_email_otp_sender(container.settings)
                 container.extras["otp_sender"] = cached_sender
             self._otp_sender = cached_sender
 
@@ -154,85 +174,286 @@ class IdentityService:
             client_ip=client_ip,
         )
 
+    async def _dispatch_otp(
+        self,
+        *,
+        email: str,
+        otp_code: str,
+        purpose: OtpPurpose,
+        expires_in_seconds: int,
+        challenge_id: UUID,
+    ) -> EmailDeliveryReceipt:
+        """Call configured EmailOtpSenderPort cleanly, handling legacy test fakes defensively."""
+        send_fn = self._otp_sender.send_otp
+        sig = inspect.signature(send_fn)
+        accepts_challenge_id = "challenge_id" in sig.parameters or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()
+        )
+        if accepts_challenge_id:
+            receipt = await send_fn(
+                email=email,
+                otp_code=otp_code,
+                purpose=purpose,
+                expires_in_seconds=expires_in_seconds,
+                challenge_id=challenge_id,
+            )
+        else:
+            receipt = await send_fn(
+                email=email,
+                otp_code=otp_code,
+                purpose=purpose,
+                expires_in_seconds=expires_in_seconds,
+            )
+
+        if isinstance(receipt, EmailDeliveryReceipt):
+            return receipt
+        # Defensive fallback for legacy test doubles returning None
+        sender_provider = str(getattr(self._otp_sender, "provider_name", "custom") or "custom")
+        is_noop = sender_provider == "noop"
+        return EmailDeliveryReceipt(
+            delivered=not is_noop,
+            provider=sender_provider,
+            delivery_status="dev_bypass" if is_noop else "delivered",
+            provider_message_id=None,
+        )
+
     async def request_email_otp(
         self,
         *,
         email: str,
         purpose: OtpPurpose,
+        client_ip: str | None = None,
     ) -> OtpChallengeIssuedResult:
+        settings = self._container.settings
+
+        # Per-IP token bucket guard (stops multi-email Resend/SMTP bombing)
+        if client_ip:
+            ip_cap = max(1, int(settings.otp_ip_rate_limit_per_minute))
+            self._container.rate_limiter.check(
+                f"otp_ip:{client_ip}",
+                capacity=ip_cap,
+                refill_per_second=ip_cap / 60.0,
+            )
+
         try:
             normalized_email = normalize_email(email)
         except InvalidEmailError as exc:
             raise ValidationFailedError("Invalid email address format") from exc
 
+        sender_provider = str(getattr(self._otp_sender, "provider_name", "custom") or "custom")
+        if sender_provider == "unconfigured":
+            raise EmailDeliveryError(
+                "Email delivery provider is not configured.",
+                error_code="email_provider_not_configured",
+                status_code=503,
+                title="Email Provider Not Configured",
+            )
+
         email_hmac = hash_contact_lookup(
-            normalized_email, secret=self._container.settings.jwt_secret
+            normalized_email, secret=settings.jwt_secret
         )
 
-        ttl_seconds = self._container.settings.otp_ttl_seconds
+        ttl_seconds = settings.otp_ttl_seconds
+        cooldown_seconds = max(0, int(settings.otp_resend_cooldown_seconds))
+        pending_window_seconds = math.ceil(settings.email_send_timeout_seconds) + 5
         challenge_id = new_id()
         otp_code = generate_six_digit_otp()
         otp_digest = hash_otp(
             challenge_id=challenge_id,
             otp_code=otp_code,
-            secret=self._container.settings.jwt_secret,
+            secret=settings.jwt_secret,
         )
 
+        # Transaction 1 — Pre-send admission under per-email advisory lock (zero network I/O held!)
         async with self._container.db.system_session() as sys_sess:
             await self._sys_repo.acquire_email_otp_advisory_lock(
                 sys_sess,
                 email_hmac=email_hmac,
             )
             now = self._container.clock.now()
-            window_start = now - timedelta(seconds=self.OTP_RATE_LIMIT_WINDOW_SECONDS)
-            recent_count = await self._sys_repo.count_recent_otp_challenges(
+
+            # Block concurrent in-flight sends & active cooldown window (disabled when cooldown == 0
+            # so legacy 8-way burst concurrency tests remain deterministic).
+            if cooldown_seconds > 0:
+                inflight = await self._sys_repo.get_latest_otp_challenge_by_statuses(
+                    sys_sess,
+                    email_hmac=email_hmac,
+                    statuses=("pending",),
+                    window_start=now - timedelta(seconds=pending_window_seconds),
+                    purpose=purpose,
+                )
+                if inflight is not None:
+                    raise RateLimitedError(
+                        "A verification code is already being sent. Please wait a moment.",
+                        error_code="otp_cooldown_active",
+                        extensions={"retryAfterSeconds": cooldown_seconds},
+                        headers={"Retry-After": str(cooldown_seconds)},
+                    )
+
+                latest_sent = await self._sys_repo.get_latest_otp_challenge_by_statuses(
+                    sys_sess,
+                    email_hmac=email_hmac,
+                    statuses=("delivered", "dev_bypass"),
+                    window_start=now - timedelta(seconds=cooldown_seconds),
+                    purpose=purpose,
+                )
+                if latest_sent is not None:
+                    elapsed = (_as_utc(now) - _as_utc(latest_sent.created_at)).total_seconds()
+                    remaining = max(1, math.ceil(cooldown_seconds - elapsed))
+                    raise RateLimitedError(
+                        "Verification code was just sent. Please wait before requesting again.",
+                        error_code="otp_cooldown_active",
+                        extensions={"retryAfterSeconds": remaining},
+                        headers={"Retry-After": str(remaining)},
+                    )
+
+            # Per-minute, per-hour, per-day, and total-including-failed abuse caps
+            recent_minute = await self._sys_repo.count_recent_otp_challenges(
                 sys_sess,
                 email_hmac=email_hmac,
-                window_start=window_start,
+                window_start=now - timedelta(seconds=self.OTP_RATE_LIMIT_WINDOW_SECONDS),
+                exclude_failed=True,
             )
-            if recent_count >= self.OTP_RATE_LIMIT_CAPACITY:
+            if recent_minute >= self.OTP_RATE_LIMIT_CAPACITY:
                 raise RateLimitedError(
                     "Rate limit exceeded. Please slow down and try again shortly.",
                     extensions={"retryAfterSeconds": self.OTP_RATE_LIMIT_WINDOW_SECONDS},
+                    headers={"Retry-After": str(self.OTP_RATE_LIMIT_WINDOW_SECONDS)},
                 )
 
-            await self._sys_repo.invalidate_unconsumed_otp_challenges(
+            recent_hour = await self._sys_repo.count_recent_otp_challenges(
                 sys_sess,
                 email_hmac=email_hmac,
-                purpose=purpose,
-                now=now,
+                window_start=now - timedelta(hours=1),
+                exclude_failed=True,
             )
+            if recent_hour >= settings.otp_max_per_hour:
+                raise RateLimitedError(
+                    "Hourly verification code limit reached. Please try again later.",
+                    extensions={"retryAfterSeconds": 3600},
+                    headers={"Retry-After": "3600"},
+                )
+
+            recent_day = await self._sys_repo.count_recent_otp_challenges(
+                sys_sess,
+                email_hmac=email_hmac,
+                window_start=now - timedelta(hours=24),
+                exclude_failed=True,
+            )
+            if recent_day >= settings.otp_max_per_day:
+                raise RateLimitedError(
+                    "Daily verification code limit reached. Please try again tomorrow.",
+                    extensions={"retryAfterSeconds": 3600},
+                    headers={"Retry-After": "3600"},
+                )
+
+            total_incl_failed = await self._sys_repo.count_recent_otp_challenges(
+                sys_sess,
+                email_hmac=email_hmac,
+                window_start=now - timedelta(seconds=self.OTP_FAILED_ABUSE_WINDOW_SECONDS),
+                exclude_failed=False,
+            )
+            if total_incl_failed >= self.OTP_FAILED_ABUSE_CAPACITY:
+                raise RateLimitedError(
+                    "Too many verification attempts in a short period. Please wait a few minutes.",
+                    extensions={"retryAfterSeconds": self.OTP_FAILED_ABUSE_WINDOW_SECONDS},
+                    headers={"Retry-After": str(self.OTP_FAILED_ABUSE_WINDOW_SECONDS)},
+                )
+
+            # Insert new pending row ONLY — do NOT invalidate prior valid OTPs until send succeeds!
             await self._sys_repo.create_otp_challenge(
                 sys_sess,
                 challenge_id=challenge_id,
                 email_hmac=email_hmac,
                 otp_hash=otp_digest,
                 purpose=purpose,
-                max_attempts=self._container.settings.otp_max_attempts,
+                max_attempts=settings.otp_max_attempts,
                 expires_at=now + timedelta(seconds=ttl_seconds),
                 now=now,
+                delivery_status="pending",
+                delivery_provider=sender_provider,
             )
 
-        await self._otp_sender.send_otp(
-            email=normalized_email,
-            otp_code=otp_code,
-            purpose=purpose,
-            expires_in_seconds=ttl_seconds,
-        )
+        # Inline non-blocking provider dispatch (no DB connection or advisory lock held!)
+        try:
+            receipt = await self._dispatch_otp(
+                email=normalized_email,
+                otp_code=otp_code,
+                purpose=purpose,
+                expires_in_seconds=ttl_seconds,
+                challenge_id=challenge_id,
+            )
+        except Exception as exc:
+            err_to_raise: AppError
+            if isinstance(exc, AppError):
+                err_to_raise = exc
+            else:
+                logger.warning(
+                    "auth.otp_dispatch_unexpected_error",
+                    challenge_id=str(challenge_id),
+                    provider=sender_provider,
+                    error_type=type(exc).__name__,
+                )
+                err_to_raise = EmailDeliveryError(
+                    "Email delivery temporarily unavailable.",
+                    error_code="email_delivery_failed",
+                    status_code=503,
+                )
+
+            # Transaction 2b — Compensating failure mark (prior valid OTPs remain 100% untouched!)
+            fail_now = self._container.clock.now()
+            async with self._container.db.system_session() as fail_sess:
+                await self._sys_repo.mark_otp_challenge_failed(
+                    fail_sess,
+                    challenge_id=challenge_id,
+                    delivery_provider=sender_provider,
+                    error_code=err_to_raise.error_code,
+                    now=fail_now,
+                )
+            raise err_to_raise from None
+
+        # Transaction 2a — Atomic finalize & prior-OTP invalidation after provider confirmation
+        done_now = self._container.clock.now()
+        async with self._container.db.system_session() as done_sess:
+            await self._sys_repo.acquire_email_otp_advisory_lock(
+                done_sess,
+                email_hmac=email_hmac,
+            )
+            await self._sys_repo.finalize_otp_challenge_delivered(
+                done_sess,
+                challenge_id=challenge_id,
+                email_hmac=email_hmac,
+                purpose=purpose,
+                delivery_provider=receipt.provider,
+                delivery_status=receipt.delivery_status,
+                provider_message_id=receipt.provider_message_id,
+                now=done_now,
+            )
+
         # Never log email or OTP code (Invariant I10)!
         logger.info(
             "auth.otp_challenge_created",
             challenge_id=str(challenge_id),
             purpose=purpose.value,
+            provider=receipt.provider,
+            delivery_status=receipt.delivery_status,
+            delivered=receipt.delivered,
             expires_in=ttl_seconds,
         )
 
+        expose_dev_code = (
+            settings.expose_dev_otp_in_response
+            and not is_real_email_sender(self._otp_sender)
+            and settings.email_provider == "noop"
+        )
         return OtpChallengeIssuedResult(
             challenge_id=challenge_id,
             expires_in=ttl_seconds,
-            dev_otp_code=(
-                otp_code if self._container.settings.expose_dev_otp_in_response else None
-            ),
+            delivered=receipt.delivered,
+            delivery_status=receipt.delivery_status,
+            provider=receipt.provider,
+            cooldown_seconds=cooldown_seconds,
+            dev_otp_code=otp_code if expose_dev_code else None,
         )
 
     async def verify_email_otp(
@@ -266,6 +487,18 @@ class IdentityService:
             challenge = await self._sys_repo.get_otp_challenge_for_update(sys_sess, challenge_id)
             if challenge is None:
                 raise UnauthorizedError("Invalid or expired verification challenge")
+
+            if challenge.delivery_status == "failed":
+                raise UnauthorizedError(
+                    "Invalid verification code",
+                    error_code="invalid_otp",
+                )
+
+            if challenge.attempts >= challenge.max_attempts:
+                raise UnauthorizedError(
+                    "Maximum verification attempts exceeded",
+                    error_code="otp_max_attempts_exceeded",
+                )
 
             state = evaluate_otp_challenge_state(
                 consumed_at=challenge.consumed_at,
@@ -315,10 +548,14 @@ class IdentityService:
                 secret=self._container.settings.jwt_secret,
             )
 
-            challenge.attempts += 1
             if not (email_matches and code_matches):
-                # Do NOT raise inside system_session context so attempts increment commits!
-                if challenge.attempts >= challenge.max_attempts:
+                # Atomic SQL increment inside committed transaction (prevents CWE-362 race!)
+                new_attempts = await self._sys_repo.increment_otp_attempts_atomic(
+                    sys_sess,
+                    challenge_id=challenge.id,
+                    now=now,
+                )
+                if new_attempts is None or new_attempts >= challenge.max_attempts:
                     pending_error = UnauthorizedError(
                         "Maximum verification attempts exceeded",
                         error_code="otp_max_attempts_exceeded",
@@ -329,26 +566,36 @@ class IdentityService:
                         error_code="invalid_otp",
                     )
             else:
-                challenge.consumed_at = now
-                verified_purpose = purpose
-                if purpose is OtpPurpose.REAUTH:
-                    assert authenticated_scope is not None
-                    reauth_jwt, _ = self._container.tokens.create_reauth_token(
-                        authenticated_scope.user_id, now=now
+                consumed = await self._sys_repo.consume_otp_challenge_atomic(
+                    sys_sess,
+                    challenge_id=challenge.id,
+                    now=now,
+                )
+                if not consumed:
+                    pending_error = UnauthorizedError(
+                        "Verification challenge has already been consumed",
+                        error_code="otp_already_consumed",
                     )
-                    await self._audit.record(
-                        sys_sess,
-                        user_id=authenticated_scope.user_id,
-                        action="auth.reauth",
-                        target_type="user",
-                        target_id=str(authenticated_scope.user_id),
-                        metadata={"provider": AuthProvider.EMAIL.value},
-                        client_ip=client_ip,
-                    )
-                    reauth_result = ReauthIssuedResult(
-                        reauth_token=reauth_jwt,
-                        expires_in=self._container.settings.reauth_token_ttl_seconds,
-                    )
+                else:
+                    verified_purpose = purpose
+                    if purpose is OtpPurpose.REAUTH:
+                        assert authenticated_scope is not None
+                        reauth_jwt, _ = self._container.tokens.create_reauth_token(
+                            authenticated_scope.user_id, now=now
+                        )
+                        await self._audit.record(
+                            sys_sess,
+                            user_id=authenticated_scope.user_id,
+                            action="auth.reauth",
+                            target_type="user",
+                            target_id=str(authenticated_scope.user_id),
+                            metadata={"provider": AuthProvider.EMAIL.value},
+                            client_ip=client_ip,
+                        )
+                        reauth_result = ReauthIssuedResult(
+                            reauth_token=reauth_jwt,
+                            expires_in=self._container.settings.reauth_token_ttl_seconds,
+                        )
 
         if pending_error is not None:
             raise pending_error

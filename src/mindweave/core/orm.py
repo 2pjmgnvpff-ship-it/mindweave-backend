@@ -81,7 +81,10 @@ class AuthIdentityRow(Base):
 
 class EmailOtpChallengeRow(Base):
     __tablename__ = "email_otp_challenges"
-    __table_args__ = (Index("ix_email_otp_lookup", "email_hmac", "created_at"),)
+    __table_args__ = (
+        Index("ix_email_otp_lookup", "email_hmac", "created_at"),
+        Index("ix_email_otp_lookup_status", "email_hmac", "delivery_status", "created_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
     email_hmac: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -91,6 +94,12 @@ class EmailOtpChallengeRow(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_provider: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="dev_bypass", server_default=text("'dev_bypass'")
+    )
+    provider_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    delivery_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -339,6 +348,22 @@ class RecordRow(Base):
     __tablename__ = "records"
     __table_args__ = (
         Index("ix_records_user_person_created", "user_id", "person_id", "created_at"),
+        Index(
+            "ix_records_user_person_happened_active",
+            "user_id",
+            "person_id",
+            "happened_on",
+            "created_at",
+            "id",
+            postgresql_where=text("deleted_at IS NULL"),
+            postgresql_include=("updated_at", "review_state", "kind", "pinned"),
+        ),
+        Index(
+            "ix_records_user_capture_active",
+            "user_id",
+            "capture_id",
+            postgresql_where=text("capture_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
@@ -359,7 +384,11 @@ class RecordRow(Base):
     audio_offset_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audio_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stamp_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    happened_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    happened_on: Mapped[date] = mapped_column(
+        Date, nullable=False, server_default=text("CURRENT_DATE")
+    )
+    embedding_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    embedding_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     review_state: Mapped[str] = mapped_column(String(24), nullable=False, default="normal")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

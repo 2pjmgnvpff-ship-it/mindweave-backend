@@ -69,6 +69,9 @@ def test_settings(tmp_path: Path) -> Settings:
         ai_primary_provider="fake",
         expose_dev_otp_in_response=True,
         allow_dev_mock_apple_auth=True,
+        otp_resend_cooldown_seconds=0,
+        trusted_proxy_hops=0,
+        otp_ip_rate_limit_per_minute=100,
     )
 
 

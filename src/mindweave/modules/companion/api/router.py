@@ -98,6 +98,7 @@ async def send_person_chat_message(
             client_message_id=body.client_message_id,
             idem_key=idem_key,
             idem_path=str(request.url.path),
+            is_disconnected=request.is_disconnected,
         )
         return StreamingResponse(
             sse_iter,
@@ -136,6 +137,7 @@ async def stream_person_chat_v10(
         client_message_id=body.client_message_id,
         idem_key=idem_key,
         idem_path=str(request.url.path),
+        is_disconnected=request.is_disconnected,
     )
     return StreamingResponse(
         sse_iter,
