@@ -200,6 +200,7 @@ function resetState({ explicit = false } = {}) {
   try {
     localStorage.removeItem(LAST_PERSON_KEY);
     localStorage.removeItem(SWR_BOOT_KEY);
+    if (explicit) localStorage.removeItem('mw.lastEmail');
   } catch {
     /* ignore */
   }

@@ -142,27 +142,26 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         func loginWithEmail(_ email: String, markSplash: Bool) {
             let emailField = app.textFields.firstMatch
             XCTAssertTrue(emailField.waitForExistence(timeout: 30), "Auth email input should appear on splash")
-            pause(1.4)
+            pause(1.5)
             if markSplash {
                 mark("sim_splash_lakeside", hold: 1.0)
             }
 
-            // Tap right edge so caret always lands at the end of any remembered previous email
-            emailField.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-            pause(0.85)
+            emailField.tap()
+            pause(0.9)
             dismissKeyboardTutorialIfNeeded()
-            pause(0.45)
+            if app.keyboards.count == 0 {
+                emailField.tap()
+                pause(0.9)
+                dismissKeyboardTutorialIfNeeded()
+            }
+            pause(0.4)
             if markSplash {
                 mark("sim_splash_ios_keyboard", hold: 0.9)
             }
 
-            if let currentVal = emailField.value as? String, !currentVal.isEmpty, currentVal != "输入你的邮箱" {
-                let deleteString = String(repeating: XCUIKeyboardKey.delete.rawValue, count: currentVal.count + 8)
-                emailField.typeText(deleteString)
-                pause(0.3)
-            }
             emailField.typeText(email)
-            pause(0.45)
+            pause(0.5)
 
             XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 15, settle: 0.9), "Should tap 获取验证码")
             let verifyBtn = firstButton(containing: "翻开手帐", timeout: 30)
