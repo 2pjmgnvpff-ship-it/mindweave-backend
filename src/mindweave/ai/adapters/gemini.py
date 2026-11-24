@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import os
 import re
 from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from google import genai
+from google.auth import exceptions as google_auth_exceptions
 from google.genai import errors as genai_errors
 from google.genai import types
 
@@ -56,10 +58,21 @@ _STREAM_CHUNK_IDLE_TIMEOUT_SEC: float = 25.0
 
 
 class GeminiAdapter:
-    """Production async adapter for Google Gemini 3.8 Flash / 3.5 Flash-Lite (with legacy 2.5 compat)."""
+    """Production async adapter for Google Gemini 3.8 Flash / 3.5 Flash-Lite (API key or Vertex AI ADC)."""
 
-    def __init__(self, *, api_key: str, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str = "",
+        use_vertexai: bool = False,
+        vertex_project: str = "",
+        vertex_location: str = "global",
+        client: Any | None = None,
+    ) -> None:
         self._api_key = api_key.strip()
+        self._use_vertexai = bool(use_vertexai)
+        self._vertex_project = vertex_project.strip()
+        self._vertex_location = vertex_location.strip() or "global"
         self._client = client
         self._stream_usage_var: contextvars.ContextVar[dict[str, int] | None] = (
             contextvars.ContextVar(f"gemini_stream_usage_{id(self)}", default=None)
@@ -103,6 +116,28 @@ class GeminiAdapter:
 
     def _get_client(self) -> Any:
         if self._client is not None:
+            return self._client
+        if self._use_vertexai:
+            project = (
+                self._vertex_project
+                or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+                or os.environ.get("GCP_PROJECT", "").strip()
+            )
+            if not project:
+                raise AdapterPermanentError(
+                    "Gemini Vertex AI project is not configured for ADC"
+                )
+            location = self._vertex_location or "global"
+            try:
+                self._client = genai.Client(
+                    vertexai=True,
+                    project=project,
+                    location=location,
+                )
+            except google_auth_exceptions.GoogleAuthError as exc:
+                raise AdapterPermanentError(
+                    f"Gemini Vertex AI ADC authentication failure: {type(exc).__name__}"
+                ) from exc
             return self._client
         if not self._api_key:
             raise AdapterPermanentError("Gemini API key is not configured")
@@ -217,6 +252,10 @@ class GeminiAdapter:
     def _map_exception(exc: Exception) -> Exception:
         if isinstance(exc, AdapterTransientError | AdapterPermanentError):
             return exc
+        if isinstance(exc, google_auth_exceptions.GoogleAuthError):
+            return AdapterPermanentError(
+                f"Gemini Vertex AI ADC authentication failure: {type(exc).__name__}"
+            )
         if isinstance(exc, TimeoutError | httpx.TimeoutException | httpx.TransportError):
             return AdapterTransientError(f"Gemini transport/timeout failure: {type(exc).__name__}")
         if isinstance(exc, genai_errors.APIError):

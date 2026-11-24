@@ -11,7 +11,7 @@ mkdir -p "${MINDWEAVE_BLOB_STORAGE_DIR:-/tmp/mindweave-blobs}"
 # Auto-detect live AI provider only when MINDWEAVE_AI_PRIMARY_PROVIDER is unset.
 # Never silently inject `fake` as fallback outside explicit dev override.
 if [ -z "${MINDWEAVE_AI_PRIMARY_PROVIDER:-}" ]; then
-  if [ -n "${MINDWEAVE_GEMINI_API_KEY:-}" ]; then
+  if [ -n "${MINDWEAVE_GEMINI_API_KEY:-}" ] || [ "${MINDWEAVE_GEMINI_USE_VERTEXAI:-false}" = "true" ]; then
     export MINDWEAVE_AI_PRIMARY_PROVIDER="gemini"
     export MINDWEAVE_AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-none}"
     export MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED="${MINDWEAVE_GEMINI_PAID_TIER_ACKNOWLEDGED:-true}"

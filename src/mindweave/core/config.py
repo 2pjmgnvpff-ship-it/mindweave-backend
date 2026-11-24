@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -103,6 +104,9 @@ class Settings(BaseSettings):
     ai_fallback_provider: Literal["none", "fake", "gemini", "dashscope", "ark", "deepseek"] = "none"
     ai_asr_provider: Literal["inherit", "fake", "gemini", "dashscope", "ark"] = "inherit"
     gemini_api_key: str = ""
+    gemini_use_vertexai: bool = False
+    gemini_vertex_project: str = ""
+    gemini_vertex_location: str = "global"
     gemini_model_fast: str = "gemini-3.8-flash"
     gemini_model_chat: str = "gemini-3.8-flash"
     gemini_model_lite: str = "gemini-3.5-flash-lite"
@@ -283,25 +287,61 @@ class Settings(BaseSettings):
                 "expose_dev_otp_in_response must be False when a real email provider is active"
             )
 
-        # Step 9: Non-blank live AI key (exempt environment == "test" for unit spy adapters)
+        # Step 8b: Normalize Vertex AI ADC configuration when enabled
+        if self.gemini_use_vertexai:
+            resolved_project = (
+                self.gemini_vertex_project.strip()
+                or os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
+                or os.environ.get("GCP_PROJECT", "").strip()
+            )
+            self.gemini_vertex_project = resolved_project
+            self.gemini_vertex_location = self.gemini_vertex_location.strip() or "global"
+
+        # Step 9: Non-blank live AI credentials (exempt environment == "test" for unit spy adapters)
         if self.environment != "test" and self.ai_primary_provider in (
             "gemini",
             "dashscope",
             "ark",
             "deepseek",
         ):
-            key_by_provider = {
-                "gemini": self.gemini_api_key,
-                "dashscope": self.dashscope_api_key,
-                "ark": self.ark_api_key,
-                "deepseek": self.deepseek_api_key,
-            }
-            if not key_by_provider[self.ai_primary_provider].strip():
-                raise ValueError(
-                    f"Missing API key for configured AI provider '{self.ai_primary_provider}'"
-                )
+            if self.ai_primary_provider == "gemini":
+                if self.gemini_use_vertexai:
+                    if not self.gemini_vertex_project.strip():
+                        raise ValueError(
+                            "Missing GCP project for Gemini Vertex AI ADC "
+                            "(set MINDWEAVE_GEMINI_VERTEX_PROJECT or GOOGLE_CLOUD_PROJECT)"
+                        )
+                elif not self.gemini_api_key.strip():
+                    raise ValueError(
+                        "Missing API key for configured AI provider 'gemini'"
+                    )
+            else:
+                key_by_provider = {
+                    "dashscope": self.dashscope_api_key,
+                    "ark": self.ark_api_key,
+                    "deepseek": self.deepseek_api_key,
+                }
+                if not key_by_provider[self.ai_primary_provider].strip():
+                    raise ValueError(
+                        f"Missing API key for configured AI provider '{self.ai_primary_provider}'"
+                    )
 
         return self
+
+    def is_gemini_configured(self) -> bool:
+        """Return True iff Gemini has either Vertex AI ADC project or a non-blank API key."""
+        if self.gemini_use_vertexai:
+            return bool(self.gemini_vertex_project.strip())
+        return bool(self.gemini_api_key.strip())
+
+    @property
+    def gemini_auth_mode(self) -> str:
+        """Report active Gemini authentication mode without exposing secrets."""
+        if self.gemini_use_vertexai and self.gemini_vertex_project.strip():
+            return "vertex_adc"
+        if self.gemini_api_key.strip():
+            return "api_key"
+        return "none"
 
 
 @lru_cache(maxsize=1)

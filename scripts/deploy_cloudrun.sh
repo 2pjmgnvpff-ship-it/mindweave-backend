@@ -10,6 +10,8 @@ PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)
 ENVIRONMENT="${MINDWEAVE_ENVIRONMENT:-staging}"
 AI_PRIMARY_PROVIDER="${MINDWEAVE_AI_PRIMARY_PROVIDER:-${AI_PRIMARY_PROVIDER:-gemini}}"
 AI_FALLBACK_PROVIDER="${MINDWEAVE_AI_FALLBACK_PROVIDER:-none}"
+GEMINI_USE_VERTEXAI="${MINDWEAVE_GEMINI_USE_VERTEXAI:-${GEMINI_USE_VERTEXAI:-false}}"
+GEMINI_VERTEX_LOCATION="${MINDWEAVE_GEMINI_VERTEX_LOCATION:-${GOOGLE_CLOUD_LOCATION:-global}}"
 GEMINI_MODEL_FAST="${MINDWEAVE_GEMINI_MODEL_FAST:-gemini-3.8-flash}"
 GEMINI_MODEL_CHAT="${MINDWEAVE_GEMINI_MODEL_CHAT:-gemini-3.8-flash}"
 GEMINI_MODEL_LITE="${MINDWEAVE_GEMINI_MODEL_LITE:-gemini-3.5-flash-lite}"
@@ -58,8 +60,13 @@ if [[ "$ENVIRONMENT" == "staging" || "$ENVIRONMENT" == "prod_cn" ]]; then
 
   case "$AI_PRIMARY_PROVIDER" in
     gemini)
-      if [[ -z "${MINDWEAVE_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}" ]]; then
-        echo "❌ AI_PRIMARY_PROVIDER=gemini 需要设置 GEMINI_API_KEY（默认模型 ${GEMINI_MODEL_FAST}）。" >&2
+      if [[ "${GEMINI_USE_VERTEXAI,,}" == "true" ]]; then
+        if [[ "$GEMINI_VERTEX_LOCATION" != "global" && "$GEMINI_VERTEX_LOCATION" != "us" && "$GEMINI_VERTEX_LOCATION" != "eu" && "$GEMINI_VERTEX_LOCATION" != "asia-northeast1" && "$GEMINI_VERTEX_LOCATION" != "northamerica-northeast1" ]] && [[ "${GEMINI_MODEL_FAST,,}" == gemini-3.* ]]; then
+          echo "⚠️  ${GEMINI_MODEL_FAST} 在 Vertex AI 上不支持区域 '${GEMINI_VERTEX_LOCATION}'，已自动切换为官方全局端点 'global'。" >&2
+          GEMINI_VERTEX_LOCATION="global"
+        fi
+      elif [[ -z "${MINDWEAVE_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}" ]]; then
+        echo "❌ AI_PRIMARY_PROVIDER=gemini 需要设置 MINDWEAVE_GEMINI_USE_VERTEXAI=true（Vertex AI ADC，免 API Key）或 MINDWEAVE_GEMINI_API_KEY（默认模型 ${GEMINI_MODEL_FAST}）。" >&2
         exit 1
       fi
       ;;
@@ -170,7 +177,14 @@ yaml_quote() {
   printf 'MINDWEAVE_EMAIL_FROM_ADDRESS: %s\n' "$(yaml_quote "$EMAIL_FROM_ADDRESS")"
   printf 'MINDWEAVE_OTP_RESEND_COOLDOWN_SECONDS: "%s"\n' "${MINDWEAVE_OTP_RESEND_COOLDOWN_SECONDS:-60}"
 
-  if [[ -n "${MINDWEAVE_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}" ]]; then
+  if [[ "${GEMINI_USE_VERTEXAI,,}" == "true" ]]; then
+    GEMINI_VERTEX_PROJECT="${MINDWEAVE_GEMINI_VERTEX_PROJECT:-${GOOGLE_CLOUD_PROJECT:-$PROJECT_ID}}"
+    printf 'MINDWEAVE_GEMINI_USE_VERTEXAI: "true"\n'
+    printf 'MINDWEAVE_GEMINI_VERTEX_PROJECT: %s\n' "$(yaml_quote "$GEMINI_VERTEX_PROJECT")"
+    printf 'MINDWEAVE_GEMINI_VERTEX_LOCATION: %s\n' "$(yaml_quote "$GEMINI_VERTEX_LOCATION")"
+    printf 'GOOGLE_CLOUD_PROJECT: %s\n' "$(yaml_quote "$GEMINI_VERTEX_PROJECT")"
+    printf 'GOOGLE_CLOUD_LOCATION: %s\n' "$(yaml_quote "$GEMINI_VERTEX_LOCATION")"
+  elif [[ -n "${MINDWEAVE_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}" ]]; then
     printf 'MINDWEAVE_GEMINI_API_KEY: %s\n' "$(yaml_quote "${MINDWEAVE_GEMINI_API_KEY:-${GEMINI_API_KEY:-}}")"
   fi
   if [[ -n "${MINDWEAVE_DEEPSEEK_API_KEY:-${DEEPSEEK_API_KEY:-}}" ]]; then
@@ -217,14 +231,44 @@ yaml_quote() {
 } > "$ENV_YAML"
 
 echo "🚀 目标 Google Cloud 项目: ${PROJECT_ID} (区域: ${REGION}, 环境: ${ENVIRONMENT})"
-echo "✨ AI 主引擎: ${AI_PRIMARY_PROVIDER} (${GEMINI_MODEL_FAST} / ${GEMINI_MODEL_LITE}) | 发信通道: ${EMAIL_PROVIDER}"
-echo "⏳ 正在开启 Cloud Run / Cloud Build 服务接口（首次约需 20 秒）..."
+if [[ "${GEMINI_USE_VERTEXAI,,}" == "true" ]]; then
+  echo "✨ AI 主引擎: ${AI_PRIMARY_PROVIDER} [Vertex AI ADC 免 Key · location=${GEMINI_VERTEX_LOCATION}] (${GEMINI_MODEL_FAST} / ${GEMINI_MODEL_LITE}) | 发信通道: ${EMAIL_PROVIDER}"
+else
+  echo "✨ AI 主引擎: ${AI_PRIMARY_PROVIDER} (${GEMINI_MODEL_FAST} / ${GEMINI_MODEL_LITE}) | 发信通道: ${EMAIL_PROVIDER}"
+fi
+echo "⏳ 正在开启 Cloud Run / Cloud Build / Vertex AI 服务接口（首次约需 20 秒）..."
+APIS_TO_ENABLE=(
+  run.googleapis.com
+  cloudbuild.googleapis.com
+  artifactregistry.googleapis.com
+)
+if [[ "${GEMINI_USE_VERTEXAI,,}" == "true" ]]; then
+  APIS_TO_ENABLE+=(aiplatform.googleapis.com)
+fi
 gcloud services enable \
-  run.googleapis.com \
-  cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com \
+  "${APIS_TO_ENABLE[@]}" \
   --project "$PROJECT_ID" \
   --quiet
+
+if [[ "${GEMINI_USE_VERTEXAI,,}" == "true" ]]; then
+  RUN_SA="${CLOUDRUN_SERVICE_ACCOUNT:-}"
+  if [[ -z "$RUN_SA" ]]; then
+    PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || true)"
+    if [[ -n "$PROJECT_NUMBER" ]]; then
+      RUN_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+    fi
+  else
+    DEPLOY_FLAGS+=(--service-account "$RUN_SA")
+  fi
+  if [[ -n "$RUN_SA" ]]; then
+    echo "🔐 正在为 Cloud Run 服务账号 (${RUN_SA}) 授予 Vertex AI User (roles/aiplatform.user)..."
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:${RUN_SA}" \
+      --role="roles/aiplatform.user" \
+      --condition=None \
+      --quiet >/dev/null || echo "⚠️  无法自动绑定 IAM（若非 Owner 请在控制台为 ${RUN_SA} 授予 Vertex AI User 角色）" >&2
+  fi
+fi
 
 echo "📦 正在构建容器并部署至 Google Cloud Run（--min-instances 1 零冷启动）..."
 gcloud run deploy "$SERVICE_NAME" \

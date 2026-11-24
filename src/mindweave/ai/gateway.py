@@ -298,7 +298,12 @@ class ModelGateway(ModelGatewayPort):
 
         default_adapters: dict[str, ProviderAdapter] = {
             "fake": FakeAdapter(),
-            "gemini": GeminiAdapter(api_key=settings.gemini_api_key),
+            "gemini": GeminiAdapter(
+                api_key=settings.gemini_api_key,
+                use_vertexai=settings.gemini_use_vertexai,
+                vertex_project=settings.gemini_vertex_project,
+                vertex_location=settings.gemini_vertex_location,
+            ),
             "dashscope": OpenAICompatibleAdapter(
                 provider_name="dashscope",
                 api_key=settings.dashscope_api_key,

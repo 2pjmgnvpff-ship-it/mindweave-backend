@@ -76,6 +76,7 @@ class UnifiedRuntimeStatusResponse(CamelModel):
     environment: str
     ai_primary_provider: str
     ai_fallback_provider: str
+    gemini_auth_mode: str = "none"
     live_model_configured: bool
     cloud_llm_ready: bool
     voice_asr_ready: bool
@@ -86,7 +87,6 @@ class UnifiedRuntimeStatusResponse(CamelModel):
 
 
 _LIVE_PROVIDER_KEY_ATTRS: dict[str, str] = {
-    "gemini": "gemini_api_key",
     "dashscope": "dashscope_api_key",
     "ark": "ark_api_key",
     "deepseek": "deepseek_api_key",
@@ -94,8 +94,10 @@ _LIVE_PROVIDER_KEY_ATTRS: dict[str, str] = {
 
 
 def _is_live_model_configured(settings: Settings) -> bool:
-    """Return True iff an active non-fake AI provider has a non-blank API key configured."""
+    """Return True iff an active non-fake AI provider has live credentials (API key or Vertex ADC)."""
     for provider in (settings.ai_primary_provider, settings.ai_fallback_provider):
+        if provider == "gemini" and settings.is_gemini_configured():
+            return True
         key_attr = _LIVE_PROVIDER_KEY_ATTRS.get(provider)
         if key_attr is not None and bool(str(getattr(settings, key_attr, "")).strip()):
             return True
@@ -103,14 +105,14 @@ def _is_live_model_configured(settings: Settings) -> bool:
 
 
 def _is_cloud_asr_ready(settings: Settings) -> bool:
-    """Return True iff a multimodal cloud ASR provider (gemini/dashscope/ark) has a non-blank key."""
+    """Return True iff a multimodal cloud ASR provider (gemini/dashscope/ark) is configured."""
     asr_provider = (
         settings.ai_primary_provider
         if settings.ai_asr_provider == "inherit"
         else settings.ai_asr_provider
     )
     if asr_provider == "gemini":
-        return bool(settings.gemini_api_key.strip())
+        return settings.is_gemini_configured()
     if asr_provider == "dashscope":
         return bool(settings.dashscope_api_key.strip())
     if asr_provider == "ark":
@@ -357,6 +359,7 @@ def create_app(
             environment=active_settings.environment,
             ai_primary_provider=active_settings.ai_primary_provider,
             ai_fallback_provider=active_settings.ai_fallback_provider,
+            gemini_auth_mode=active_settings.gemini_auth_mode,
             live_model_configured=live_ready,
             cloud_llm_ready=live_ready,
             voice_asr_ready=_is_cloud_asr_ready(active_settings),
