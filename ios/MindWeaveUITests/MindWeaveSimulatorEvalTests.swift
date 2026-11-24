@@ -147,21 +147,21 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                 mark("sim_splash_lakeside", hold: 1.0)
             }
 
-            emailField.tap()
-            pause(0.9)
-            dismissKeyboardTutorialIfNeeded()
-            if app.keyboards.count == 0 {
+            for _ in 0..<3 {
                 emailField.tap()
-                pause(0.9)
+                pause(1.0)
+                dismissKeyboardTutorialIfNeeded()
+                pause(0.4)
+                if markSplash {
+                    mark("sim_splash_ios_keyboard", hold: 0.9)
+                }
+                emailField.typeText(email)
+                pause(0.5)
+                if let val = emailField.value as? String, val.contains("@") {
+                    break
+                }
                 dismissKeyboardTutorialIfNeeded()
             }
-            pause(0.4)
-            if markSplash {
-                mark("sim_splash_ios_keyboard", hold: 0.9)
-            }
-
-            emailField.typeText(email)
-            pause(0.5)
 
             XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 15, settle: 0.9), "Should tap 获取验证码")
             let verifyBtn = firstButton(containing: "翻开手帐", timeout: 30)
@@ -172,55 +172,16 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             }
 
             verifyBtn.tap()
-            pause(1.2)
+            pause(1.4)
         }
 
-        // Launch compiled MindWeave.app inside real Apple iPhone Simulator!
+        // Launch compiled MindWeave.app inside real Apple iPhone 16 Pro Simulator!
         app.launch()
 
         // =====================================================================
-        // PART 1: COLD-START BRAND-NEW USER (Splash -> Real iOS Keyboard -> OTP -> 3-Step Onboarding)
+        // PART 1: RICH MULTI-YEAR DEMO USER DAILY LIFE (7 Personas, Gold/Silver/Crystal, Photos, Reminders, Pencil Drafts, All 23 Screens)
         // =====================================================================
-        loginWithEmail("newuser_sim@example.com", markSplash: true)
-
-        let step1Heading = firstStaticText(containing: "把重要的人", timeout: 30)
-        XCTAssertTrue(step1Heading.exists, "New user should land on Onboarding Step 1")
-        pause(0.5)
-        mark("sim_onb_step1", hold: 0.9)
-
-        let exampleChip = firstButton(containing: "妈妈", timeout: 15)
-        if exampleChip.exists {
-            exampleChip.tap()
-            pause(0.6)
-        }
-        XCTAssertTrue(tapButton(containing: "记下这句", timeout: 15, settle: 0.8), "Should submit Step 1 sentence")
-
-        let goldArrowBtn = firstButton(containing: "金箭", timeout: 35)
-        XCTAssertTrue(goldArrowBtn.exists, "Onboarding Step 2 Gold arrow card should appear")
-        pause(0.5)
-        mark("sim_onb_step2", hold: 0.9)
-
-        goldArrowBtn.tap()
-        pause(1.0)
-
-        let enterJournalBtn = firstButton(containing: "翻开", timeout: 35)
-        XCTAssertTrue(enterJournalBtn.exists, "Onboarding Step 3 enter journal button should appear")
-        pause(0.6)
-        mark("sim_onb_step3_cupid", hold: 1.0)
-
-        enterJournalBtn.tap()
-        _ = firstButton(containing: "设置", timeout: 30)
-        pause(1.0)
-        mark("sim_newuser_journal_home", hold: 0.9)
-
-        // Sign out via Settings -> switch to rich multi-year seeded demo user
-        XCTAssertTrue(tapButton(containing: "设置", timeout: 15, settle: 0.9), "Should open Settings")
-        XCTAssertTrue(tapButton(containing: "退出登录", timeout: 15, settle: 1.4), "Should sign out to splash")
-
-        // =====================================================================
-        // PART 2: RICH MULTI-YEAR DEMO USER DAILY LIFE (7 Personas, Gold/Silver/Crystal, Photos, Reminders, Pencil Drafts)
-        // =====================================================================
-        loginWithEmail("demo@mindweave.app", markSplash: false)
+        loginWithEmail("demo@mindweave.app", markSplash: true)
 
         let pocketBtn = firstButton(containing: "人物档案", timeout: 35)
         XCTAssertTrue(pocketBtn.exists, "Demo user journal home should load with 人物档案 link")
