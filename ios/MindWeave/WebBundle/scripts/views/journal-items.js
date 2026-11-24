@@ -259,27 +259,75 @@ function renderDensityMark(bucket, tier) {
   return strip;
 }
 
-export function renderScale2Card(bucket, person, { onSelect } = {}) {
+const CN_MONTH_NAMES = ['', '一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+
+function renderYearRingSvg(yearGroup) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = document.createElementNS(ns, 'svg');
+  el.setAttribute('class', 'scale3-dial');
+  el.setAttribute('width', '58');
+  el.setAttribute('height', '58');
+  el.setAttribute('viewBox', '0 0 64 64');
+  el.setAttribute('aria-hidden', 'true');
+  const face = document.createElementNS(ns, 'circle');
+  face.setAttribute('cx', '32'); face.setAttribute('cy', '32'); face.setAttribute('r', '29');
+  face.setAttribute('fill', 'rgba(255, 250, 244, 0.92)');
+  face.setAttribute('stroke', 'rgba(164, 91, 48, 0.22)'); face.setAttribute('stroke-width', '1.4');
+  el.appendChild(face);
+  const inner = document.createElementNS(ns, 'circle');
+  inner.setAttribute('cx', '32'); inner.setAttribute('cy', '32'); inner.setAttribute('r', '13');
+  inner.setAttribute('fill', 'none'); inner.setAttribute('stroke', 'rgba(164, 91, 48, 0.14)'); inner.setAttribute('stroke-width', '1.2');
+  el.appendChild(inner);
+  const byMonth = new Map((yearGroup.months || []).map((b) => [Number(b.month), Number(b.count || 0)]));
+  const maxC = Math.max(1, ...byMonth.values());
+  for (let m = 1; m <= 12; m++) {
+    const angle = ((m - 1) / 12) * Math.PI * 2 - Math.PI / 2;
+    const count = byMonth.get(m) || 0;
+    const r0 = 15;
+    const r1 = count > 0 ? 19 + Math.round((count / maxC) * 7) : 18.5;
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', (32 + Math.cos(angle) * r0).toFixed(1));
+    line.setAttribute('y1', (32 + Math.sin(angle) * r0).toFixed(1));
+    line.setAttribute('x2', (32 + Math.cos(angle) * r1).toFixed(1));
+    line.setAttribute('y2', (32 + Math.sin(angle) * r1).toFixed(1));
+    line.setAttribute('stroke', count > 0 ? 'var(--ink-accent)' : 'rgba(116, 88, 66, 0.24)');
+    line.setAttribute('stroke-width', count > 0 ? '2.8' : '1.4');
+    line.setAttribute('stroke-linecap', 'round');
+    el.appendChild(line);
+  }
+  return el;
+}
+
+export function renderScale2Card(bucket, person, { showYear = false, onSelect } = {}) {
   const tier = person?.tier || 'crystal';
   const showCover = tier !== 'silver' && Boolean(bucket.coverPhotoUrl);
   const solarTerm = getSolarTermForMonth ? getSolarTermForMonth(bucket.year, bucket.month) : '';
   const ym = bucket.bucket || `${bucket.year}-${String(bucket.month).padStart(2, '0')}`;
+  const monthLabel = CN_MONTH_NAMES[Number(bucket.month)] || `${bucket.month}月`;
   return h(
     'button',
     { type: 'button', class: ['scale2-card', `tier-${tier}`, showCover && 'has-cover'], dataset: { month: ym }, onClick: () => { haptic('porcelainTick'); onSelect?.(bucket); } },
-    h('div', { class: 'scale2-card-head' }, h('strong', { class: 'scale2-month', text: `${bucket.month}月` }), solarTerm ? h('span', { class: 'scale2-solar-term', text: solarTerm }) : null),
-    showCover ? h('div', { class: 'scale2-cover-mat' }, h('img', { src: bucket.coverPhotoUrl, alt: '', loading: 'lazy', decoding: 'async' })) : h('p', { class: 'scale2-quote', text: clip(bucket.highlightQuote || `${bucket.count || 0} 条记录`, 36) }),
-    h('div', { class: 'scale2-card-foot' }, renderDensityMark(bucket, tier), h('span', { class: 'scale2-count', text: `${bucket.count || 0} 条` })),
+    h('div', { class: 'scale2-card-head' },
+      h('strong', { class: 'scale2-month', text: monthLabel }),
+      showYear ? h('span', { class: 'scale2-year-tag', text: String(bucket.year) }) : (solarTerm ? h('span', { class: 'scale2-solar-term', text: solarTerm }) : null),
+    ),
+    showCover ? h('div', { class: 'scale2-cover-mat' }, h('img', { src: bucket.coverPhotoUrl, alt: '', loading: 'lazy', decoding: 'async' })) : h('p', { class: 'scale2-quote', text: clip(bucket.highlightQuote || `${bucket.count || 0} 页记录`, 40) }),
+    h('div', { class: 'scale2-card-foot' }, renderDensityMark(bucket, tier), h('span', { class: 'scale2-count', text: `${bucket.count || 0} 页` })),
   );
 }
 
 export function renderScale3Card(yearGroup, person, { onSelect } = {}) {
   const tier = person?.tier || 'crystal';
+  const sampleQuote = (yearGroup.months || []).find((b) => b.highlightQuote)?.highlightQuote || '';
   return h(
     'button',
     { type: 'button', class: ['scale3-card', `tier-${tier}`], dataset: { year: String(yearGroup.year) }, onClick: () => { haptic('yearDetent'); onSelect?.(yearGroup); } },
-    h('strong', { class: 'scale3-year', text: `${yearGroup.year}年` }),
-    h('span', { class: 'scale3-meta', text: `${yearGroup.months.length} 个月 · ${yearGroup.totalCount} 条记录` }),
+    renderYearRingSvg(yearGroup),
+    h('span', { class: 'scale3-info' },
+      h('strong', { class: 'scale3-year', text: `${yearGroup.year}年` }),
+      h('span', { class: 'scale3-meta', text: `${yearGroup.months.length} 个月 · ${yearGroup.totalCount} 页手帐` }),
+      sampleQuote ? h('span', { class: 'scale3-quote', text: clip(sampleQuote, 34) }) : null,
+    ),
     h('span', { class: 'scale3-chevron', 'aria-hidden': 'true', text: '›' }),
   );
 }

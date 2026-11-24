@@ -187,10 +187,10 @@ export function runOnboarding() {
       questionEl.textContent = `这是「${ctx.name}」的第一页`;
       root.appendChild(h('section', { class: 'onb-page', 'aria-label': `${ctx.name}的第一页` },
         h('div', { class: 'onb-page-head' }, h('span', { class: 'mono-seal', style: { background: d.sealBg, color: d.sealColor }, 'aria-hidden': 'true', text: Array.from(ctx.name)[0] || '·' }), h('p', { class: 'onb-page-name', text: ctx.name })),
-        h('p', { class: 'onb-slip', text: ctx.sentence }),
+        h('p', { class: 'onb-page-quote', text: ctx.sentence }),
         todayCn ? h('p', { class: 'onb-page-date', text: todayCn }) : null,
       ));
-      setTimeout(() => showArrows(ctx), 680);
+      setTimeout(() => showArrows(ctx), 520);
     }
 
     function showArrows(ctx) {
@@ -198,10 +198,9 @@ export function runOnboarding() {
       for (const tier of ARROWS) {
         const meta = TIER_LABEL[tier] || {};
         const emblem = svg(ARROW_SVGS[tier], 'onb-arrow-emblem');
-        if (emblem?.style) { emblem.style.width = '20px'; emblem.style.height = '20px'; emblem.style.flexShrink = '0'; }
         box.appendChild(h('button', { type: 'button', role: 'radio', 'aria-checked': 'false', class: 'onb-arrow-card', dataset: { tier }, onClick: (e) => chooseArrow(ctx, tier, box, e.currentTarget) },
           emblem,
-          h('span', {}, h('strong', { text: meta.full || `${meta.arrow || ''} · ${meta.short || ''}`.trim() }), h('small', { text: meta.meaning || '' })),
+          h('span', { class: 'onb-arrow-copy' }, h('strong', { text: meta.full || `${meta.arrow || ''} · ${meta.short || ''}`.trim() }), h('small', { text: meta.meaning || '' })),
         ));
       }
       box.appendChild(h('p', { class: 'onb-sub', text: '以后随时可以在这一页右上角调整' }));

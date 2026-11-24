@@ -118,7 +118,10 @@ export function createChatVoice({ pillBar, orbBtn, orbEl, inputEl, getPersonId, 
     pillBar.classList.toggle('is-dictating', isDictate);
     pillBar.classList.toggle('is-direct-voice', isDirect);
     pillBar.classList.toggle('is-canceling', Boolean(active?.canceling));
-    statusChip.hidden = !isDirect && !transcribing;
+    const showChip = isDirect || transcribing;
+    statusChip.hidden = !showChip;
+    statusChip.classList.toggle('is-open', showChip);
+    statusChip.classList.toggle('is-canceling', Boolean(active?.canceling));
     if (transcribing) statusChip.textContent = '正在听清刚才那句…';
     else if (active?.canceling) statusChip.textContent = '松手取消';
     else if (mode === 'direct_live') statusChip.textContent = active?.liveText || '正在听 · 轻点灵珠发送';

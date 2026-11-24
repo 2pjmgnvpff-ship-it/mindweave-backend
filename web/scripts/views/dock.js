@@ -4,7 +4,7 @@
 import { h, clear, svg, $ } from '../dom.js';
 import { store } from '../store.js';
 import { monogramOf, sealStyle } from '../decor.js';
-import { MIC_SVG, MIC_HAIRLINE_SVG } from '../icons.js';
+import { MIC_SVG, MIC_HAIRLINE_SVG, PEN_SVG } from '../icons.js';
 import { TIER_LABEL } from '../format.js';
 import { actions } from '../actions.js';
 import { initNativeBridge, haptic, hapticPrepare } from '../native-bridge.js';
@@ -15,6 +15,7 @@ const WHISPER_SEEN_KEY = 'mw.dockWhisperSeen';
 
 let trayOpen = false;
 let trayEl = null;
+let trayScrimEl = null;
 let trayAc = null;
 let orbMounted = null;
 let lastKey = '';
@@ -73,11 +74,11 @@ function maybeShowFirstVisitWhisper(dock) {
   whisperEl = h(
     'div',
     { class: 'dock-first-whisper', role: 'status', onClick: dismissDockWhisper },
-    h('span', { text: '按住左侧话筒随口记，轻点右侧光珠聊丘比特' }),
+    h('span', { text: '按住话筒随口说 · 轻点钢笔写一句或传照片' }),
   );
   dock.parentElement?.appendChild(whisperEl);
   requestAnimationFrame(() => whisperEl?.classList.add('is-visible'));
-  whisperTimer = setTimeout(dismissDockWhisper, 6500);
+  whisperTimer = setTimeout(dismissDockWhisper, 5500);
 }
 
 function closeTray({ silentHaptic = false } = {}) {
@@ -86,6 +87,11 @@ function closeTray({ silentHaptic = false } = {}) {
   trayAc?.abort();
   trayAc = null;
   if (!silentHaptic) haptic('light');
+  if (trayScrimEl) {
+    trayScrimEl.classList.remove('is-open');
+    const sc = trayScrimEl;
+    setTimeout(() => { if (!trayOpen) sc.style.display = 'none'; }, 220);
+  }
   if (trayEl) {
     trayEl.classList.remove('is-open');
     setTimeout(() => {
@@ -100,10 +106,11 @@ function buildTray(s) {
   const total = totalPeopleCount(s);
   const hasPendingBadge = Boolean((s.draftCount || 0) > 0 || (s.inboxCount || 0) > 0 || (s.questionCount || 0) > 0);
   const activeId = s.activePersonId;
+  const cols = Math.max(1, Math.min(4, people.length || 1));
 
   const row1 = h(
     'div',
-    { class: 'inner4-row-people', role: 'list', 'aria-label': '常记的人' },
+    { class: 'inner4-row-people', role: 'list', 'aria-label': '常记的人', style: { '--tray-cols': String(cols) } },
     ...people.map((p) => {
       const selected = p.id === activeId;
       const tier = p.tier || 'crystal';
@@ -179,6 +186,14 @@ function openTray() {
   trayOpen = true;
   haptic('selection');
 
+  if (!trayScrimEl) {
+    trayScrimEl = h('div', {
+      class: 'inner4-scrim',
+      style: { display: 'none' },
+      onClick: () => closeTray(),
+    });
+    dock.parentElement?.insertBefore(trayScrimEl, $('#inner4Tray') || dock);
+  }
   if (!trayEl) {
     trayEl = $('#inner4Tray');
     if (!trayEl) {
@@ -194,8 +209,12 @@ function openTray() {
   }
   clear(trayEl);
   trayEl.append(...buildTray(store.get()));
+  trayScrimEl.style.display = 'block';
   trayEl.style.display = 'flex';
-  requestAnimationFrame(() => trayEl?.classList.add('is-open'));
+  requestAnimationFrame(() => {
+    trayScrimEl?.classList.add('is-open');
+    trayEl?.classList.add('is-open');
+  });
   $('#capsule .capsule-person-btn')?.setAttribute('aria-expanded', 'true');
 
   trayAc?.abort();
@@ -285,6 +304,30 @@ function render(s) {
     );
   }
 
+  const composeBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'capsule-compose-btn',
+      id: 'capsuleComposeBtn',
+      'aria-label': '打字记一句或上传照片',
+      onClick: () => {
+        dismissDockWhisper();
+        closeTray({ silentHaptic: true });
+        haptic('light');
+        actions.openTextCapture?.({ personId: store.get().activePersonId || null });
+      },
+    },
+    svg(PEN_SVG, 'capsule-compose-icon'),
+  );
+
+  const personLeft = h(
+    'span',
+    { class: 'dock-person-left' },
+    active ? renderAvatarToken(active, 'capsule-mini-token') : null,
+    h('span', { class: 'capsule-person-name', text: active ? active.nameCn : '添一位在意的人' }),
+  );
+
   const personBtn = h(
     'button',
     {
@@ -302,8 +345,7 @@ function render(s) {
         openTray();
       },
     },
-    active ? renderAvatarToken(active, 'capsule-mini-token') : null,
-    h('span', { class: 'capsule-person-name', text: active ? active.nameCn : '添一位在意的人' }),
+    personLeft,
     h('span', { class: 'capsule-person-caret', 'aria-hidden': 'true', text: '▾' }),
   );
   attachPersonFlick(personBtn);
@@ -311,7 +353,7 @@ function render(s) {
   capsule.classList.add('dock-capsule');
   capsule.classList.toggle('is-empty', !total);
   clear(capsule);
-  capsule.append(voiceWell, personBtn);
+  capsule.append(voiceWell, composeBtn, h('span', { class: 'dock-divider', 'aria-hidden': 'true' }), personBtn);
 
   if (total > 0) maybeShowFirstVisitWhisper($('#dock'));
 }

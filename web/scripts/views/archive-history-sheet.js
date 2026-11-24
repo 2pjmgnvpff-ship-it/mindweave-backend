@@ -166,6 +166,7 @@ function renderSplitItem(split, run, { onRefresh }) {
   const doReassign = () => {
     actions.openPeopleSheet?.({
       title: '换给哪一位人物？',
+      stacked: true,
       onSelect: async (target) => {
         if (!target || target.id === split.personId) return;
         const oldPid = split.personId;
@@ -247,6 +248,7 @@ function renderAddSplitInline(run, rawDetailsEl, host, { onAdded }) {
     text: targetPerson ? `记给：${targetPerson.nameCn} ▾` : '选择人物 ▾',
     onClick: () => actions.openPeopleSheet?.({
       title: '补拆的这条记给谁？',
+      stacked: true,
       onSelect: (p) => { targetPerson = p; personBtn.textContent = `记给：${p.nameCn} ▾`; },
     }),
   });

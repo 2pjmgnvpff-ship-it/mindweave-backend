@@ -62,14 +62,13 @@ export function createChatDrawer({ root, getPerson, getAttached, onToggleAttach,
   const stickyCta = h('button', {
     type: 'button',
     class: 'drawer-sticky-cta',
-    hidden: true,
-    style: { display: 'none' },
     onClick: () => {
       haptic('light');
       setOpen(false, { restoreFocus: false });
       onApplySelection?.();
     },
   });
+  const drawerFoot = h('div', { class: 'drawer-foot', hidden: true }, stickyCta);
 
   const drawer = h(
     'aside',
@@ -84,7 +83,7 @@ export function createChatDrawer({ root, getPerson, getAttached, onToggleAttach,
     h('div', { class: 'drawer-search-wrap' }, searchInput, searchClear),
     pillsBar,
     listEl,
-    stickyCta,
+    drawerFoot,
   );
 
   function syncSelectionCounters() {
@@ -97,8 +96,7 @@ export function createChatDrawer({ root, getPerson, getAttached, onToggleAttach,
       filterMode = 'all';
       syncFilterPills();
     }
-    stickyCta.hidden = n === 0;
-    stickyCta.style.display = n === 0 ? 'none' : '';
+    drawerFoot.hidden = n === 0;
     stickyCta.textContent = `带上这 ${n} 页去聊 →`;
   }
 

@@ -223,8 +223,8 @@ struct MindWeaveApp: App {
     @StateObject private var biometricLock = BiometricLockManager()
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Warm porcelain backdrop (`#FCFBF9`) matching MindWeave V2's seamless journal paper.
-    private static let porcelainBackdrop = Color(red: 0.988, green: 0.984, blue: 0.976)
+    /// Warm Gleb sunrise ivory backdrop (`#FAF6F0`) matching WebContainerView & tokens.css.
+    private static let porcelainBackdrop = Color(red: 0.980, green: 0.965, blue: 0.941)
 
     var body: some Scene {
         WindowGroup {

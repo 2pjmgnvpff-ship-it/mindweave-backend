@@ -52,6 +52,12 @@ export const api = {
   // Persons
   createPerson: (body) => client.post('/persons', body),
   patchPerson: (personId, body) => client.patch(`/persons/${encodeURIComponent(personId)}`, body),
+  deletePerson: (personId) => client.request('DELETE', `/persons/${encodeURIComponent(personId)}`, { idem: true }),
+  uploadPersonAvatar: (personId, file) => {
+    const form = new FormData();
+    form.append('file', file, file?.name || 'avatar.jpg');
+    return client.request('POST', `/persons/${encodeURIComponent(personId)}/photos/avatar`, { form, idem: true });
+  },
   setTier: (personId, tier) => client.patch(`/persons/${encodeURIComponent(personId)}/tier`, { tier }),
 
   // Captures & C1 Archive History
@@ -159,14 +165,19 @@ export const api = {
     if (resolvedDay !== undefined) payload.targetDay = Number(resolvedDay);
     if (isLeapMonth !== undefined) payload.isLeapMonth = Boolean(isLeapMonth);
     if (factId !== undefined) payload.factId = factId;
-    if (leadDays !== undefined) payload.leadDays = leadDays;
+    if (leadDays !== undefined) payload.leadDays = Array.isArray(leadDays) ? leadDays.map(Number) : [Number(leadDays)];
     if (fireHour !== undefined) payload.fireHour = fireHour;
     if (fireMinute !== undefined) payload.fireMinute = fireMinute;
     if (timezone !== undefined) payload.timezone = timezone;
     return client.post(`/people/${encodeURIComponent(personId)}/reminders`, payload);
   },
-  patchReminder: (reminderId, body, version) =>
-    client.patch(`/reminders/${encodeURIComponent(reminderId)}`, body, version != null ? { headers: { 'If-Match': `"${version}"` } } : {}),
+  patchReminder: (reminderId, body, version) => {
+    const normalized = body && typeof body === 'object' ? { ...body } : body;
+    if (normalized && normalized.leadDays !== undefined && !Array.isArray(normalized.leadDays)) {
+      normalized.leadDays = [Number(normalized.leadDays)];
+    }
+    return client.patch(`/reminders/${encodeURIComponent(reminderId)}`, normalized, version != null ? { headers: { 'If-Match': `"${version}"` } } : {});
+  },
   updateReminder: (reminderId, body, version) => api.patchReminder(reminderId, body, version),
   markReminderDone: (reminderId) => client.post(`/reminders/${encodeURIComponent(reminderId)}:done`, {}),
   inbox: (query = {}) => client.get('/inbox', { query: { status: 'open', ...query } }),

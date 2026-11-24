@@ -1,12 +1,12 @@
-// people-sheet.js — Unified searchable tiered All-People Sheet (1..100+ people) + Create/Edit Person.
-// Replaces retired casual.js. Uses 16px search input (0 iOS auto-zoom), mwNativeUI.pickPhoto
-// (PHPickerViewController on Gold/Crystal, strictly hidden on Silver), and 0 'TA' copy leaks.
-import { h, clear, svg, $ } from '../dom.js';
+// people-sheet.js — Unified Searchable Tiered All-People Sheet + Create, Edit & Delete Person.
+// Fixes P0-07 (full Edit/Delete person), P0-08 (real POST /persons/{id}/photos/avatar),
+// P1-14 (dynamic header sync), P1-15 (clean wrapping filter chips & memo fallback), and stacked picker mode.
+import { h, clear, svg } from '../dom.js';
 import { api } from '../api/endpoints.js';
-import { store, upsertPerson, applyTierChange } from '../store.js';
+import { store, upsertPerson, removePerson, applyTierChange } from '../store.js';
 import { monogramOf, sealStyle } from '../decor.js';
 import { formatDateCn, TIER_LABEL, clip } from '../format.js';
-import { SEARCH_SVG, CAMERA_SVG } from '../icons.js';
+import { SEARCH_SVG, CAMERA_SVG, PEN_SVG } from '../icons.js';
 import { openSheet, closeSheet } from './sheet.js';
 import { whisper } from './toast.js';
 import { actions } from '../actions.js';
@@ -41,10 +41,7 @@ function allPeopleSorted(s) {
 
 function matchesPerson(p, q) {
   if (!q) return true;
-  const hay = [p.nameCn, p.roleTag, p.pinyin, p.shortMemo, ...(p.aliases || [])]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase();
+  const hay = [p.nameCn, p.roleTag, p.pinyin, p.shortMemo, ...(p.aliases || [])].filter(Boolean).join(' ').toLowerCase();
   return hay.includes(q.toLowerCase());
 }
 
@@ -52,27 +49,25 @@ function avatarNode(p) {
   const tier = p.tier || 'crystal';
   const silver = tier === 'silver';
   const usePhoto = !silver && Boolean(p.avatarUrl);
-  const el = h('span', {
-    class: ['people-row-avatar', silver && 'is-cloaked'],
-    dataset: { tier },
-    style: usePhoto || silver ? {} : sealStyle(p),
-  });
+  const el = h('span', { class: ['people-row-avatar', silver && 'is-cloaked'], dataset: { tier }, style: usePhoto || silver ? {} : sealStyle(p) });
   if (usePhoto) el.appendChild(h('img', { src: p.avatarUrl, alt: '', loading: 'lazy', decoding: 'async' }));
   else el.textContent = monogramOf(p);
   return el;
 }
 
-function buildCreateForm({ initialName = '', onCreated, onCancel }) {
-  let tier = 'gold';
+function buildPersonForm({ existing = null, initialName = '', onSaved, onDeleted, onCancel }) {
+  const isEdit = Boolean(existing?.id);
+  let tier = existing?.tier || 'gold';
   let pickedPhoto = null;
-  let previewUrl = null;
+  let previewUrl = !existing || tier === 'silver' ? null : (existing.avatarUrl || null);
+  let ownBlobUrl = null;
   let saving = false;
 
   const nameInput = h('input', {
     type: 'text',
     class: 'people-form-input',
     maxlength: '24',
-    value: initialName,
+    value: existing?.nameCn || initialName,
     placeholder: '称呼，比如：妈妈、小周、林医生',
     'aria-label': '称呼',
   });
@@ -80,23 +75,23 @@ function buildCreateForm({ initialName = '', onCreated, onCancel }) {
     type: 'text',
     class: 'people-form-input',
     maxlength: '24',
+    value: existing?.roleTag || '',
     placeholder: '关系标签（选填），比如：家人、同组同事',
     'aria-label': '关系标签',
   });
   const photoWrap = h('div', { class: 'people-photo-row' });
-  const submitBtn = h('button', { type: 'button', class: 'sheet-btn', text: '新建手帐页', disabled: !initialName.trim() });
+  const submitBtn = h('button', { type: 'button', class: 'sheet-btn', text: isEdit ? '保存资料' : '新建手帐页', disabled: !(existing?.nameCn || initialName).trim() });
 
   const revokePreview = () => {
-    if (previewUrl && previewUrl.startsWith('blob:')) URL.revokeObjectURL(previewUrl);
-    previewUrl = null;
+    if (ownBlobUrl) { URL.revokeObjectURL(ownBlobUrl); ownBlobUrl = null; }
   };
 
   const renderPhotoRow = () => {
     clear(photoWrap);
-    // Silver tier strictly hides photo avatar picker (03e §2.5).
     if (tier === 'silver') {
       revokePreview();
       pickedPhoto = null;
+      previewUrl = null;
       photoWrap.hidden = true;
       return;
     }
@@ -119,7 +114,8 @@ function buildCreateForm({ initialName = '', onCreated, onCancel }) {
               revokePreview();
               const file = first instanceof Blob ? first : first?.file || null;
               pickedPhoto = file ? { file, url: first?.url } : first;
-              previewUrl = first?.url || (file ? URL.createObjectURL(file) : null);
+              if (file) { ownBlobUrl = URL.createObjectURL(file); previewUrl = ownBlobUrl; }
+              else previewUrl = first?.url || null;
               renderPhotoRow();
             } catch {
               whisper('这次没能选到照片', 2400);
@@ -127,7 +123,7 @@ function buildCreateForm({ initialName = '', onCreated, onCancel }) {
           },
         },
         svg(CAMERA_SVG, 'people-cam-icon'),
-        h('span', { text: previewUrl ? '换一张照片' : '选一张头像（选填）' }),
+        h('span', { text: previewUrl ? '换一张头像' : '选一张头像（选填）' }),
       ),
     );
   };
@@ -135,13 +131,13 @@ function buildCreateForm({ initialName = '', onCreated, onCancel }) {
   const tierCards = [];
   const tierGroup = h(
     'div',
-    { class: 'onb-tier-grid people-tier-grid', role: 'radiogroup', 'aria-label': '选择关系分类' },
+    { class: 'people-tier-grid', role: 'radiogroup', 'aria-label': '选择关系分类' },
     ...TIER_OPTIONS.map((opt) => {
       const btn = h(
         'button',
         {
           type: 'button',
-          class: ['onb-tier-card', 'people-tier-choice', tier === opt.id && 'is-selected'],
+          class: ['people-tier-choice', tier === opt.id && 'is-selected'],
           dataset: { tier: opt.id },
           role: 'radio',
           'aria-checked': String(tier === opt.id),
@@ -171,81 +167,142 @@ function buildCreateForm({ initialName = '', onCreated, onCancel }) {
 
   submitBtn.addEventListener('click', async () => {
     const nameCn = nameInput.value.trim();
+    const roleTag = roleInput.value.trim();
     if (!nameCn || saving) return;
     saving = true;
     submitBtn.disabled = true;
     try {
-      const created = await api.createPerson({
-        nameCn,
-        roleTag: roleInput.value.trim() || undefined,
-        tier,
-      });
-      if (created?.id) {
-        upsertPerson(created);
-        applyTierChange({ personId: created.id, tier: created.tier || tier });
-        if (pickedPhoto?.file && tier !== 'silver' && typeof api.uploadPhoto === 'function') {
-          api.uploadPhoto(created.id, { file: pickedPhoto.file, caption: `${nameCn}的封面照片`, pinned: false }).catch(() => {});
+      let person = existing;
+      if (isEdit) {
+        const updated = await api.patchPerson(existing.id, { nameCn, roleTag });
+        person = { ...existing, ...(updated || {}), nameCn, roleTag };
+        upsertPerson(person);
+        if (tier !== existing.tier) {
+          const tierRes = await api.setTier(existing.id, tier);
+          applyTierChange({ personId: existing.id, tier: tierRes?.tier || tier, coreIds: tierRes?.coreIds, casualIds: tierRes?.casualIds });
+          person = { ...person, tier: tierRes?.tier || tier };
         }
-        actions.refreshBootstrap?.();
-        haptic('memorySeal', { tier });
-        whisper(`已为「${nameCn}」新建手帐页`, 2400);
-        revokePreview();
-        onCreated?.(created);
+      } else {
+        person = await api.createPerson({ nameCn, roleTag: roleTag || undefined, tier });
+        if (person?.id) {
+          upsertPerson(person);
+          applyTierChange({ personId: person.id, tier: person.tier || tier });
+        }
       }
+      if (person?.id && pickedPhoto?.file && tier !== 'silver' && typeof api.uploadPersonAvatar === 'function') {
+        const withAvatar = await api.uploadPersonAvatar(person.id, pickedPhoto.file).catch(() => null);
+        if (withAvatar?.id) { person = withAvatar; upsertPerson(withAvatar); }
+      }
+      actions.refreshBootstrap?.();
+      haptic('memorySeal', { tier });
+      whisper(isEdit ? `已更新「${nameCn}」的资料` : `已为「${nameCn}」新建手帐页`, 2200);
+      revokePreview();
+      onSaved?.(person);
     } catch (err) {
       saving = false;
       submitBtn.disabled = false;
       haptic('warning');
-      whisper(err?.message || '暂时没能建好这一页', 3000);
+      whisper(err?.message || (isEdit ? '资料没保存成功' : '暂时没能建好这一页'), 2800);
     }
   });
 
+  const deleteZone = isEdit
+    ? h(
+        'div',
+        { class: 'people-danger-zone' },
+        h('button', {
+          type: 'button',
+          class: 'sheet-danger-btn mw-btn-full',
+          text: `删除「${existing.nameCn}」及其全部手帐`,
+          onClick: async () => {
+            const choice = await mwNativeUI?.showSheet?.({
+              style: 'actionSheet',
+              title: `删除「${existing.nameCn}」？`,
+              message: '这位人物下的手帐、提醒与对话记录将一并移除。',
+              items: [
+                { id: 'delete', label: '确认删除人物', role: 'destructive', destructive: true },
+                { id: 'cancel', label: '取消', role: 'cancel', cancel: true },
+              ],
+            });
+            if (choice && choice.selectedId !== 'delete') return;
+            try {
+              await api.deletePerson(existing.id);
+              removePerson(existing.id);
+              actions.refreshBootstrap?.();
+              haptic('warning');
+              revokePreview();
+              whisper(`已移除「${existing.nameCn}」`, 2200);
+              onDeleted?.(existing);
+            } catch (err) {
+              haptic('warning');
+              whisper(err?.message || '暂时没能删除这位人物', 2600);
+            }
+          },
+        }),
+      )
+    : null;
+
   renderPhotoRow();
-  photoWrap.style.display = 'flex';
-  photoWrap.style.alignItems = 'center';
-  photoWrap.style.gap = '12px';
   const form = h(
     'div',
-    { class: 'people-create-form', style: { display: 'flex', 'flex-direction': 'column', gap: '14px' } },
+    { class: 'people-create-form' },
     photoWrap,
-    h('label', { class: 'people-field', style: { display: 'flex', 'flex-direction': 'column', gap: '6px' } }, h('span', { class: 'settings-group-title people-field-label', text: '怎么称呼' }), nameInput),
-    h('label', { class: 'people-field', style: { display: 'flex', 'flex-direction': 'column', gap: '6px' } }, h('span', { class: 'settings-group-title people-field-label', text: '关系标签' }), roleInput),
-    h('div', { class: 'people-field', style: { display: 'flex', 'flex-direction': 'column', gap: '6px' } }, h('span', { class: 'settings-group-title people-field-label', text: '关系分类' }), tierGroup),
-    h(
-      'div',
-      { class: 'sheet-actions' },
-      h('button', { type: 'button', class: 'sheet-btn quiet', text: '返回', onClick: () => { revokePreview(); onCancel?.(); } }),
-      submitBtn,
-    ),
+    h('label', { class: 'people-field' }, h('span', { class: 'people-field-label', text: '怎么称呼' }), nameInput),
+    h('label', { class: 'people-field' }, h('span', { class: 'people-field-label', text: '关系标签' }), roleInput),
+    h('div', { class: 'people-field' }, h('span', { class: 'people-field-label', text: '关系分类' }), tierGroup),
+    h('div', { class: 'sheet-actions' }, h('button', { type: 'button', class: 'sheet-btn quiet', text: '返回', onClick: () => { revokePreview(); onCancel?.(); } }), submitBtn),
+    deleteZone,
   );
   return { el: form, focusEl: nameInput, cleanup: revokePreview };
 }
 
 /**
- * Open the unified searchable All-People Directory Sheet (supports 1..100+ people).
- * @param {{ mode?: 'list'|'create', query?: string, onSelect?: (person) => void, title?: string }} opts
+ * Open the unified searchable All-People Sheet (`mode: 'list' | 'create' | 'edit'`).
  */
-export function openPeopleSheet({ mode = 'list', query = '', onSelect = null, title = '' } = {}) {
+export function openPeopleSheet({ mode = 'list', person = null, query = '', onSelect = null, title = '', stacked = false } = {}) {
   let currentMode = mode;
+  let editingPerson = person;
   let filterTier = 'all';
   let searchQuery = String(query || '').trim();
   let formCleanup = null;
+  let sheetHandle = null;
 
   const host = h('div', { class: 'people-sheet-root' });
+
+  const syncHeader = () => {
+    if (!sheetHandle?.setHeader) return;
+    const count = Object.keys(store.get().people || {}).length;
+    if (currentMode === 'create') sheetHandle.setHeader({ title: '新建一位人物', sub: '写下称呼与关系分类，立即展开第一页' });
+    else if (currentMode === 'edit') sheetHandle.setHeader({ title: `编辑「${editingPerson?.nameCn || ''}」`, sub: '修改称呼、关系标签、分类或头像' });
+    else sheetHandle.setHeader({ title: title || '全部人物', sub: onSelect ? `共 ${count} 位，轻点选择` : `共 ${count} 位，轻点翻开手帐页` });
+  };
 
   const renderContent = () => {
     formCleanup?.();
     formCleanup = null;
     clear(host);
+    syncHeader();
 
-    if (currentMode === 'create') {
-      const form = buildCreateForm({
+    if (currentMode === 'create' || currentMode === 'edit') {
+      const form = buildPersonForm({
+        existing: currentMode === 'edit' ? editingPerson : null,
         initialName: searchQuery,
-        onCancel: () => { currentMode = 'list'; renderContent(); },
-        onCreated: (person) => {
-          closeSheet({ silentHaptic: true });
-          if (onSelect) onSelect(person);
-          else actions.openPerson(person.id);
+        onCancel: () => {
+          if (mode === 'edit' || (mode === 'create' && stacked)) { sheetHandle?.close?.(); return; }
+          currentMode = 'list';
+          editingPerson = null;
+          renderContent();
+        },
+        onSaved: (saved) => {
+          sheetHandle?.close?.({ silentHaptic: true });
+          if (mode === 'edit' && stacked) closeSheet({ silentHaptic: true });
+          if (onSelect) onSelect(saved);
+          else if (saved?.id) actions.openPerson(saved.id);
+        },
+        onDeleted: () => {
+          closeSheet({ silentHaptic: true, all: true });
+          const nextId = store.get().activePersonId;
+          if (nextId) actions.openPerson(nextId);
         },
       });
       formCleanup = form.cleanup;
@@ -292,49 +349,60 @@ export function openPeopleSheet({ mode = 'list', query = '', onSelect = null, ti
       for (const p of filtered) {
         const tier = p.tier || 'crystal';
         const isCore = coreSet.has(p.id);
-        const memo = p.shortMemo || clip((s.materials[p.id]?.items || [])[0]?.body || '', 30);
+        const memo = p.shortMemo || clip((s.materials[p.id]?.items || [])[0]?.body || '', 28) || (p.roleTag ? `${p.roleTag} · 轻点翻开手帐` : '轻点翻开手帐');
         const lastDate = formatDateCn(p.lastMaterialAt || (s.materials[p.id]?.items || [])[0]?.happenedOn);
         const tierShort = TIER_LABEL?.[tier]?.short || '';
 
-        listHost.appendChild(
-          h(
-            'button',
-            {
-              type: 'button',
-              role: 'listitem',
-              class: ['people-row', p.id === activeId && 'is-active'],
-              dataset: { personId: p.id, tier },
-              onClick: () => {
-                haptic('selection');
-                closeSheet({ silentHaptic: true });
-                if (onSelect) onSelect(p);
-                else actions.openPerson(p.id);
-              },
+        const mainBtn = h(
+          'button',
+          {
+            type: 'button',
+            class: 'people-row',
+            dataset: { personId: p.id, tier },
+            onClick: () => {
+              haptic('selection');
+              sheetHandle?.close?.({ silentHaptic: true });
+              if (onSelect) onSelect(p);
+              else actions.openPerson(p.id);
             },
-            avatarNode(p),
+          },
+          avatarNode(p),
+          h(
+            'span',
+            { class: 'people-row-body' },
             h(
               'span',
-              { class: 'people-row-body' },
-              h(
-                'span',
-                { class: 'people-row-top' },
-                h('strong', { class: 'people-row-name', text: p.nameCn }),
-                p.roleTag ? h('span', { class: 'people-row-tag', text: p.roleTag }) : null,
-                isCore ? h('span', { class: 'people-row-core', text: '常记' }) : null,
-                h('span', { class: ['people-row-tier', `is-${tier}`], text: tierShort }),
-              ),
-              memo || lastDate
-                ? h(
-                    'span',
-                    { class: 'people-row-sub' },
-                    h('span', { class: 'people-row-memo', text: memo || '暂无记录' }),
-                    lastDate ? h('span', { class: 'people-row-date', text: lastDate }) : null,
-                  )
-                : null,
+              { class: 'people-row-top' },
+              h('strong', { class: 'people-row-name', text: p.nameCn }),
+              p.roleTag ? h('span', { class: 'people-row-tag', text: p.roleTag }) : null,
+              isCore ? h('span', { class: 'people-row-core', text: '常记' }) : null,
+              h('span', { class: ['people-row-tier', `is-${tier}`], text: tierShort }),
             ),
-            h('span', { class: 'people-row-chevron', 'aria-hidden': 'true', text: '›' }),
+            h(
+              'span',
+              { class: 'people-row-sub' },
+              h('span', { class: 'people-row-memo', text: memo }),
+              lastDate ? h('span', { class: 'people-row-date', text: lastDate }) : null,
+            ),
           ),
         );
+
+        const editBtn = !onSelect
+          ? h('button', {
+              type: 'button',
+              class: 'people-row-edit-btn',
+              'aria-label': `编辑「${p.nameCn}」`,
+              onClick: (e) => {
+                e.stopPropagation();
+                haptic('light');
+                editingPerson = p;
+                currentMode = 'edit';
+                renderContent();
+              },
+            }, svg(PEN_SVG))
+          : h('span', { class: 'people-row-chevron', 'aria-hidden': 'true', text: '›' });
+
+        listHost.appendChild(h('div', { role: 'listitem', class: ['people-row-wrap', p.id === activeId && 'is-active'] }, mainBtn, editBtn));
       }
     };
 
@@ -388,17 +456,18 @@ export function openPeopleSheet({ mode = 'list', query = '', onSelect = null, ti
     host.append(searchWrap, filterBar, listHost);
   };
 
-  renderContent();
-  return openSheet({
-    title: title || (mode === 'create' ? '新建一位人物' : '全部人物'),
-    sub: mode === 'create' ? '慢慢写下在意的人' : `共 ${Object.keys(store.get().people || {}).length} 位，轻点翻开手帐页`,
+  sheetHandle = openSheet({
+    title: title || (mode === 'create' ? '新建一位人物' : mode === 'edit' ? `编辑「${person?.nameCn || ''}」` : '全部人物'),
+    sub: mode === 'create' ? '写下称呼与关系分类，立即展开第一页' : `共 ${Object.keys(store.get().people || {}).length} 位，轻点翻开手帐页`,
     body: host,
     className: 'is-people-sheet',
+    stacked,
     onClose: () => { formCleanup?.(); },
   });
+  renderContent();
+  return sheetHandle;
 }
 
-/** Backward-compatible alias so any caller invoking actions.openDirectory() opens the unified All-People Sheet. */
 export function openDirectory() {
   return openPeopleSheet({ mode: 'list' });
 }

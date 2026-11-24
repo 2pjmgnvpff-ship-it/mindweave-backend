@@ -1,6 +1,6 @@
-/* tokens.css — MindWeave V2 Gleb Warm Porcelain Single Source of Truth (<= 295L)
-   Verified 9-surface WCAG AA/AAA matrix, lifted sunrise auras, jewel-refraction 5-layer Orb,
-   2x hue-tinted elevation shadows, safe-area & iOS keyboard spring sync, 16px input floor. */
+/* tokens.css — MindWeave Pure Gleb Morning-Light Translucent Glass Design System (Option A)
+   Warm ivory-peach sunrise auras, luminous milky-glass cards, soft pearlescent opalescent orb,
+   refined warm-espresso & champagne-gold accents, safe-area & iOS keyboard spring bridge. */
 
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", system-ui, sans-serif;
@@ -9,11 +9,11 @@
 
   /* Safe Areas, Dynamic Type & iOS Keyboard Spring Bridge */
   --safe-top: max(env(safe-area-inset-top, 0px), 12px);
-  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  --safe-bottom: max(env(safe-area-inset-bottom, 0px), 14px);
   --pad-x: 20px;
   --dock-bottom: calc(var(--safe-bottom) + 8px);
   --dock-gap: 12px;
-  --topbar-h: 52px;
+  --topbar-h: 50px;
   --mw-kb-inset: 0px;
   --mw-kb-dur: 250ms;
   --mw-kb-curve: cubic-bezier(0.38, 0.7, 0.125, 1);
@@ -27,61 +27,73 @@
   --r-pill: 9999px;
   --r-chip: 12px;
 
-  /* Default Tier: Gold (金箭 · 珍重 — WCAG AA/AAA Verified) */
-  --ink-primary: #231E1B;
-  --ink-secondary: #695F58;
-  --ink-tertiary: #726860;
-  --ink-accent: #9A4E24;
-  --ink-pinned: #8A6518;
-  --ink-danger: #B83E35;
+  /* Default Tier: Gold (金箭 · 珍重 — Pure Gleb Warm Morning Light) */
+  --ink-primary: #251F1B;
+  --ink-secondary: #6F645B;
+  --ink-tertiary: #96897E;
+  --ink-accent: #A45B30;
+  --ink-pinned: #946A24;
+  --ink-danger: #C2443A;
   --ink-crisis: #2F5241;
-  --aura-accent: #D98A5C;
-  --aura-gold: #C49B45;
-  --ink-rim: rgba(138, 108, 84, 0.068);
-  --ink-rim-strong: rgba(138, 108, 84, 0.14);
-  --shadow-rgb: 124, 92, 68;
-  --bg-pinned-tint: #FDF9F0;
-  --bg-evidence: #F9FAFC;
+  --aura-accent: #DF8E5D;
+  --aura-gold: #D3A356;
+
+  /* Translucent Glass Surfaces & Hairlines */
+  --ink-rim: rgba(154, 118, 90, 0.09);
+  --ink-rim-strong: rgba(154, 118, 90, 0.17);
+  --glass-border: rgba(255, 255, 255, 0.88);
+  --shadow-rgb: 138, 98, 70;
+  --bg-pinned-tint: rgba(255, 250, 240, 0.84);
+  --bg-evidence: rgba(246, 249, 253, 0.82);
   --bg-crisis: #F7FAF8;
-  --bg-chip: rgba(154, 78, 36, 0.088);
-  --bg-chip-hover: rgba(154, 78, 36, 0.15);
-  --bg-user-msg: #F4EDE4;
-  --dot-empty: rgba(124, 92, 68, 0.15);
-  --dot-l1: #E7C3A4;
-  --dot-l2: #DC9F74;
-  --dot-l3: #C57947;
-  --dot-l4: #9A4E24;
+  --bg-chip: rgba(182, 110, 62, 0.11);
+  --bg-chip-hover: rgba(182, 110, 62, 0.18);
+  --bg-user-msg: rgba(255, 252, 248, 0.86);
+  --dot-empty: rgba(138, 98, 70, 0.16);
+  --dot-l1: #EBC8A8;
+  --dot-l2: #E0A276;
+  --dot-l3: #C97D4B;
+  --dot-l4: #A45B30;
 
-  /* Default Atmosphere: Cotton (晨光白瓷 / Gold — Lifted 0.50 Sunrise Aura) */
-  --bg-canvas: #FCFBF9;
-  --bg-canvas-zero: rgba(252, 251, 249, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #FAF7F3;
-  --bg-dock: rgba(255, 253, 250, 0.80);
+  /* Warm Refined CTAs (Replacing harsh dead #231E1B black bricks) */
+  --cta-primary-bg: linear-gradient(135deg, #4D3B32 0%, #342721 100%);
+  --cta-primary-fg: #FFFBF7;
+  --cta-primary-shadow: 0 6px 18px rgba(72, 49, 36, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --cta-warm-bg: linear-gradient(135deg, #D4AA7D 0%, #BC8B58 100%);
+  --cta-warm-fg: #FFFDFB;
+  --cta-warm-shadow: 0 5px 14px rgba(180, 128, 76, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.34);
+
+  /* Default Atmosphere: Cotton (晨光白瓷 / Gold — Rich Gleb Sunrise Peach Aura) */
+  --bg-canvas: #FAF6F0;
+  --bg-canvas-fade: rgba(250, 246, 240, 0.72);
+  --bg-canvas-zero: rgba(250, 246, 240, 0);
+  --bg-card: rgba(255, 253, 250, 0.78);
+  --bg-card-solid: #FFFDFB;
+  --bg-soft: rgba(249, 243, 236, 0.86);
+  --bg-dock: rgba(255, 252, 248, 0.76);
+  --bg-sheet: rgba(255, 253, 250, 0.94);
   --canvas-bg-image:
-    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(252, 214, 180, 0.50) 0%, rgba(252, 224, 198, 0.22) 42%, rgba(252, 251, 249, 0) 74%),
-    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(247, 228, 206, 0.34) 0%, rgba(252, 251, 249, 0) 72%);
+    radial-gradient(ellipse 88% 58% at 94% 6%, rgba(255, 198, 154, 0.62) 0%, rgba(255, 214, 182, 0.34) 38%, rgba(250, 246, 240, 0) 74%),
+    radial-gradient(ellipse 68% 50% at 88% 42%, rgba(253, 206, 204, 0.34) 0%, rgba(250, 246, 240, 0) 70%),
+    radial-gradient(ellipse 72% 54% at 8% 88%, rgba(252, 228, 186, 0.48) 0%, rgba(250, 246, 240, 0) 72%);
   --canvas-bg-size: 100% 100%;
-  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.94), inset 0 0 0 1px rgba(255, 255, 255, 0.62);
 
-  /* Exact 2x Hue-Tinted Elevation Shadows */
-  --shadow-card: var(--card-extra-rim), 0 0 0 1px var(--ink-rim), 0 1px 2px rgba(var(--shadow-rgb), 0.035), 0 10px 20px rgba(var(--shadow-rgb), 0.055);
-  --shadow-float: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 0 0 1px var(--ink-rim), 0 2px 4px rgba(var(--shadow-rgb), 0.05), 0 14px 28px rgba(var(--shadow-rgb), 0.095);
-  --shadow-sheet: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 0 0 1px var(--ink-rim), 0 -2px 4px rgba(var(--shadow-rgb), 0.045), 0 -16px 32px rgba(var(--shadow-rgb), 0.10);
+  /* Luminous Soft Warm Elevation */
+  --shadow-card: var(--card-extra-rim), 0 0 0 0.5px var(--ink-rim), 0 2px 6px rgba(var(--shadow-rgb), 0.04), 0 12px 26px rgba(var(--shadow-rgb), 0.065);
+  --shadow-float: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 0.5px rgba(255, 255, 255, 0.76), 0 4px 12px rgba(var(--shadow-rgb), 0.06), 0 16px 34px rgba(var(--shadow-rgb), 0.11);
+  --shadow-sheet: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 0.5px var(--ink-rim), 0 -4px 14px rgba(var(--shadow-rgb), 0.06), 0 -18px 40px rgba(var(--shadow-rgb), 0.12);
 
-  /* Jewel-Refraction 5-Layer Living Pearlescent Orb (Gold) */
-  --orb-c0: #FFFDF9;
-  --orb-c1: #FBD3AE;
-  --orb-c2: #E48554;
-  --orb-c3: #B95830;
-  --orb-caustic-a: rgba(255, 248, 240, 0.86);
-  --orb-caustic-b: rgba(248, 176, 126, 0.78);
-  --orb-caustic-c: rgba(210, 108, 66, 0.58);
-  --orb-caustic-d: rgba(242, 198, 152, 0.76);
-  --orb-limb: rgba(140, 62, 26, 0.30);
-  --orb-halo: rgba(217, 138, 92, 0.26);
-  --orb-send-bg: #231E1B;
-  --orb-send-fg: #FCFBF9;
+  /* Luminous Translucent Opalescent Orb (Gold — Zero Mud-Pie Conic Stripes!) */
+  --orb-core: #FFFBF4;
+  --orb-warm: #F9C694;
+  --orb-peach: #F09C70;
+  --orb-irid: #E3C9F4;
+  --orb-deep: #D2835B;
+  --orb-rim: rgba(255, 255, 255, 0.95);
+  --orb-halo: rgba(235, 165, 114, 0.36);
+  --orb-send-bg: #3D2E27;
+  --orb-send-fg: #FFFBF7;
 }
 
 @media (max-width: 378px) {
@@ -90,203 +102,270 @@
 
 /* ==================== TIER SEMANTIC OVERRIDES ==================== */
 #app[data-arrow-tier="silver"] {
-  --ink-primary: #1B2129;
-  --ink-secondary: #586372;
-  --ink-tertiary: #616D7D;
-  --ink-accent: #415C80;
-  --ink-pinned: #415C80;
-  --aura-accent: #617996;
-  --aura-gold: #788CA6;
-  --ink-rim: rgba(74, 92, 118, 0.072);
-  --ink-rim-strong: rgba(74, 92, 118, 0.15);
-  --shadow-rgb: 56, 72, 96;
-  --bg-pinned-tint: #F4F7FA;
-  --bg-chip: rgba(65, 92, 128, 0.09);
-  --bg-chip-hover: rgba(65, 92, 128, 0.15);
-  --bg-user-msg: #ECEFF5;
-  --dot-empty: rgba(74, 92, 118, 0.15);
-  --dot-l1: #C7D2DF;
-  --dot-l2: #9EB0C6;
-  --dot-l3: #6D85A3;
-  --dot-l4: #415C80;
-  --orb-c0: #FFFFFF;
-  --orb-c1: #D0E0F2;
-  --orb-c2: #7D9CBE;
-  --orb-c3: #496588;
-  --orb-caustic-a: rgba(255, 255, 255, 0.88);
-  --orb-caustic-b: rgba(168, 194, 224, 0.80);
-  --orb-caustic-c: rgba(84, 114, 152, 0.60);
-  --orb-caustic-d: rgba(196, 214, 236, 0.78);
-  --orb-limb: rgba(42, 62, 90, 0.28);
-  --orb-halo: rgba(97, 121, 150, 0.26);
-  --orb-send-bg: #1B2129;
-  --orb-send-fg: #F8F9FB;
+  --ink-primary: #1D242E;
+  --ink-secondary: #5B6777;
+  --ink-tertiary: #8490A0;
+  --ink-accent: #3F5D84;
+  --ink-pinned: #3F5D84;
+  --aura-accent: #6A86AA;
+  --aura-gold: #809AB8;
+  --ink-rim: rgba(74, 96, 126, 0.10);
+  --ink-rim-strong: rgba(74, 96, 126, 0.18);
+  --shadow-rgb: 58, 78, 108;
+  --bg-pinned-tint: rgba(242, 247, 253, 0.86);
+  --bg-chip: rgba(63, 93, 132, 0.10);
+  --bg-chip-hover: rgba(63, 93, 132, 0.17);
+  --bg-user-msg: rgba(246, 249, 254, 0.88);
+  --cta-primary-bg: linear-gradient(135deg, #38495E 0%, #243040 100%);
+  --cta-primary-shadow: 0 6px 18px rgba(42, 58, 82, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --cta-warm-bg: linear-gradient(135deg, #7490B2 0%, #567396 100%);
+  --cta-warm-shadow: 0 5px 14px rgba(86, 115, 150, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.30);
+  --dot-empty: rgba(74, 96, 126, 0.16);
+  --dot-l1: #C7D6E8;
+  --dot-l2: #9AB4D2;
+  --dot-l3: #6C8EB6;
+  --dot-l4: #3F5D84;
+  --orb-core: #FFFFFF;
+  --orb-warm: #D2E3F7;
+  --orb-peach: #9AB8DE;
+  --orb-irid: #DCE0F7;
+  --orb-deep: #6C8CB5;
+  --orb-halo: rgba(114, 148, 192, 0.32);
+  --orb-send-bg: #2A384A;
+  --orb-send-fg: #F8FAFD;
 }
 
 #app[data-arrow-tier="crystal"] {
-  --ink-primary: #1E2430;
-  --ink-secondary: #5A6578;
-  --ink-tertiary: #606C7F;
-  --ink-accent: #335D96;
-  --ink-pinned: #335D96;
-  --aura-accent: #5C89C6;
-  --aura-gold: #6A94CC;
-  --ink-rim: rgba(68, 96, 138, 0.068);
-  --ink-rim-strong: rgba(68, 96, 138, 0.14);
-  --shadow-rgb: 62, 86, 126;
-  --bg-pinned-tint: #F4F8FD;
-  --bg-chip: rgba(51, 93, 150, 0.088);
-  --bg-chip-hover: rgba(51, 93, 150, 0.15);
-  --bg-user-msg: #EDF3FA;
-  --dot-empty: rgba(68, 96, 138, 0.15);
-  --dot-l1: #C2D8F2;
-  --dot-l2: #8FB8E6;
-  --dot-l3: #5C89C6;
-  --dot-l4: #335D96;
-  --orb-c0: #FFFFFF;
-  --orb-c1: #CCE3FC;
-  --orb-c2: #7AAAE5;
-  --orb-c3: #4978C4;
-  --orb-caustic-a: rgba(255, 255, 255, 0.88);
-  --orb-caustic-b: rgba(164, 204, 250, 0.82);
-  --orb-caustic-c: rgba(88, 132, 214, 0.60);
-  --orb-caustic-d: rgba(190, 218, 252, 0.80);
-  --orb-limb: rgba(48, 78, 134, 0.26);
-  --orb-halo: rgba(92, 137, 198, 0.28);
-  --orb-send-bg: #1E2430;
+  --ink-primary: #1F2533;
+  --ink-secondary: #5C687E;
+  --ink-tertiary: #8491A6;
+  --ink-accent: #3563A0;
+  --ink-pinned: #3563A0;
+  --aura-accent: #6394D6;
+  --aura-gold: #78A3DE;
+  --ink-rim: rgba(70, 102, 150, 0.095);
+  --ink-rim-strong: rgba(70, 102, 150, 0.18);
+  --shadow-rgb: 64, 92, 138;
+  --bg-pinned-tint: rgba(242, 248, 255, 0.86);
+  --bg-chip: rgba(53, 99, 160, 0.10);
+  --bg-chip-hover: rgba(53, 99, 160, 0.17);
+  --bg-user-msg: rgba(246, 250, 255, 0.88);
+  --cta-primary-bg: linear-gradient(135deg, #354A6A 0%, #24354E 100%);
+  --cta-primary-shadow: 0 6px 18px rgba(42, 64, 98, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --cta-warm-bg: linear-gradient(135deg, #6EA0DF 0%, #4E81C4 100%);
+  --cta-warm-shadow: 0 5px 14px rgba(78, 129, 196, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.30);
+  --dot-empty: rgba(70, 102, 150, 0.16);
+  --dot-l1: #C2DCFA;
+  --dot-l2: #8EBCEE;
+  --dot-l3: #5E95DA;
+  --dot-l4: #3563A0;
+  --orb-core: #FFFFFF;
+  --orb-warm: #CFE6FF;
+  --orb-peach: #95C0F4;
+  --orb-irid: #E3D6FF;
+  --orb-deep: #6C98DE;
+  --orb-halo: rgba(114, 160, 224, 0.34);
+  --orb-send-bg: #293B56;
   --orb-send-fg: #FAFBFD;
 }
 
-/* ==================== 9-SURFACE A2 PORCELAIN ATMOSPHERE MATRIX ==================== */
+/* ==================== 9-SURFACE GLEB ATMOSPHERE MATRIX (3 DISTINCT THEMES) ==================== */
+/* 1. Cotton (晨光白瓷) — Airy Sunlit Morning Glow */
 #app[data-journal-edition="cotton"][data-arrow-tier="silver"] {
-  --bg-canvas: #F8F9FB;
-  --bg-canvas-zero: rgba(248, 249, 251, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #F1F4F8;
-  --bg-dock: rgba(250, 252, 255, 0.82);
+  --bg-canvas: #F5F8FC;
+  --bg-canvas-fade: rgba(245, 248, 252, 0.74);
+  --bg-canvas-zero: rgba(245, 248, 252, 0);
+  --bg-card: rgba(255, 255, 255, 0.78);
+  --bg-soft: rgba(238, 244, 251, 0.86);
+  --bg-dock: rgba(252, 254, 255, 0.76);
   --canvas-bg-image:
-    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(204, 220, 238, 0.44) 0%, rgba(214, 226, 240, 0.18) 42%, rgba(248, 249, 251, 0) 74%),
-    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(220, 230, 242, 0.32) 0%, rgba(248, 249, 251, 0) 72%);
+    radial-gradient(ellipse 84% 56% at 92% 6%, rgba(190, 214, 242, 0.54) 0%, rgba(210, 226, 246, 0.26) 42%, rgba(245, 248, 252, 0) 74%),
+    radial-gradient(ellipse 68% 52% at 10% 88%, rgba(214, 224, 244, 0.42) 0%, rgba(245, 248, 252, 0) 72%);
 }
 #app[data-journal-edition="cotton"][data-arrow-tier="crystal"] {
-  --bg-canvas: #FAFBFD;
-  --bg-canvas-zero: rgba(250, 251, 253, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #F3F6FA;
-  --bg-dock: rgba(252, 253, 255, 0.82);
+  --bg-canvas: #F6F9FE;
+  --bg-canvas-fade: rgba(246, 249, 254, 0.74);
+  --bg-canvas-zero: rgba(246, 249, 254, 0);
+  --bg-card: rgba(255, 255, 255, 0.78);
+  --bg-soft: rgba(239, 245, 253, 0.86);
+  --bg-dock: rgba(252, 254, 255, 0.76);
   --canvas-bg-image:
-    radial-gradient(ellipse 76% 54% at 88% 8%, rgba(202, 224, 252, 0.46) 0%, rgba(212, 230, 252, 0.20) 42%, rgba(250, 251, 253, 0) 74%),
-    radial-gradient(ellipse 58% 46% at 12% 86%, rgba(220, 234, 252, 0.32) 0%, rgba(250, 251, 253, 0) 72%);
+    radial-gradient(ellipse 86% 58% at 92% 6%, rgba(188, 222, 255, 0.56) 0%, rgba(214, 232, 255, 0.26) 42%, rgba(246, 249, 254, 0) 74%),
+    radial-gradient(ellipse 68% 50% at 10% 86%, rgba(224, 216, 252, 0.40) 0%, rgba(246, 249, 254, 0) 72%);
 }
 
+/* 2. Hobonichi (素雅细格) — Warm Cream Editorial Fine-Grid Stationery */
 #app[data-journal-edition="hobonichi"][data-arrow-tier="gold"] {
-  --bg-canvas: #FBF8F3;
-  --bg-canvas-zero: rgba(251, 248, 243, 0);
-  --bg-card: #FFFDFB;
-  --bg-soft: #F6F1EA;
-  --bg-dock: rgba(255, 252, 247, 0.82);
+  --bg-canvas: #F6F0E6;
+  --bg-canvas-fade: rgba(246, 240, 230, 0.78);
+  --bg-canvas-zero: rgba(246, 240, 230, 0);
+  --bg-card: rgba(255, 252, 246, 0.88);
+  --bg-soft: rgba(242, 234, 223, 0.90);
+  --bg-dock: rgba(255, 250, 242, 0.82);
   --canvas-bg-image:
-    linear-gradient(to right, rgba(128, 102, 78, 0.038) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(128, 102, 78, 0.038) 1px, transparent 1px),
-    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(248, 224, 198, 0.24) 0%, rgba(251, 248, 243, 0) 72%);
+    linear-gradient(to right, rgba(138, 108, 78, 0.075) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(138, 108, 78, 0.075) 1px, transparent 1px),
+    radial-gradient(ellipse 76% 52% at 90% 8%, rgba(250, 212, 170, 0.36) 0%, rgba(246, 240, 230, 0) 72%);
   --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
 }
 #app[data-journal-edition="hobonichi"][data-arrow-tier="silver"] {
-  --bg-canvas: #F6F8FA;
-  --bg-canvas-zero: rgba(246, 248, 250, 0);
-  --bg-card: #FEFFFF;
-  --bg-soft: #EEF2F7;
-  --bg-dock: rgba(248, 250, 253, 0.84);
+  --bg-canvas: #EEF3F8;
+  --bg-canvas-fade: rgba(238, 243, 248, 0.78);
+  --bg-canvas-zero: rgba(238, 243, 248, 0);
+  --bg-card: rgba(253, 254, 255, 0.88);
+  --bg-soft: rgba(230, 237, 246, 0.90);
+  --bg-dock: rgba(248, 251, 255, 0.82);
   --canvas-bg-image:
-    linear-gradient(to right, rgba(68, 86, 110, 0.042) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(68, 86, 110, 0.042) 1px, transparent 1px),
-    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(212, 224, 238, 0.22) 0%, rgba(246, 248, 250, 0) 72%);
+    linear-gradient(to right, rgba(74, 96, 126, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(74, 96, 126, 0.08) 1px, transparent 1px),
+    radial-gradient(ellipse 76% 52% at 90% 8%, rgba(196, 216, 240, 0.34) 0%, rgba(238, 243, 248, 0) 72%);
   --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
 }
 #app[data-journal-edition="hobonichi"][data-arrow-tier="crystal"] {
-  --bg-canvas: #F8FAFC;
-  --bg-canvas-zero: rgba(248, 250, 252, 0);
-  --bg-card: #FEFFFF;
-  --bg-soft: #EFF4FA;
-  --bg-dock: rgba(250, 252, 255, 0.84);
+  --bg-canvas: #EFF4FB;
+  --bg-canvas-fade: rgba(239, 244, 251, 0.78);
+  --bg-canvas-zero: rgba(239, 244, 251, 0);
+  --bg-card: rgba(253, 254, 255, 0.88);
+  --bg-soft: rgba(231, 239, 250, 0.90);
+  --bg-dock: rgba(249, 252, 255, 0.82);
   --canvas-bg-image:
-    linear-gradient(to right, rgba(68, 96, 138, 0.036) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(68, 96, 138, 0.036) 1px, transparent 1px),
-    radial-gradient(ellipse 70% 48% at 85% 6%, rgba(210, 228, 250, 0.25) 0%, rgba(248, 250, 252, 0) 72%);
+    linear-gradient(to right, rgba(72, 104, 150, 0.075) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(72, 104, 150, 0.075) 1px, transparent 1px),
+    radial-gradient(ellipse 76% 52% at 90% 8%, rgba(198, 224, 254, 0.34) 0%, rgba(239, 244, 251, 0) 72%);
   --canvas-bg-size: 20px 20px, 20px 20px, 100% 100%;
 }
 
+/* 3. Museglass (柔光珠瓷) — Dreamy Iridescent Rose-Lavender-Apricot Prism Wash */
 #app[data-journal-edition="museglass"][data-arrow-tier="gold"] {
-  --bg-canvas: #FBF7F4;
-  --bg-canvas-zero: rgba(251, 247, 244, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #F7F1EC;
-  --bg-dock: rgba(255, 252, 249, 0.82);
-  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --bg-canvas: #F8F2F5;
+  --bg-canvas-fade: rgba(248, 242, 245, 0.72);
+  --bg-canvas-zero: rgba(248, 242, 245, 0);
+  --bg-card: rgba(255, 253, 254, 0.70);
+  --bg-soft: rgba(247, 238, 243, 0.82);
+  --bg-dock: rgba(255, 252, 253, 0.72);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.74);
   --canvas-bg-image:
-    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(252, 212, 186, 0.42) 0%, rgba(252, 212, 186, 0.14) 48%, rgba(251, 247, 244, 0) 78%),
-    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(244, 224, 232, 0.32) 0%, rgba(251, 247, 244, 0) 74%),
-    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(246, 228, 206, 0.34) 0%, rgba(251, 247, 244, 0) 72%);
+    radial-gradient(ellipse 88% 60% at 92% 8%, rgba(255, 192, 174, 0.64) 0%, rgba(255, 208, 196, 0.28) 46%, rgba(248, 242, 245, 0) 78%),
+    radial-gradient(ellipse 82% 58% at 10% 42%, rgba(224, 202, 248, 0.56) 0%, rgba(248, 242, 245, 0) 74%),
+    radial-gradient(ellipse 74% 52% at 86% 88%, rgba(255, 220, 186, 0.52) 0%, rgba(248, 242, 245, 0) 72%);
 }
 #app[data-journal-edition="museglass"][data-arrow-tier="silver"] {
-  --bg-canvas: #F7F7FB;
-  --bg-canvas-zero: rgba(247, 247, 251, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #EFF0F7;
-  --bg-dock: rgba(250, 251, 255, 0.84);
-  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --bg-canvas: #F2F2FA;
+  --bg-canvas-fade: rgba(242, 242, 250, 0.72);
+  --bg-canvas-zero: rgba(242, 242, 250, 0);
+  --bg-card: rgba(255, 255, 255, 0.70);
+  --bg-soft: rgba(236, 238, 249, 0.82);
+  --bg-dock: rgba(251, 252, 255, 0.72);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.74);
   --canvas-bg-image:
-    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(212, 224, 242, 0.42) 0%, rgba(212, 224, 242, 0.14) 48%, rgba(247, 247, 251, 0) 78%),
-    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(226, 224, 242, 0.30) 0%, rgba(247, 247, 251, 0) 74%),
-    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(218, 228, 242, 0.30) 0%, rgba(247, 247, 251, 0) 72%);
+    radial-gradient(ellipse 88% 60% at 92% 8%, rgba(186, 212, 246, 0.62) 0%, rgba(242, 242, 250, 0) 76%),
+    radial-gradient(ellipse 82% 58% at 10% 46%, rgba(214, 204, 248, 0.54) 0%, rgba(242, 242, 250, 0) 74%),
+    radial-gradient(ellipse 74% 52% at 86% 88%, rgba(196, 222, 246, 0.48) 0%, rgba(242, 242, 250, 0) 72%);
 }
 #app[data-journal-edition="museglass"][data-arrow-tier="crystal"] {
-  --bg-canvas: #F9F9FD;
-  --bg-canvas-zero: rgba(249, 249, 253, 0);
-  --bg-card: #FFFFFF;
-  --bg-soft: #F1F3FA;
-  --bg-dock: rgba(252, 253, 255, 0.84);
-  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.68);
+  --bg-canvas: #F3F4FC;
+  --bg-canvas-fade: rgba(243, 244, 252, 0.72);
+  --bg-canvas-zero: rgba(243, 244, 252, 0);
+  --bg-card: rgba(255, 255, 255, 0.70);
+  --bg-soft: rgba(237, 240, 252, 0.82);
+  --bg-dock: rgba(252, 253, 255, 0.72);
+  --card-extra-rim: inset 0 1px 0 rgba(255, 255, 255, 0.99), inset 0 0 0 1px rgba(255, 255, 255, 0.74);
   --canvas-bg-image:
-    radial-gradient(ellipse 78% 54% at 86% 10%, rgba(206, 228, 254, 0.44) 0%, rgba(206, 228, 254, 0.14) 48%, rgba(249, 249, 253, 0) 78%),
-    radial-gradient(ellipse 68% 52% at 14% 44%, rgba(228, 224, 250, 0.32) 0%, rgba(249, 249, 253, 0) 74%),
-    radial-gradient(ellipse 64% 48% at 82% 88%, rgba(212, 232, 252, 0.32) 0%, rgba(249, 249, 253, 0) 72%);
+    radial-gradient(ellipse 88% 60% at 92% 8%, rgba(180, 220, 255, 0.64) 0%, rgba(243, 244, 252, 0) 76%),
+    radial-gradient(ellipse 82% 58% at 10% 46%, rgba(220, 204, 254, 0.56) 0%, rgba(243, 244, 252, 0) 74%),
+    radial-gradient(ellipse 74% 52% at 86% 88%, rgba(192, 228, 255, 0.50) 0%, rgba(243, 244, 252, 0) 72%);
 }
 
-/* ==================== 5-LAYER 0-BLUR LIVING PEARLESCENT ORB ==================== */
+/* ==================== LUMINOUS TRANSLUCENT OPALESCENT GLEB ORB (0 CONIC STRIPES!) ==================== */
 .mw-orb {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   border-radius: 50%; flex-shrink: 0; user-select: none; -webkit-tap-highlight-color: transparent;
   transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
 }
-.mw-orb[data-orb-size="header"]  { width: 24px; height: 24px; padding: 0; }
-.mw-orb[data-orb-size="voice"]   { width: 32px; height: 32px; padding: 2px; background: rgba(255, 255, 255, 0.88); box-shadow: 0 0 0 1px var(--ink-rim), 0 4px 10px rgba(var(--shadow-rgb), 0.14); }
-.mw-orb[data-orb-size="dock"]    { width: 52px; height: 52px; padding: 3px; background: rgba(255, 255, 255, 0.90); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 1px var(--ink-rim), 0 2px 6px rgba(var(--shadow-rgb), 0.08), 0 12px 24px var(--orb-halo); }
-.mw-orb[data-orb-size="starter"] { width: 56px; height: 56px; padding: 3px; background: rgba(255, 255, 255, 0.92); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 0 0 1px var(--ink-rim), 0 3px 8px rgba(var(--shadow-rgb), 0.10), 0 14px 28px var(--orb-halo); }
+.mw-orb[data-orb-size="header"] {
+  width: 26px; height: 26px; padding: 1.5px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 8px var(--orb-halo), inset 0 1px 0 #FFFFFF;
+}
+.mw-orb[data-orb-size="voice"] {
+  width: 34px; height: 34px; padding: 2px;
+  background: rgba(255, 255, 255, 0.90);
+  box-shadow: 0 4px 14px var(--orb-halo), inset 0 1px 0 #FFFFFF;
+}
+.mw-orb[data-orb-size="dock"] {
+  width: 52px; height: 52px; padding: 2.5px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 248, 242, 0.84) 100%);
+  box-shadow:
+    inset 0 1px 1px #FFFFFF,
+    0 0 0 0.5px rgba(255, 255, 255, 0.9),
+    0 6px 16px rgba(var(--shadow-rgb), 0.12),
+    0 12px 28px var(--orb-halo);
+}
+.mw-orb[data-orb-size="starter"] {
+  width: 64px; height: 64px; padding: 3px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 248, 242, 0.84) 100%);
+  box-shadow:
+    inset 0 1px 1px #FFFFFF,
+    0 8px 20px rgba(var(--shadow-rgb), 0.12),
+    0 16px 34px var(--orb-halo);
+}
 
-.mw-orb-vessel { position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; isolation: isolate; box-shadow: inset 0 -2px 5px var(--orb-limb); transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1); }
-.mw-orb-base { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 34% 28%, var(--orb-c0) 0%, var(--orb-c1) 34%, var(--orb-c2) 72%, var(--orb-c3) 100%); transition: opacity 280ms ease; }
-.mw-orb-caustic { position: absolute; inset: -24%; border-radius: 50%; background: conic-gradient(from 18deg at 52% 48%, var(--orb-caustic-a) 0deg, var(--orb-caustic-b) 95deg, var(--orb-caustic-c) 190deg, var(--orb-caustic-d) 285deg, var(--orb-caustic-a) 360deg); opacity: 0.78; animation: mw-caustic-idle 14s linear infinite; transition: opacity 280ms ease; }
-.mw-orb-veil { position: absolute; inset: -10%; border-radius: 50%; background: radial-gradient(circle at 46% 42%, rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.42) 32%, rgba(255, 255, 255, 0) 54%); opacity: 0.30; transform: scale3d(0.92, 0.92, 1); animation: mw-veil-idle 6.2s ease-in-out infinite; transition: opacity 220ms ease; }
-.mw-orb-specular { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; background: radial-gradient(ellipse 38% 18% at 33% 18%, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.22) 55%, rgba(255, 255, 255, 0) 100%), radial-gradient(ellipse 40% 15% at 66% 88%, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0) 100%); box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.90), inset 0 -1.5px 3.5px var(--orb-limb); }
+.mw-orb-vessel {
+  position: relative; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; isolation: isolate;
+  background: radial-gradient(circle at 36% 28%, var(--orb-core) 0%, var(--orb-warm) 52%, var(--orb-peach) 82%, var(--orb-deep) 100%);
+  box-shadow: inset 0 -3px 8px rgba(178, 108, 68, 0.28), inset 0 2px 6px rgba(255, 255, 255, 0.92);
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.mw-orb-base {
+  position: absolute; inset: -16%; border-radius: 50%;
+  background:
+    radial-gradient(circle at 26% 26%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.52) 32%, transparent 62%),
+    radial-gradient(circle at 76% 74%, var(--orb-peach) 0%, transparent 64%),
+    radial-gradient(circle at 24% 78%, var(--orb-irid) 0%, transparent 60%);
+  filter: blur(3px);
+  animation: mw-orb-drift 9s ease-in-out infinite;
+}
+.mw-orb-caustic {
+  position: absolute; inset: -14%; border-radius: 50%;
+  background:
+    radial-gradient(ellipse 56% 42% at 68% 30%, rgba(255, 244, 224, 0.88) 0%, transparent 65%),
+    radial-gradient(ellipse 52% 46% at 32% 72%, var(--orb-irid) 0%, transparent 68%);
+  opacity: 0.72;
+  filter: blur(4px);
+  animation: mw-caustic-idle 11s ease-in-out infinite;
+}
+.mw-orb-veil {
+  position: absolute; inset: 4%; border-radius: 50%;
+  background: radial-gradient(circle at 46% 42%, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.44) 36%, rgba(255, 255, 255, 0) 68%);
+  opacity: 0.42;
+  transform: scale3d(0.92, 0.92, 1);
+  animation: mw-veil-idle 5.4s ease-in-out infinite;
+  transition: opacity 220ms ease;
+}
+.mw-orb-specular {
+  position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+  background:
+    radial-gradient(ellipse 46% 22% at 38% 16%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.34) 56%, rgba(255, 255, 255, 0) 100%),
+    radial-gradient(ellipse 54% 18% at 56% 88%, rgba(255, 255, 255, 0.56) 0%, rgba(255, 255, 255, 0) 100%);
+  box-shadow: inset 0 1.5px 3px rgba(255, 255, 255, 0.96), inset 0 -1.5px 4px rgba(154, 102, 68, 0.22);
+}
 
-.mw-orb[data-orb-state="listening"] .mw-orb-caustic { animation: mw-caustic-listen 6.5s linear infinite; opacity: 0.88; }
+.mw-orb[data-orb-state="listening"] .mw-orb-caustic { animation: mw-caustic-listen 3.8s ease-in-out infinite; opacity: 0.92; }
 .mw-orb[data-orb-state="listening"] .mw-orb-veil { animation: none; }
-.mw-orb[data-orb-state="thinking"] .mw-orb-base { opacity: 0.72; }
-.mw-orb[data-orb-state="thinking"] .mw-orb-caustic { animation: mw-caustic-think 3.2s linear infinite; opacity: 0.44; }
-.mw-orb[data-orb-state="thinking"] .mw-orb-veil { animation: mw-veil-think 2.4s ease-in-out infinite; background: radial-gradient(circle at 50% 48%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.76) 46%, rgba(255, 255, 255, 0.08) 76%); }
-.mw-orb[data-orb-state="speaking"] .mw-orb-caustic { animation: mw-caustic-speak 4.4s ease-in-out infinite; opacity: 0.92; }
-.mw-orb[data-orb-state="speaking"] .mw-orb-veil { animation: mw-veil-speak 1.9s ease-in-out infinite; }
+.mw-orb[data-orb-state="thinking"] .mw-orb-caustic { animation: mw-caustic-think 2.4s ease-in-out infinite; opacity: 0.72; }
+.mw-orb[data-orb-state="thinking"] .mw-orb-veil { animation: mw-veil-think 2.0s ease-in-out infinite; }
+.mw-orb[data-orb-state="speaking"] .mw-orb-caustic { animation: mw-caustic-speak 2.8s ease-in-out infinite; opacity: 0.95; }
+.mw-orb[data-orb-state="speaking"] .mw-orb-veil { animation: mw-veil-speak 1.6s ease-in-out infinite; }
 .mw-orb[data-orb-state="done"] .mw-orb-vessel { transform: scale3d(0.95, 0.95, 1); }
-.mw-orb[data-orb-state="done"] .mw-orb-caustic { animation: none; opacity: 0.22; }
-.mw-orb[data-orb-state="done"] .mw-orb-veil { animation: none; opacity: 0.94; transform: scale3d(1.06, 1.06, 1); }
+.mw-orb[data-orb-state="done"] .mw-orb-veil { animation: none; opacity: 0.92; transform: scale3d(1.04, 1.04, 1); }
 
 html.is-bg-paused .mw-orb *, html.mw-reduce-motion .mw-orb * { animation-play-state: paused !important; }
 
-@keyframes mw-caustic-idle { 0% { transform: rotate(0deg) scale3d(1, 1, 1); } 50% { transform: rotate(180deg) scale3d(1.06, 1.06, 1); } 100% { transform: rotate(360deg) scale3d(1, 1, 1); } }
-@keyframes mw-veil-idle { 0%, 100% { transform: scale3d(0.88, 0.88, 1); opacity: 0.24; } 50% { transform: scale3d(1, 1, 1); opacity: 0.38; } }
-@keyframes mw-caustic-listen { 0% { transform: rotate(0deg) scale3d(1.04, 1.04, 1); } 100% { transform: rotate(360deg) scale3d(1.04, 1.04, 1); } }
-@keyframes mw-caustic-think { 0% { transform: rotate(0deg) scale3d(0.94, 0.94, 1); } 100% { transform: rotate(360deg) scale3d(0.94, 0.94, 1); } }
-@keyframes mw-veil-think { 0%, 100% { transform: scale3d(0.84, 0.84, 1); opacity: 0.78; } 50% { transform: scale3d(0.98, 0.98, 1); opacity: 0.95; } }
-@keyframes mw-caustic-speak { 0% { transform: rotate(0deg) scale3d(1.02, 1.02, 1); } 50% { transform: rotate(180deg) scale3d(1.12, 1.12, 1); } 100% { transform: rotate(360deg) scale3d(1.02, 1.02, 1); } }
-@keyframes mw-veil-speak { 0%, 100% { transform: scale3d(0.86, 0.86, 1); opacity: 0.54; } 45% { transform: scale3d(1.12, 1.12, 1); opacity: 0.86; } 75% { transform: scale3d(0.96, 0.96, 1); opacity: 0.66; } }
+@keyframes mw-orb-drift { 0%, 100% { transform: translate3d(0, 0, 0) scale3d(1, 1, 1); } 50% { transform: translate3d(-4%, 4%, 0) scale3d(1.06, 1.06, 1); } }
+@keyframes mw-caustic-idle { 0%, 100% { transform: rotate(0deg) scale3d(1, 1, 1); } 50% { transform: rotate(28deg) scale3d(1.08, 1.08, 1); } }
+@keyframes mw-veil-idle { 0%, 100% { transform: scale3d(0.88, 0.88, 1); opacity: 0.34; } 50% { transform: scale3d(1.02, 1.02, 1); opacity: 0.56; } }
+@keyframes mw-caustic-listen { 0%, 100% { transform: rotate(-16deg) scale3d(1.04, 1.04, 1); } 50% { transform: rotate(24deg) scale3d(1.12, 1.12, 1); } }
+@keyframes mw-caustic-think { 0%, 100% { transform: rotate(0deg) scale3d(0.95, 0.95, 1); } 50% { transform: rotate(45deg) scale3d(1.06, 1.06, 1); } }
+@keyframes mw-veil-think { 0%, 100% { transform: scale3d(0.84, 0.84, 1); opacity: 0.55; } 50% { transform: scale3d(1.04, 1.04, 1); opacity: 0.88; } }
+@keyframes mw-caustic-speak { 0%, 100% { transform: rotate(-10deg) scale3d(1.02, 1.02, 1); } 50% { transform: rotate(18deg) scale3d(1.12, 1.12, 1); } }
+@keyframes mw-veil-speak { 0%, 100% { transform: scale3d(0.88, 0.88, 1); opacity: 0.48; } 50% { transform: scale3d(1.10, 1.10, 1); opacity: 0.84; } }

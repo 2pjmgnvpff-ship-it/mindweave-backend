@@ -64,11 +64,11 @@ struct WebContainerView: UIViewRepresentable {
     @ObservedObject var config: ServerConfigStore
     @ObservedObject var biometricLock: BiometricLockManager
 
-    /// Warm porcelain backdrop (`#FCFBF9`) eliminating transparent compositing & FOUC.
+    /// Warm Gleb sunrise ivory backdrop (`#FAF6F0`) eliminating transparent compositing & FOUC.
     private static let porcelainUIColor = UIColor(
-        red: 0.988,
-        green: 0.984,
-        blue: 0.976,
+        red: 0.980,
+        green: 0.965,
+        blue: 0.941,
         alpha: 1.0
     )
 

@@ -292,7 +292,7 @@ export function citePill(c, personId) {
       );
       ev.currentTarget.after(popover);
     },
-  }, thumb, h('span', { class: 'cite-label' }, h('span', { class: 'cite-excerpt', text: excerpt }), date ? h('span', { class: 'cite-date', text: date }) : null), h('span', { class: 'cite-jump-cue', 'aria-hidden': 'true', text: '↗' }));
+  }, thumb, h('span', { class: 'cite-label' }, date ? h('span', { class: 'cite-date', text: date }) : null, date ? h('span', { class: 'cite-sep', 'aria-hidden': 'true', text: '·' }) : null, h('span', { class: 'cite-excerpt', text: excerpt })), h('span', { class: 'cite-jump-cue', 'aria-hidden': 'true', text: '↗' }));
 }
 
 /** Gold-only perspective card. Strictly returns null for Silver and Crystal tiers. */

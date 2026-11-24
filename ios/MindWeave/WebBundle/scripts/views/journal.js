@@ -209,17 +209,42 @@ async function runSemanticSearch(personId, q) {
   } catch (err) { if (err?.name !== 'AbortError') whisper(err?.message || '搜索未能完成', 2400); }
 }
 
-const openSearch = () => { haptic('light'); store.set({ searchOpen: true }); requestAnimationFrame(() => $('#spotlightInput')?.focus({ preventScroll: true })); };
+const CN_MONTHS = ['', '一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+let selectedScale2Year = null;
+
+function editorialMonthLabel(items) {
+  if (scale === 2) return selectedScale2Year ? `${selectedScale2Year}年` : '月册';
+  if (scale === 3) return '年轮';
+  if (activeMonthYm && /^\d{4}-\d{2}/.test(activeMonthYm)) {
+    const m = Number(activeMonthYm.slice(5, 7));
+    if (m >= 1 && m <= 12) return CN_MONTHS[m];
+  }
+  const latest = (items || [])[0];
+  const raw = String(latest?.happenedOn || latest?.createdAt || '');
+  const mm = /^\d{4}-(\d{2})/.exec(raw);
+  const idx = mm ? Number(mm[1]) : new Date().getMonth() + 1;
+  return CN_MONTHS[idx] || '';
+}
+
+const openSearch = () => {
+  haptic('light');
+  const scroller = $('#journalScroll');
+  if (scroller) scroller.scrollTop = 0;
+  store.set({ searchOpen: true });
+  requestAnimationFrame(() => $('#spotlightInput')?.focus({ preventScroll: true }));
+};
 const closeSearch = () => { searchAc?.abort(); searchHits = null; activeFacet = 'all'; const i = $('#spotlightInput'); if (i) i.value = ''; store.set({ searchOpen: false, searchQuery: '' }); };
 
-function setScale(nextScale, { anchorEl = null, targetYm = '' } = {}) {
+function setScale(nextScale, { anchorEl = null, targetYm = '', year = null } = {}) {
   const clamped = Math.max(1, Math.min(3, nextScale));
-  if (clamped === scale && !targetYm) return;
+  if (year != null) selectedScale2Year = year;
+  if (clamped === scale && !targetYm && year == null) return;
   const scroller = $('#journalScroll');
   if (clamped > scale && scroller) scaleStack.push({ scale, scrollTop: scroller.scrollTop, ym: activeMonthYm });
   scale = clamped;
   if (targetYm) activeMonthYm = targetYm;
   if (scroller) scroller.scrollTop = 0;
+  $('#journalCanvas')?.classList.remove('is-scrolled');
   haptic(clamped === 3 ? 'yearDetent' : 'porcelainTick');
   if (anchorEl && flipScaleMorph) flipScaleMorph({ fromEl: anchorEl, toEl: scroller, onDone: () => {} });
   lastRenderKey = '';
@@ -246,16 +271,29 @@ function renderEmptyState(person) {
     h('div', { class: 'empty-starter-row' }, ...(EMPTY_STARTERS[tier] || EMPTY_STARTERS.gold).map((prompt) => h('button', { type: 'button', class: 'empty-starter-chip', text: prompt, onClick: () => { haptic('light'); actions.openTextCapture?.({ personId: person.id, prompt }); } }))));
 }
 
-function buildHero(person, reminders) {
+function buildHero(person, reminders, items) {
   const tier = person.tier || 'crystal', veiled = isSilverVeiled(person.id);
   const refreshRem = () => fetchReminders(person.id, { force: true }).then(() => renderJournal(store.get()));
+  const monthText = editorialMonthLabel(items);
+  const metaItems = [
+    person.roleTag ? h('span', { class: 'journal-tier-tag journal-hero-tag', text: person.roleTag }) : null,
+    tier === 'silver'
+      ? h('button', { type: 'button', class: ['silver-veil-toggle', veiled && 'is-veiled'], text: veiled ? '显示正文' : '隐藏内容', onClick: () => { haptic('rigid'); silverVeilByPerson.set(person.id, !veiled); lastRenderKey = ''; renderJournal(store.get()); } })
+      : null,
+  ].filter(Boolean);
+
   return h('header', { class: ['journal-hero', `tier-${tier}`] },
-    h('div', { class: 'journal-hero-top' }, h('h1', { class: 'journal-hero-name', text: person.nameCn }), person.roleTag ? h('span', { class: 'journal-tier-tag journal-hero-tag', text: person.roleTag }) : null,
-      tier === 'silver' ? h('button', { type: 'button', class: ['silver-veil-toggle', veiled && 'is-veiled'], text: veiled ? '显示正文' : '隐藏内容', onClick: () => { haptic('rigid'); silverVeilByPerson.set(person.id, !veiled); lastRenderKey = ''; renderJournal(store.get()); } }) : null),
+    h('div', { class: 'journal-hero-top' },
+      h('div', { class: 'journal-hero-title-group' },
+        h('h1', { class: 'journal-hero-name', text: person.nameCn }),
+        monthText ? h('button', { type: 'button', class: 'journal-hero-month', text: monthText, 'aria-label': '切换手帐时间尺度', onClick: () => setScale(scale === 1 ? 2 : scale === 2 ? 3 : 1) }) : null,
+      ),
+    ),
+    metaItems.length ? h('div', { class: 'journal-hero-meta' }, ...metaItems) : null,
     h('div', { class: 'journal-scale-bar', role: 'tablist', 'aria-label': '手帐时间尺度' },
       ...[[1, '纸页'], [2, '月册'], [3, '年轮']].map(([sc, lbl]) => h('button', { type: 'button', role: 'tab', class: ['scale-pill-btn', 'journal-scale-btn', scale === sc && 'is-active'], 'aria-selected': String(scale === sc), text: lbl, onClick: () => setScale(sc) })),
       h('button', { type: 'button', class: 'vellum-entry-link', text: tier === 'silver' ? '关键节点 ›' : '人物档案 ›', onClick: () => openVellumPocket(person, { onJumpToRecord: (rid) => { scale = 1; closeSearch(); requestAnimationFrame(() => flashMaterial(rid)); }, onMutated: refreshRem }) })),
-    renderUpcomingRibbon(person, reminders, { onOpenVellum: () => openVellumPocket(person, { onMutated: refreshRem }), onMutated: refreshRem }),
+    scale === 1 ? renderUpcomingRibbon(person, reminders, { onOpenVellum: () => openVellumPocket(person, { onMutated: refreshRem }), onMutated: refreshRem }) : null,
   );
 }
 
@@ -266,14 +304,32 @@ function renderScale2or3(scroll, person, hero) {
   const buckets = data.buckets || [];
   if (!buckets.length) { scroll.appendChild(renderEmptyState(person)); return; }
   if (scale === 2) {
+    const years = [...new Set(buckets.map((b) => b.year))].sort((a, b) => b - a);
+    if (years.length > 0 && (!selectedScale2Year || !years.includes(selectedScale2Year))) selectedScale2Year = years[0];
+    if (years.length > 1) {
+      const yearBar = h('div', { class: 'scale2-year-bar', role: 'tablist', 'aria-label': '按年份筛选月册' },
+        ...years.map((yr) => h('button', {
+          type: 'button',
+          role: 'tab',
+          class: ['scale2-year-pill', selectedScale2Year === yr && 'is-active'],
+          'aria-selected': String(selectedScale2Year === yr),
+          text: `${yr}`,
+          onClick: () => { haptic('porcelainTick'); selectedScale2Year = yr; lastRenderKey = ''; renderJournal(store.get()); },
+        })),
+      );
+      scroll.appendChild(yearBar);
+    }
+    const visibleBuckets = selectedScale2Year ? buckets.filter((b) => b.year === selectedScale2Year) : buckets;
+    const showYearOnCard = years.length > 1 && !selectedScale2Year;
     const grid = h('div', { class: 'scale2-grid' });
-    for (const b of buckets) grid.appendChild(renderScale2Card(b, person, { onSelect: (bk) => setScale(1, { targetYm: bk.bucket || `${bk.year}-${String(bk.month).padStart(2, '0')}` }) }));
-    scroll.appendChild(grid); return;
+    for (const b of visibleBuckets) grid.appendChild(renderScale2Card(b, person, { showYear: showYearOnCard, onSelect: (bk) => setScale(1, { targetYm: bk.bucket || `${bk.year}-${String(bk.month).padStart(2, '0')}` }) }));
+    scroll.appendChild(grid);
+    return;
   }
   const byYear = new Map();
   for (const b of buckets) { if (!byYear.has(b.year)) byYear.set(b.year, { year: b.year, months: [], totalCount: 0 }); const g = byYear.get(b.year); g.months.push(b); g.totalCount += b.count || 0; }
   const list = h('div', { class: 'scale3-list' });
-  for (const yg of [...byYear.values()].sort((a, b) => b.year - a.year)) list.appendChild(renderScale3Card(yg, person, { onSelect: () => setScale(2) }));
+  for (const yg of [...byYear.values()].sort((a, b) => b.year - a.year)) list.appendChild(renderScale3Card(yg, person, { onSelect: () => setScale(2, { year: yg.year }) }));
   scroll.appendChild(list);
 }
 
@@ -283,10 +339,11 @@ function renderPage(s) {
   if (!scroll || !person) return;
   if (person.id !== lastRenderedPersonId) {
     lastRenderedPersonId = person.id;
+    selectedScale2Year = null;
     if (!pendingFlash) scroll.scrollTop = 0;
   }
   const mats = s.materials[person.id], allItems = mats?.items || [], pending = s.pending.filter((p) => p.pageId === person.id);
-  const hero = buildHero(person, remindersCache.get(person.id) || []);
+  const hero = buildHero(person, remindersCache.get(person.id) || [], allItems);
   if (scale !== 1) { river?.destroy?.(); river = null; renderScale2or3(scroll, person, hero); return; }
 
   const query = s.searchOpen ? s.searchQuery.trim() : '';
@@ -306,7 +363,6 @@ function renderPage(s) {
   }
 
   clear(scroll);
-  // Guarantee normal-flow relative containing block BELOW headerStack so .vr-row NEVER overlaps hero/ribbon/topbar!
   const stage = h('div', { class: 'journal-virtual-stage journal-river-stage', style: { position: 'relative', width: '100%' } });
   scroll.append(headerStack, stage);
   heroObserver?.disconnect();
@@ -322,8 +378,12 @@ function renderPage(s) {
   river?.destroy?.();
   if (!visible.length) {
     river = null;
-    if (s.searchOpen) stage.append(h('p', { class: 'search-empty-whisper', text: query ? `这一页里暂时没找到「${query}」` : '输入关键词或选上方标签检索' }), h('button', { type: 'button', class: 'sheet-btn quiet', text: '去其他人物手帐里找', onClick: () => { closeSearch(); actions.openPeopleSheet?.({ query }); } }));
-    else if (mats?.loaded && !pending.length) stage.appendChild(renderEmptyState(person));
+    if (s.searchOpen) {
+      stage.appendChild(h('div', { class: 'search-empty-wrap' },
+        h('p', { class: 'search-empty-whisper', text: query ? `这一页里暂时没找到「${query}」` : '输入关键词或选上方标签检索' }),
+        h('button', { type: 'button', class: 'sheet-btn quiet', text: '去其他人物手帐里找', onClick: () => { closeSearch(); actions.openPeopleSheet?.({ query }); } }),
+      ));
+    } else if (mats?.loaded && !pending.length) stage.appendChild(renderEmptyState(person));
     else if (!mats?.loaded) stage.appendChild(h('p', { class: 'page-end-mark', text: '正在翻开…' }));
     return;
   }
@@ -365,7 +425,7 @@ export function renderJournal(s) {
   const arrowKey = person ? `${person.id}:${person.tier}` : '';
   if (arrowKey !== renderJournal.arrowKey) { renderJournal.arrowKey = arrowKey; renderArrow(person); }
   const mats = person ? s.materials[person.id] : null;
-  const key = [person?.id || '', person?.tier || '', person?.nameCn || '', scale, s.searchOpen, s.searchQuery, activeFacet, searchHits?.items?.length ?? -1, mats?.items?.length ?? -1, mats?.loaded, s.pending.length, isSilverVeiled(person?.id), (remindersCache.get(person?.id) || []).length].join('|');
+  const key = [person?.id || '', person?.tier || '', person?.nameCn || '', person?.roleTag || '', scale, selectedScale2Year || '', s.searchOpen, s.searchQuery, activeFacet, searchHits?.items?.length ?? -1, mats?.items?.length ?? -1, mats?.loaded, s.pending.length, isSilverVeiled(person?.id), (remindersCache.get(person?.id) || []).length].join('|');
   if (key === lastRenderKey) return;
   lastRenderKey = key;
   if (person) renderPage(s);
@@ -392,7 +452,11 @@ export function initJournal() {
 
   const scroller = $('#journalScroll');
   scrubber = createGhostScrubber({ hostEl: $('#journalCanvas'), onJumpMonth: (t) => { activeMonthYm = t.ym; renderChrome(store.get()); }, onBackToLatest: () => scrollJournalToTop(true) });
-  scroller?.addEventListener('scroll', () => scrubber?.notifyScroll(scroller.scrollTop, activeMonthYm), { passive: true });
+  scroller?.addEventListener('scroll', () => {
+    const top = scroller.scrollTop;
+    $('#journalCanvas')?.classList.toggle('is-scrolled', top > 16);
+    scrubber?.notifyScroll(top, activeMonthYm);
+  }, { passive: true });
   if (scroller && typeof attachJournalPinch === 'function') {
     pinchAc?.abort(); pinchAc = new AbortController();
     attachJournalPinch({ scroller, virtualRiver: { setPinchHold: (v) => river?.setPinchHold?.(v) }, onZoomOut: () => setScale(scale + 1), onZoomIn: () => setScale(scale - 1), signal: pinchAc.signal });

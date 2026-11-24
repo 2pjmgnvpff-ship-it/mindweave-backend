@@ -97,6 +97,7 @@ export function showAuth() {
       };
       // J1-S3: Zero 60ms keyboard slam on initial lakeside splash mount!
       card.append(h('label', { class: 'auth-label', for: 'authEmail', text: '用邮箱登录，不用记密码' }), input, btn, errorEl);
+      input.addEventListener('focus', () => setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 220));
     }
 
     function renderCodeStep(devCode, cooldownSec = 60) {
@@ -124,6 +125,7 @@ export function showAuth() {
         });
       };
       input.addEventListener('input', syncSlots);
+      input.addEventListener('focus', () => setTimeout(() => card.scrollIntoView({ behavior: 'smooth', block: 'end' }), 220));
       syncSlots();
 
       const track = h('div', { class: 'auth-otp-track' }, ...slots, input);
@@ -228,6 +230,7 @@ export function showAuth() {
       h(
         'div',
         { class: 'splash-bottom-content' },
+        h('span', { class: 'splash-brand-pill' }, h('span', { class: 'mw-dot', 'aria-hidden': 'true' }), h('span', { text: '私人关系手帐' })),
         h('h1', { class: 'splash-brand', text: '心络' }),
         h('p', { class: 'splash-quote-text', text: '把在意的人，轻轻记在手帐里' }),
         h('p', { class: 'splash-quote-sub', text: '说一句话，丘比特替你记住' }),

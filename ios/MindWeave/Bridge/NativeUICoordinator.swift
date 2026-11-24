@@ -670,29 +670,11 @@ final class NativeUICoordinator: NSObject,
 
         let rootMenu = UIMenu(title: "", children: menuGroups)
 
-        // Anchor native `UIMenu` at exact card rect (zero double-haptic: system menu handles lift feedback!).
-        if let webView, let rectDict = dict["rect"] as? [String: Any] {
-            let rx = (rectDict["x"] as? NSNumber)?.doubleValue ?? Double(webView.bounds.midX)
-            let ry = (rectDict["y"] as? NSNumber)?.doubleValue ?? Double(webView.bounds.midY)
-            let rw = max(44.0, (rectDict["width"] as? NSNumber)?.doubleValue ?? 120.0)
-            let rh = max(44.0, (rectDict["height"] as? NSNumber)?.doubleValue ?? 44.0)
+        // Present guaranteed-visible native actionSheet directly (avoiding orphaned transparent anchor subviews)
+        contextMenuAnchorButton?.removeFromSuperview()
+        contextMenuAnchorButton = nil
+        _ = rootMenu
 
-            contextMenuAnchorButton?.removeFromSuperview()
-            let anchor = UIButton(frame: CGRect(x: rx, y: ry, width: rw, height: rh))
-            anchor.backgroundColor = .clear
-            anchor.isAccessibilityElement = false
-            anchor.showsMenuAsPrimaryAction = true
-            anchor.menu = rootMenu
-            webView.addSubview(anchor)
-            contextMenuAnchorButton = anchor
-
-            // Trigger system menu presentation if supported, falling back cleanly to native actionSheet
-            if let interaction = anchor.contextMenuInteraction {
-                _ = interaction
-            }
-        }
-
-        // Present guaranteed-visible native actionSheet fallback preserving exact SF Symbols & destructive styling
         let sheetItems: [[String: Any]] = rawItems.compactMap { item in
             let itemId = (item["id"] as? String) ?? ""
             let group = ((item["group"] as? String) ?? "").lowercased()
@@ -735,8 +717,6 @@ final class NativeUICoordinator: NSObject,
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.isPresentingModal = false
-                    self.contextMenuAnchorButton?.removeFromSuperview()
-                    self.contextMenuAnchorButton = nil
                     self.emitEvent([
                         "type": "nativeUI.contextMenuResult",
                         "reqId": reqId,
@@ -750,8 +730,6 @@ final class NativeUICoordinator: NSObject,
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.isPresentingModal = false
-                self.contextMenuAnchorButton?.removeFromSuperview()
-                self.contextMenuAnchorButton = nil
                 self.emitEvent([
                     "type": "nativeUI.contextMenuResult",
                     "reqId": reqId,
@@ -775,11 +753,11 @@ final class NativeUICoordinator: NSObject,
         presenter.present(alert, animated: true)
     }
 
-    // MARK: - 6. Local-Only Expiring Sensitive Copy (Silver Privacy)
+    // MARK: - 6. Local-Only Expiring Sensitive Copy (Silver Privacy — 5 min TTL)
 
     private func handleCopySensitive(_ dict: [String: Any], reqId: String) {
         let text = ((dict["text"] as? String) ?? (dict["value"] as? String) ?? "")
-        let ttlSeconds = (dict["ttlSeconds"] as? NSNumber)?.doubleValue ?? 120.0
+        let ttlSeconds = (dict["ttlSeconds"] as? NSNumber)?.doubleValue ?? 300.0
         let item: [String: Any] = [UTType.utf8PlainText.identifier: text]
         let options: [UIPasteboard.OptionsKey: Any] = [
             .localOnly: true,

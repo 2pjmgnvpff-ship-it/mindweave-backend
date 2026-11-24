@@ -1,19 +1,26 @@
-// sheet.js — zero-blur porcelain bottom sheet with tracked timers/rAFs (02d LK-5),
-// Safari 26 display:none closed-overlay discipline (1ar.io), 1:1 grabber swipe-down, & focus trap.
+// sheet.js — Multi-level LIFO Frosted Sheet Stack (fixes P0-03 Peek z-index & P0-05 Archive Picker wipe!),
+// 1:1 grabber swipe-down, dynamic title/sub update handle, and clean Safari 26 display:none teardown.
 import { h, clear, $ } from '../dom.js';
 import { haptic } from '../native-bridge.js';
 
 const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const CLOSE_MS = 220;
 
-let open = null;
+const sheetStack = [];
+
+function topEntry() {
+  return sheetStack.length ? sheetStack[sheetStack.length - 1] : null;
+}
 
 function syncOverlayState() {
-  const hasAny = Boolean(
-    open ||
-    $('#peekLayer')?.classList.contains('is-open') ||
-    $('#chat')?.classList.contains('is-active'),
-  );
+  const layer = $('#sheetLayer');
+  const peekOpen = Boolean($('#peekLayer')?.classList.contains('is-open'));
+  if (layer) {
+    layer.classList.toggle('is-above-peek', peekOpen && sheetStack.length > 0);
+    layer.classList.toggle('is-open', sheetStack.length > 0);
+    layer.classList.toggle('is-mounted', sheetStack.length > 0);
+  }
+  const hasAny = Boolean(sheetStack.length > 0 || peekOpen || $('#chat')?.classList.contains('is-active'));
   $('#app')?.classList.toggle('has-overlay', hasAny);
   for (const id of ['journalCanvas', 'dock']) {
     const el = $(`#${id}`);
@@ -87,10 +94,11 @@ function attachGrabberDrag({ sheet, bodyEl, scrim, onDismiss, signal }) {
   sheet.addEventListener('touchcancel', finish, { passive: true, signal });
 }
 
-export function closeSheet({ silentHaptic = false } = {}) {
-  if (!open) return;
-  const entry = open;
-  open = null;
+function closeEntry(entry, { silentHaptic = false } = {}) {
+  const idx = sheetStack.indexOf(entry);
+  if (idx < 0) return;
+  sheetStack.splice(idx, 1);
+
   if (entry.rafId) cancelAnimationFrame(entry.rafId);
   if (entry.moRafId) cancelAnimationFrame(entry.moRafId);
   if (entry.focusTimerId) clearTimeout(entry.focusTimerId);
@@ -99,14 +107,18 @@ export function closeSheet({ silentHaptic = false } = {}) {
   entry.ro?.disconnect();
   entry.mo?.disconnect();
   if (!silentHaptic) haptic('light');
-  entry.layer.classList.remove('is-open');
+  entry.host.classList.remove('is-open');
+
+  // Re-enable inert on the underlying sheet if one remains on the stack
+  const underneath = topEntry();
+  if (underneath) underneath.host.inert = false;
   syncOverlayState();
 
-  // Safari 26 1ar.io fix: force display:none + DOM clear strictly after 220ms fade.
   entry.clearTimerId = setTimeout(() => {
-    if (!open) {
-      entry.layer.style.display = 'none';
-      clear(entry.layer);
+    entry.host.remove();
+    const layer = $('#sheetLayer');
+    if (layer && sheetStack.length === 0 && !layer.children.length) {
+      layer.style.display = 'none';
     }
   }, CLOSE_MS + 20);
 
@@ -115,27 +127,40 @@ export function closeSheet({ silentHaptic = false } = {}) {
   if (r && typeof r.focus === 'function' && r.isConnected) r.focus({ preventScroll: true });
 }
 
-/**
- * openSheet({ title, sub, label, body: Node|Node[], onClose, initialFocus, className })
- * Returns { el, bodyEl, close }.
- */
-export function openSheet({ title, sub, label, body, onClose, initialFocus, className = '' } = {}) {
-  const layer = $('#sheetLayer');
-  if (!layer) return { el: null, bodyEl: null, close() {} };
-  if (open) closeSheet({ silentHaptic: true });
-  clear(layer);
-  layer.style.display = 'flex';
+export function closeSheet({ silentHaptic = false, all = false } = {}) {
+  if (!sheetStack.length) return;
+  if (all) {
+    while (sheetStack.length) closeEntry(sheetStack[sheetStack.length - 1], { silentHaptic: true });
+    if (!silentHaptic) haptic('light');
+    return;
+  }
+  closeEntry(topEntry(), { silentHaptic });
+}
 
+/**
+ * openSheet({ title, sub, label, body, onClose, initialFocus, className, stacked })
+ * Automatically stacks nested pickers (Date Picker, People Picker) on top of existing sheets or Peek
+ * so user forms in「最近归档记录」or Peek Edit are NEVER destroyed!
+ */
+export function openSheet({ title, sub, label, body, onClose, initialFocus, className = '', stacked = false } = {}) {
+  const layer = $('#sheetLayer');
+  if (!layer) return { el: null, bodyEl: null, setHeader() {}, close() {} };
+
+  if (!stacked && sheetStack.length) {
+    closeSheet({ silentHaptic: true, all: true });
+    clear(layer);
+  }
+  const prevTop = topEntry();
+  if (prevTop) prevTop.host.inert = true;
+
+  layer.style.display = 'flex';
+  const depth = sheetStack.length;
   const ac = new AbortController();
   const titleId = 'sheetTitle' + Math.random().toString(36).slice(2, 7);
   const grabber = h('div', { class: 'sheet-grabber-hit', 'aria-hidden': 'true' }, h('div', { class: 'sheet-grabber' }));
-  const headEl = h(
-    'div',
-    { class: ['sheet-head', !title && !sub && 'is-compact'] },
-    grabber,
-    title ? h('h2', { class: 'sheet-title', id: titleId, text: title }) : null,
-    sub ? h('p', { class: 'sheet-sub', text: sub }) : null,
-  );
+  const titleEl = h('h2', { class: 'sheet-title', id: titleId, text: title || '', hidden: !title });
+  const subEl = h('p', { class: 'sheet-sub', text: sub || '', hidden: !sub });
+  const headEl = h('div', { class: ['sheet-head', !title && !sub && 'is-compact'] }, grabber, titleEl, subEl);
   const bodyNodes = Array.isArray(body) ? body : body ? [body] : [];
   const bodyEl = h('div', { class: 'sheet-body' }, ...bodyNodes);
   const sheet = h(
@@ -151,11 +176,14 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus, clas
     headEl,
     bodyEl,
   );
-  const scrim = h('div', { class: 'mw-sheet-scrim', onClick: () => closeSheet() });
-  layer.append(scrim, sheet);
+  let entry;
+  const scrim = h('div', { class: 'mw-sheet-scrim', onClick: () => closeEntry(entry) });
+  const host = h('div', { class: 'mw-sheet-stack-item', style: { 'z-index': String(2 + depth * 2) } }, scrim, sheet);
+  layer.appendChild(host);
 
-  const entry = {
+  entry = {
     layer,
+    host,
     sheet,
     bodyEl,
     onClose,
@@ -167,6 +195,17 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus, clas
     moRafId: 0,
     focusTimerId: 0,
     clearTimerId: 0,
+  };
+
+  const setHeader = ({ title: nextTitle, sub: nextSub } = {}) => {
+    if (nextTitle !== undefined) {
+      titleEl.textContent = nextTitle || '';
+      titleEl.hidden = !nextTitle;
+    }
+    if (nextSub !== undefined) {
+      subEl.textContent = nextSub || '';
+      subEl.hidden = !nextSub;
+    }
   };
 
   const syncBottomFade = () => {
@@ -186,10 +225,11 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus, clas
     entry.mo.observe(bodyEl, { childList: true, subtree: true });
   }
 
-  attachGrabberDrag({ sheet, bodyEl, scrim, onDismiss: () => closeSheet({ silentHaptic: true }), signal: ac.signal });
+  attachGrabberDrag({ sheet, bodyEl, scrim, onDismiss: () => closeEntry(entry, { silentHaptic: true }), signal: ac.signal });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeSheet(); return; }
+    if (topEntry() !== entry) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeEntry(entry); return; }
     if (e.key !== 'Tab') return;
     const nodes = Array.from(sheet.querySelectorAll(FOCUSABLE)).filter((n) => n.offsetParent !== null);
     if (!nodes.length) { e.preventDefault(); sheet.focus({ preventScroll: true }); return; }
@@ -202,30 +242,31 @@ export function openSheet({ title, sub, label, body, onClose, initialFocus, clas
     }
   }, { signal: ac.signal });
 
-  open = entry;
+  sheetStack.push(entry);
   syncOverlayState();
   entry.rafId = requestAnimationFrame(() => {
     entry.rafId = 0;
-    if (open !== entry) return;
-    layer.classList.add('is-open');
+    if (!sheetStack.includes(entry)) return;
+    host.classList.add('is-open');
     syncBottomFade();
     const target = initialFocus || sheet.querySelector('textarea, input:not([type="hidden"]), button:not(.sheet-grabber)') || sheet;
     if (target) {
       entry.focusTimerId = setTimeout(() => {
         entry.focusTimerId = 0;
-        if (open === entry) { syncBottomFade(); target.focus({ preventScroll: true }); }
+        if (topEntry() === entry) { syncBottomFade(); target.focus({ preventScroll: true }); }
       }, 120);
     }
   });
-  return { el: sheet, bodyEl, close: closeSheet };
+  return { el: sheet, bodyEl, setHeader, close: (opts) => closeEntry(entry, opts) };
 }
 
 export function isSheetOpen() {
-  return Boolean(open);
+  return sheetStack.length > 0;
 }
 
 export function scrollSheetToTop(smooth = true) {
-  if (!open?.bodyEl) return false;
-  open.bodyEl.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
+  const cur = topEntry();
+  if (!cur?.bodyEl) return false;
+  cur.bodyEl.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
   return true;
 }

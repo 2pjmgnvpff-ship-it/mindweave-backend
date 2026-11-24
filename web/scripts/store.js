@@ -90,6 +90,19 @@ export function upsertPerson(person) {
   store.set({ people: { ...s.people, [person.id]: { ...prev, ...person } } });
 }
 
+export function removePerson(personId) {
+  if (!personId) return;
+  const s = store.get();
+  const people = { ...s.people };
+  delete people[personId];
+  const materials = { ...s.materials };
+  delete materials[personId];
+  const coreIds = (s.coreIds || []).filter((id) => id !== personId);
+  const casualIds = (s.casualIds || []).filter((id) => id !== personId);
+  const activePersonId = s.activePersonId === personId ? (coreIds[0] || casualIds[0] || null) : s.activePersonId;
+  store.set({ people, materials, coreIds, casualIds, activePersonId });
+}
+
 export function applyTierChange({ personId, tier, coreIds, casualIds }) {
   const s = store.get();
   const p = s.people[personId];

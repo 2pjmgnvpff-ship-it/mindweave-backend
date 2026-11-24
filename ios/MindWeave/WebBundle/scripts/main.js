@@ -16,6 +16,7 @@ import { api, client } from './api/endpoints.js';
 import { store, applyBootstrap, isEmptyAccount, resetRuntimeCaches } from './store.js';
 import { actions } from './actions.js';
 import { initOrbVisibilityGuard } from './lib/orb.js';
+import { initKeyboardViewportBridge } from './lib/swipe-arbiter.js';
 import { initJournal, openPerson, reloadMaterials, loadMaterials, resetJournalCaches, scrollJournalToTop } from './views/journal.js';
 import { initDock } from './views/dock.js';
 import { initVoice } from './views/voice.js';
@@ -26,17 +27,25 @@ const SWR_BOOT_KEY = 'mw.swrBoot';
 let captureStarted = false;
 let nativeRoutersBound = false;
 
-const loadChatMod = () => (ensureStyle?.('./styles/chat.css'), import('./views/chat.js'));
-const loadSheetMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/sheet.js'));
-const loadAuthMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/auth.js'));
-const loadOnbMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/onboarding.js'));
-const loadSettingsMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/settings.js'));
-const loadDataRightsMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/data-rights-sheet.js'));
-const loadCrisisMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/crisis.js'));
-const loadPeopleMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/people-sheet.js'));
-const loadArchiveMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/archive-history-sheet.js'));
-const loadPeekMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/peek-date.js'));
-const loadCaptureMod = () => (ensureStyle?.('./styles/sheets.css'), import('./views/capture.js'));
+const loadWithStyles = async (styles, importer) => {
+  const [, mod] = await Promise.all([
+    Promise.all(styles.map((href) => ensureStyle?.(href))),
+    importer(),
+  ]);
+  return mod;
+};
+
+const loadChatMod = () => loadWithStyles(['./styles/chat.css', './styles/sheets.css'], () => import('./views/chat.js'));
+const loadSheetMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/sheet.js'));
+const loadAuthMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/auth.js'));
+const loadOnbMod = () => loadWithStyles(['./styles/sheets.css', './styles/chat.css'], () => import('./views/onboarding.js'));
+const loadSettingsMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/settings.js'));
+const loadDataRightsMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/data-rights-sheet.js'));
+const loadCrisisMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/crisis.js'));
+const loadPeopleMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/people-sheet.js'));
+const loadArchiveMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/archive-history-sheet.js'));
+const loadPeekMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/peek-date.js'));
+const loadCaptureMod = () => loadWithStyles(['./styles/sheets.css'], () => import('./views/capture.js'));
 const loadReceiptMod = () => import('./views/capture-receipt.js');
 
 function readLastPerson() {
@@ -282,6 +291,7 @@ function registerServiceWorker() {
 async function boot() {
   initNativeBridge();
   initOrbVisibilityGuard?.(document.documentElement);
+  initKeyboardViewportBridge?.();
   bindActions();
   bindNativeRouters();
   client.setOnAuthLost(() => signOut({ explicit: false, message: '登录已过期，请重新登录' }));
@@ -294,9 +304,11 @@ async function boot() {
   });
   registerServiceWorker();
   if (!client.isLoggedIn()) {
-    $('#bootVeil')?.classList.add('is-gone');
     const { showAuth } = await loadAuthMod();
-    await showAuth();
+    const authPromise = showAuth();
+    requestAnimationFrame(() => $('#bootVeil')?.classList.add('is-gone'));
+    await authPromise;
+    $('#bootVeil')?.classList.remove('is-gone');
   }
   await enterApp();
 }

@@ -1,34 +1,59 @@
 import SwiftUI
 
-/// Opaque warm porcelain (`#FCFBF9`) privacy curtain shielding MindWeave's private journals
+/// Luminous Gleb Morning-Light privacy curtain shielding MindWeave's private journals
 /// during App Switcher snapshots (`.inactive`) and Face ID / Touch ID / Passcode lock (`.locked`).
-/// Zero heavy GPU blur — instant 0ms composition matching MindWeave's V2 porcelain canvas.
 @MainActor
 struct PorcelainLockCurtainView: View {
     @ObservedObject var lockManager: BiometricLockManager
 
-    private static let porcelainBg = Color(red: 0.988, green: 0.984, blue: 0.976) // #FCFBF9
-    private static let warmInk = Color(red: 0.200, green: 0.173, blue: 0.153)     // #332C27
-    private static let mutedInk = Color(red: 0.478, green: 0.431, blue: 0.392)    // #7A6E64
-    private static let hairline = Color(red: 0.200, green: 0.173, blue: 0.153).opacity(0.10)
-    private static let pillSurface = Color.white.opacity(0.92)
+    private static let porcelainBg = Color(red: 0.980, green: 0.965, blue: 0.941) // #FAF6F0
+    private static let peachGlow = Color(red: 1.0, green: 0.776, blue: 0.604).opacity(0.55)
+    private static let goldGlow = Color(red: 0.988, green: 0.894, blue: 0.729).opacity(0.45)
+    private static let warmInk = Color(red: 0.145, green: 0.122, blue: 0.106)     // #251F1B
+    private static let mutedInk = Color(red: 0.435, green: 0.392, blue: 0.357)    // #6F645B
+    private static let accentStart = Color(red: 0.302, green: 0.231, blue: 0.196)
+    private static let accentEnd = Color(red: 0.204, green: 0.153, blue: 0.129)
 
     var body: some View {
         ZStack {
-            Self.porcelainBg
-                .ignoresSafeArea()
+            Self.porcelainBg.ignoresSafeArea()
 
-            VStack(spacing: 18) {
+            RadialGradient(
+                colors: [Self.peachGlow, .clear],
+                center: UnitPoint(x: 0.92, y: 0.08),
+                startRadius: 12,
+                endRadius: 340
+            )
+            .ignoresSafeArea()
+
+            RadialGradient(
+                colors: [Self.goldGlow, .clear],
+                center: UnitPoint(x: 0.10, y: 0.88),
+                startRadius: 12,
+                endRadius: 280
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 20) {
                 Spacer()
 
                 ZStack {
                     Circle()
-                        .fill(Self.pillSurface)
-                        .frame(width: 72, height: 72)
+                        .fill(
+                            RadialGradient(
+                                colors: [.white, Color(red: 0.984, green: 0.875, blue: 0.776)],
+                                center: UnitPoint(x: 0.34, y: 0.28),
+                                startRadius: 4,
+                                endRadius: 48
+                            )
+                        )
+                        .frame(width: 82, height: 82)
                         .overlay(
                             Circle()
-                                .stroke(Self.hairline, lineWidth: 1)
+                                .stroke(Color.white.opacity(0.95), lineWidth: 2)
                         )
+                        .shadow(color: Color(red: 0.85, green: 0.56, blue: 0.36).opacity(0.28), radius: 22, x: 0, y: 10)
+
                     Text("心络")
                         .font(.system(size: 22, weight: .semibold, design: .serif))
                         .foregroundStyle(Self.warmInk)
@@ -36,12 +61,12 @@ struct PorcelainLockCurtainView: View {
 
                 VStack(spacing: 6) {
                     Text(lockManager.isLocked ? "心络已为你收好" : "心络")
-                        .font(.system(size: 19, weight: .medium, design: .serif))
+                        .font(.system(size: 20, weight: .semibold, design: .serif))
                         .foregroundStyle(Self.warmInk)
 
                     if lockManager.isLocked {
                         Text("你的手帐仅限本人翻阅")
-                            .font(.system(size: 13))
+                            .font(.system(size: 13.5))
                             .foregroundStyle(Self.mutedInk)
                     }
                 }
@@ -54,17 +79,16 @@ struct PorcelainLockCurtainView: View {
                             Image(systemName: iconName(for: lockManager.cachedBiometryKind))
                                 .font(.system(size: 15, weight: .medium))
                             Text(unlockButtonLabel)
-                                .font(.system(size: 15, weight: .medium))
+                                .font(.system(size: 15, weight: .semibold))
                         }
-                        .foregroundStyle(Self.warmInk)
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 12)
-                        .background(Self.pillSurface)
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(Self.hairline, lineWidth: 1)
+                        .foregroundStyle(Color(red: 1.0, green: 0.984, blue: 0.969))
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 13)
+                        .background(
+                            LinearGradient(colors: [Self.accentStart, Self.accentEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
                         )
+                        .clipShape(Capsule())
+                        .shadow(color: Self.accentEnd.opacity(0.24), radius: 14, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .disabled(lockManager.isAuthenticating)
@@ -73,7 +97,6 @@ struct PorcelainLockCurtainView: View {
                     Text("轻点解锁，或使用设备密码")
                         .font(.system(size: 12))
                         .foregroundStyle(Self.mutedInk)
-                        .padding(.top, 2)
 
                     if let err = lockManager.lastErrorMessage, !err.isEmpty {
                         Text(err)
@@ -81,7 +104,7 @@ struct PorcelainLockCurtainView: View {
                             .foregroundStyle(Self.mutedInk)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 36)
-                            .padding(.top, 4)
+                            .padding(.top, 2)
                     }
                 }
 

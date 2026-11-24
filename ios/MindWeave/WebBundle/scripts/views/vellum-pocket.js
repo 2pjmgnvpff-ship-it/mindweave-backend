@@ -122,6 +122,11 @@ export function renderUpcomingRibbon(person, reminders, { onOpenVellum, onMutate
   );
 }
 
+function primaryLeadDay(raw) {
+  if (Array.isArray(raw)) return raw.length ? Number(raw[0]) : 1;
+  return raw != null ? Number(raw) : 1;
+}
+
 function buildEditableItems(rawFacts, rawReminders) {
   const facts = (rawFacts || []).filter((f) => f && f.status !== 'rejected');
   const reminders = (rawReminders || []).filter((r) => r && r.status !== 'cancelled' && r.status !== 'completed');
@@ -139,7 +144,7 @@ function buildEditableItems(rawFacts, rawReminders) {
       id: r.id,
       version: r.version,
       status: r.status,
-      leadDays: r.leadDays ?? 1,
+      leadDays: primaryLeadDay(r.leadDays),
       when: dualDateLabel(r) || formatFactDateCn(linked),
       text: r.title || linked?.content || '',
       recordId: linked?.recordId || null,
@@ -181,7 +186,7 @@ function renderVellumRow(item, person, allReminders, { onJumpToRecord, onRemoved
     h('span', { class: 'vellum-line-text', text: item.text }),
   );
   const ctrl = h('span', { class: 'vellum-rem-controls vellum-row-ctrl' });
-  const rowEl = h('div', { class: 'vellum-rem-row vellum-row', style: { 'flex-direction': 'column', 'align-items': 'stretch' } }, h('div', { class: 'vellum-row-main', style: { display: 'flex', 'align-items': 'center', 'justify-content': 'space-between', gap: '10px' } }, lineBtn, ctrl));
+  const rowEl = h('div', { class: 'vellum-rem-row vellum-row' }, h('div', { class: 'vellum-row-main' }, lineBtn, ctrl));
 
   if (item.kind === 'reminder' && item.id) {
     const syncBtn = (b) => {
@@ -197,7 +202,6 @@ function renderVellumRow(item, person, allReminders, { onJumpToRecord, onRemoved
       remBtn.disabled = true;
       const next = item.status === 'active' ? 'paused' : 'active';
       try {
-        // Prompt OS notification permission strictly on explicit user enable — NEVER cold boot!
         if (next === 'active') await mwNativeUI?.requestNotificationPermission?.().catch(() => null);
         const res = await api.patchReminder(item.id, { status: next }, item.version);
         item.status = res?.status || next;
@@ -251,19 +255,21 @@ function renderVellumRow(item, person, allReminders, { onJumpToRecord, onRemoved
             if (item.leadDays === days) return;
             try {
               const fn = api.updateReminder || api.patchReminder;
-              const res = await fn(item.id, { leadDays: days }, item.version);
-              item.leadDays = days;
+              const res = await fn(item.id, { leadDays: [days] }, item.version);
+              item.leadDays = primaryLeadDay(res?.leadDays ?? [days]);
               if (res?.version != null) item.version = res.version;
-              if (item.raw) item.raw.leadDays = days;
+              if (item.raw) item.raw.leadDays = [item.leadDays];
               leadRow.querySelectorAll('.vellum-lead-chip').forEach((c, idx) => {
-                const on = LEAD_CHOICES[idx] === days;
+                const on = LEAD_CHOICES[idx] === item.leadDays;
                 c.classList.toggle('is-active', on);
                 c.classList.toggle('is-selected', on);
               });
               syncNativeReminders(person, allReminders);
               haptic('selection');
+              whisper(days === 0 ? '已改为当天提醒' : `已改为提前 ${days} 天提醒`, 1800);
             } catch (err) {
-              whisper(err?.message || '未能修改提前天数', 2200);
+              haptic('warning');
+              whisper(err?.message || '未能修改提前天数', 2400);
             }
           },
         }),
@@ -334,10 +340,25 @@ export async function openVellumPocket(person, { onJumpToRecord, onMutated } = {
   haptic('light');
   const tier = person.tier || 'crystal';
   const content = h('div', { class: 'vellum-content' }, h('p', { class: 'vellum-loading', text: '正在展开人物档案…' }));
+  const editPersonBar = h(
+    'div',
+    { class: 'vellum-top-actions' },
+    h('span', { class: 'journal-tier-tag', text: tier === 'silver' ? '银盾 · 边界' : tier === 'gold' ? '金箭 · 珍重' : '水晶 · 日常' }),
+    h('button', {
+      type: 'button',
+      class: 'vellum-edit-person-btn',
+      text: '编辑资料 / 删除',
+      onClick: () => {
+        haptic('light');
+        actions.openPeopleSheet?.({ mode: 'edit', person, stacked: true });
+      },
+    }),
+  );
+
   openSheet({
     title: person.nameCn,
-    sub: person.roleTag || (tier === 'silver' ? '银盾 · 边界' : tier === 'gold' ? '金箭 · 珍重' : '水晶 · 日常'),
-    body: h('div', { class: ['vellum-pocket', `tier-${tier}`] }, content),
+    sub: person.roleTag || '关于这位在意的人的备忘与日子',
+    body: h('div', { class: ['vellum-pocket', `tier-${tier}`] }, editPersonBar, content),
   });
 
   const [brief, factsRes, remRes] = await Promise.all([

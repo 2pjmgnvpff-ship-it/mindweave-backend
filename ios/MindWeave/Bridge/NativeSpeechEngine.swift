@@ -342,7 +342,8 @@ final class NativeSpeechEngine {
 
         switch action {
         case "checkpermissions":
-            checkPermissions()
+            let reqId = (dict["reqId"] as? String) ?? ""
+            checkPermissions(reqId: reqId)
         case "warm":
             let locale = (dict["locale"] as? String) ?? "zh-CN"
             let hints = (dict["contextualStrings"] as? [String]) ?? []
@@ -354,7 +355,7 @@ final class NativeSpeechEngine {
             let locale = (dict["locale"] as? String) ?? "zh-CN"
             let hints = (dict["contextualStrings"] as? [String]) ?? []
             let defaultRecord = (mode != .dictation)
-            let recordAudio = (dict["recordAudio"] as? Bool) ?? defaultRecord
+            let recordAudio = (dict["recordAudio"] as? Bool) ?? (dict["saveAudio"] as? Bool) ?? defaultRecord
             let maxDurationSec = (dict["maxDurationSec"] as? NSNumber)?.doubleValue ?? 120.0
             let preferOnDevice = (dict["preferOnDevice"] as? Bool) ?? true
             let cfg = NativeSpeechStartConfig(
@@ -396,18 +397,25 @@ final class NativeSpeechEngine {
 
     // MARK: - Permissions
 
-    private func checkPermissions() {
+    private func checkPermissions(reqId: String = "") {
         let micStatus = Self.currentMicStatusString()
         let speechStatus = Self.currentSpeechStatusString()
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-CN"))
         let onDevice = recognizer?.supportsOnDeviceRecognition ?? false
-        emitDict([
+        let granted = (micStatus != "denied") && (speechStatus != "denied")
+        var payload: [String: Any] = [
             "type": "speech.permission",
+            "ok": true,
+            "granted": granted,
             "mic": micStatus,
             "speech": speechStatus,
             "onDeviceAvailable": onDevice,
             "engine": "ios_sf_speech",
-        ])
+        ]
+        if !reqId.isEmpty {
+            payload["reqId"] = reqId
+        }
+        emitDict(payload)
     }
 
     private func startWithPermissions(_ config: NativeSpeechStartConfig) async {

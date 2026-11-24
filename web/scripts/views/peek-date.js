@@ -170,6 +170,7 @@ export function openChineseDatePicker({ initialIso = todayIso(), mode = 'past', 
     sub: mode === 'past' ? '可选择今天或更早的日期' : mode === 'future' ? '可选择今天或之后的提醒日期' : '选择公历日期',
     body: [previewEl, wheel, actionsRow],
     className: 'is-date-picker-sheet',
+    stacked: true,
   });
 }
 
@@ -200,7 +201,6 @@ export function closePeek({ silentHaptic = false } = {}) {
   entry.layer.classList.remove('is-open');
   syncPeekOverlayState();
 
-  // Safari 26 1ar.io fix: strictly display:none after 220ms fade.
   entry.clearTimerId = setTimeout(() => {
     if (!activePeek) {
       entry.layer.style.display = 'none';
@@ -232,6 +232,52 @@ export function openPeekOverlay(materialId, person, { startEditing = false, onMu
   const dateTextEl = h('p', { class: 'peek-date', text: formatDateFullCn(m.happenedOn || m.createdAt) || formatDateCn(m.happenedOn || m.createdAt) });
   const bodyHost = h('div', { class: 'peek-body-host' }, h('p', { class: 'peek-body', text: m.body || m.snippet || '' }));
 
+  // P0-06: Dedicated Confirm / Ink banner for pencil drafts so users can settle 待确认 slips directly inside Peek
+  let pencilBanner = null;
+  if (m.presentation === 'pencil') {
+    const inkBtn = h('button', {
+      type: 'button',
+      class: 'peek-pencil-ink-btn',
+      text: '✓ 确认落墨',
+      onClick: async () => {
+        inkBtn.disabled = true;
+        inkBtn.textContent = '落墨中…';
+        try {
+          const latest = fresh() || m;
+          const tasks = [];
+          if (latest.inboxItemId && typeof api.resolveInbox === 'function') {
+            tasks.push(api.resolveInbox(latest.inboxItemId, { action: 'confirm' }));
+          }
+          if (Array.isArray(latest.pencilFacts) && latest.pencilFacts.length) {
+            for (const f of latest.pencilFacts) {
+              if (f?.id) tasks.push(api.patchFact(f.id, { status: 'confirmed' }, f.version));
+            }
+          }
+          if (!tasks.length) {
+            tasks.push(api.patchMaterial(latest.id, { reviewState: 'normal' }, latest.version));
+          }
+          await Promise.all(tasks);
+          patchMaterial(person.id, latest.id, { presentation: 'ink', pencilFacts: [], inboxItemId: null });
+          card.classList.remove('is-pencil');
+          pencilBanner?.remove();
+          haptic('memorySeal', { tier });
+          actions.refreshBootstrap?.();
+          onMutated?.();
+          whisper('好，已经核对落墨', 2000);
+        } catch (err) {
+          inkBtn.disabled = false;
+          inkBtn.textContent = '✓ 确认落墨';
+          haptic('warning');
+          whisper(err?.message || '暂时没能落墨，请再试一次', 2600);
+        }
+      },
+    });
+    pencilBanner = h('div', { class: 'peek-pencil-banner', role: 'region', 'aria-label': '待确认核对' },
+      h('span', { class: 'peek-pencil-copy', text: m.glanceHint || '待确认 · 核对无误后即可落墨' }),
+      inkBtn,
+    );
+  }
+
   const rawText = m.transcript || m.rawTranscript || m.rawText || '';
   const rawDetails = rawText && rawText !== m.body
     ? h('details', { class: 'peek-raw-details' }, h('summary', { text: '原话' }), h('p', { class: 'peek-raw-text', text: rawText }))
@@ -241,6 +287,7 @@ export function openPeekOverlay(materialId, person, { startEditing = false, onMu
     'div',
     { class: ['peek-card', `tier-${tier}`, m.presentation === 'pencil' && 'is-pencil'], role: 'dialog', 'aria-modal': 'true', tabindex: '-1', 'aria-label': '细看这条手帐' },
     h('div', { class: 'peek-grabber-hit', 'aria-hidden': 'true' }, h('div', { class: 'peek-grabber' })),
+    pencilBanner,
     showPhoto
       ? h('div', {
           class: 'peek-photo-wrap',
@@ -254,6 +301,7 @@ export function openPeekOverlay(materialId, person, { startEditing = false, onMu
   );
 
   const entry = { layer, ac, restore: document.activeElement, rafId: 0, focusTimerId: 0, clearTimerId: 0, imeGuard: null };
+  let pill = null;
 
   const exitEdit = () => {
     editing = false;
@@ -263,12 +311,16 @@ export function openPeekOverlay(materialId, person, { startEditing = false, onMu
     clear(bodyHost);
     bodyHost.appendChild(h('p', { class: 'peek-body', text: cur.body || cur.snippet || '' }));
     dateTextEl.textContent = formatDateFullCn(cur.happenedOn || cur.createdAt) || formatDateCn(cur.happenedOn || cur.createdAt);
+    dateTextEl.hidden = false;
+    if (pill) pill.hidden = false;
   };
 
   const enterEdit = () => {
     if (editing) return exitEdit();
     editing = true;
     haptic('light');
+    dateTextEl.hidden = true;
+    if (pill) pill.hidden = true;
     const cur = fresh() || m;
     editDate = cur.happenedOn || todayIso();
     const ta = h('textarea', { class: 'peek-edit-area', rows: '4', maxlength: '10000', value: cur.body || cur.snippet || '', 'aria-label': '修改记录文字' });
@@ -419,7 +471,7 @@ export function openPeekOverlay(materialId, person, { startEditing = false, onMu
     h('button', { type: 'button', class: 'peek-pill-btn is-danger', text: '删除', onClick: confirmDelete }),
   ];
 
-  const pill = h('div', { class: 'peek-action-pill', role: 'toolbar', 'aria-label': '手帐操作' }, ...actionsList);
+  pill = h('div', { class: 'peek-action-pill', role: 'toolbar', 'aria-label': '手帐操作' }, ...actionsList);
   const scrim = h('div', { class: 'peek-scrim', onClick: () => closePeek() });
   const stage = h('div', { class: 'peek-stage', onClick: (e) => { if (e.target === stage) closePeek(); } }, card, pill);
   layer.append(scrim, stage);

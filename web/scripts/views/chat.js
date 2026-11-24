@@ -5,7 +5,7 @@ import { api, uuid } from '../api/endpoints.js';
 import { friendlyMessage } from '../api/client.js';
 import { store } from '../store.js';
 import { haptic } from '../native-bridge.js';
-import { BACK_SVG, SEND_SVG, PAPERS_SVG, ARROW_SVGS } from '../icons.js';
+import { BACK_SVG, SEND_SVG, PAPERS_SVG, ARROW_SVGS, CUPID_IMG } from '../icons.js';
 import { createOrb, setOrbState } from '../lib/orb.js';
 import { createImeGuard } from '../lib/ime-guard.js';
 import { initKeyboardViewportBridge } from '../lib/swipe-arbiter.js';
@@ -77,10 +77,11 @@ function build() {
 
   els.back = h('button', { type: 'button', class: 'muse-glass-circle-btn', 'aria-label': '回到手帐', onClick: () => (haptic('light'), closeChat()) }, svg(BACK_SVG));
   els.headerOrb = createOrb({ size: 'header', state: 'idle' });
-  els.titleName = h('span', { class: 'cupid-chat-name', text: '丘比特' });
+  els.headerAvatar = h('span', { class: 'chat-cupid-avatar-wrap', 'aria-hidden': 'true' }, h('img', { class: 'chat-cupid-avatar-img', src: CUPID_IMG, alt: '' }));
+  els.titleName = h('span', { class: 'cupid-chat-name', text: '妈妈' });
   els.arrow = h('span', { class: 'cupid-inline-arrow', 'aria-hidden': 'true' });
   els.drawerBadge = h('span', { class: 'muse-drawer-badge', hidden: true, 'aria-hidden': 'true' });
-  els.drawerPill = h('button', { type: 'button', class: 'muse-drawer-pill', 'aria-label': '挑几页手帐', onClick: () => (haptic('light'), drawerCtrl?.setOpen(true)) }, svg(PAPERS_SVG, 'muse-drawer-icon'), h('span', { text: '手帐' }), els.drawerBadge);
+  els.drawerPill = h('button', { type: 'button', class: 'muse-drawer-pill', 'aria-label': '挑几页手帐', onClick: () => (haptic('light'), drawerCtrl?.setOpen(true)) }, svg(PAPERS_SVG, 'muse-drawer-icon'), els.drawerBadge);
   els.newThreadBtn = h('button', { type: 'button', class: 'muse-new-thread-btn', text: '新对话', onClick: () => startNewThread() });
 
   els.inner = h('div', { class: 'ai-chat-inner' });
@@ -94,8 +95,6 @@ function build() {
   els.dockOrb = createOrb({ size: 'dock', state: 'idle' });
   els.sendIcon = svg(SEND_SVG, 'chat-send-icon');
   els.stopIcon = svg(STOP_SVG, 'chat-stop-icon');
-  if (els.sendIcon?.style) { els.sendIcon.style.width = '18px'; els.sendIcon.style.height = '18px'; }
-  if (els.stopIcon?.style) { els.stopIcon.style.width = '18px'; els.stopIcon.style.height = '18px'; }
   els.sendIcon.hidden = true;
   els.stopIcon.hidden = true;
   els.orbBtn = h('button', { type: 'button', id: 'chatOrbBtn', class: 'chat-detached-orb-btn', dataset: { mode: 'orb' } }, els.dockOrb, els.sendIcon, els.stopIcon);
@@ -115,7 +114,7 @@ function build() {
     },
     onStateChange: () => syncComposerAction(),
   });
-  els.pillBar.append(els.plus, els.input, voiceCtrl.statusChip, voiceCtrl.inlineMicBtn, voiceCtrl.dictateDoneBtn);
+  els.pillBar.append(els.plus, els.input, voiceCtrl.inlineMicBtn, voiceCtrl.dictateDoneBtn);
 
   drawerCtrl = createChatDrawer({
     root, getPerson: () => person(), getAttached: () => state.attached,
@@ -124,15 +123,49 @@ function build() {
     onOpenPeek: (mid) => actions.openPeek?.(mid, person(), { fromChat: true }),
   });
 
-  const header = h('header', { class: 'ai-chat-header muse-chat-header' },
-    h('div', { class: 'ai-chat-header-left' }, els.back, h('div', { class: 'ai-chat-header-title' }, els.headerOrb, els.titleName, els.arrow)),
-    h('div', { class: 'ai-chat-header-actions' }, els.drawerPill, els.newThreadBtn),
+  const drawerHandle = h(
+    'button',
+    {
+      type: 'button',
+      class: 'chat-drawer-handle',
+      'aria-label': '拉出手帐抽屉',
+      onClick: () => (haptic('light'), drawerCtrl?.setOpen(true)),
+    },
+    h('span', { class: 'chat-drawer-handle-bar', 'aria-hidden': 'true' }),
   );
-  root.append(header, els.messages, drawerCtrl.scrimEl, drawerCtrl.drawerEl, h('div', { class: 'muse-composer-wrap ai-chat-composer-wrap' }, els.starters, els.tray, els.tipKit, h('div', { class: 'muse-composer-row' }, els.pillBar, els.orbBtn)));
+
+  const header = h(
+    'header',
+    { class: 'ai-chat-header muse-chat-header' },
+    h(
+      'div',
+      { class: 'chat-floating-pill-header' },
+      els.back,
+      h(
+        'div',
+        { class: 'ai-chat-header-title' },
+        els.headerAvatar,
+        h('span', { class: 'chat-header-brand' }, h('span', { class: 'chat-header-cupid-label', text: '丘比特' }), h('span', { class: 'chat-header-dot', text: '·' }), els.titleName),
+        els.arrow,
+      ),
+      h('div', { class: 'ai-chat-header-actions' }, els.drawerPill, els.newThreadBtn),
+    ),
+  );
+  const topFeather = h('div', { class: 'chat-top-feather', 'aria-hidden': 'true' });
+
+  root.append(
+    header,
+    topFeather,
+    els.messages,
+    drawerHandle,
+    drawerCtrl.scrimEl,
+    drawerCtrl.drawerEl,
+    h('div', { class: 'muse-composer-wrap ai-chat-composer-wrap' }, els.starters, els.tray, voiceCtrl.statusChip, els.tipKit, h('div', { class: 'muse-composer-row' }, els.pillBar, els.orbBtn)),
+  );
 
   createImeGuard(els.input, { isTouchDevice: Boolean(globalThis.matchMedia?.('(pointer: coarse)')?.matches), onSubmit: () => send() });
   els.input.addEventListener('input', () => (autoGrow(), saveDraft(), syncComposerAction()), { signal });
-  els.input.addEventListener('focus', () => setTimeout(scrollDown, 120), { signal });
+  els.input.addEventListener('focus', () => setTimeout(scrollDown, 160), { signal });
   els.orbBtn.addEventListener('click', () => {
     if (els.orbBtn.dataset.mode === 'stop') { haptic('light'); state.streaming?.abort(); }
     else if (els.orbBtn.dataset.mode === 'send') send();
@@ -145,7 +178,7 @@ function build() {
   }, { signal });
 
   bindChatEdgePop({ root, isDrawerOpen: () => Boolean(drawerCtrl?.isOpen()), isVoiceBusy: () => Boolean(voiceCtrl?.isBusy()), onSwipePop: () => closeChat({ fromSwipe: true }), signal });
-  initKeyboardViewportBridge?.({ signal });
+  initKeyboardViewportBridge?.({ onInsetChange: () => setTimeout(scrollDown, 120), signal });
   syncComposerAction();
   state.built = true;
 }
@@ -199,7 +232,11 @@ function renderStarters(tier, nameCn) {
 }
 
 function emptyNotice(tier, nameCn) {
+  const visual = tier === 'gold'
+    ? h('div', { class: 'ai-chat-empty-medallion' }, h('img', { src: CUPID_IMG, alt: '丘比特', draggable: 'false' }))
+    : createOrb({ size: 'starter', state: 'idle' });
   return h('div', { class: 'ai-chat-empty' },
+    visual,
     h('p', { class: 'ai-chat-empty-title', text: SUB_COPY[tier](nameCn || '') }),
     h('p', { class: 'ai-chat-empty-sub', text: EMPTY_COPY[tier](nameCn || '') }),
   );
@@ -210,6 +247,9 @@ function startNewThread() {
   haptic('light');
   state.streaming?.abort();
   state.nextCursor = null;
+  state.attached.clear();
+  renderTray();
+  drawerCtrl?.renderList();
   clear(els.inner);
   const p = person();
   const tier = Object.hasOwn(ARROW_SVGS, p?.tier) ? p.tier : 'crystal';

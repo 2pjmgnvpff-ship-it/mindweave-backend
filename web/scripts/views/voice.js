@@ -16,7 +16,7 @@ import {
 import { voiceFsm } from '../voice-fsm.js';
 import { createOrb, setOrbState, driveOrbRms } from '../lib/orb.js';
 import { submitVoice, submitText } from './capture.js';
-import { whisper } from './toast.js';
+import { whisper, showToast } from './toast.js';
 import { actions } from '../actions.js';
 
 const NEAR_CAP_MS = MAX_HOLD_MS - 10_000;
@@ -27,7 +27,7 @@ let captionEl = null;
 let timerEl = null;
 let cancelHintEl = null;
 let hintTimer = 0;
-let hold = null; // { pointerId, sessionId, startY, t0, revealed, cancelArmed, preRollTimer, revealTimer, tickTimer, partialText, finished }
+let hold = null;
 
 function activePerson() {
   const s = store.get();
@@ -46,10 +46,15 @@ function ensureInlineCapsule() {
   captionEl = h('p', { class: 'voice-inline-caption', text: '正在听…' });
   timerEl = h('span', { class: 'voice-inline-timer', text: '0:00' });
   cancelHintEl = h('span', { class: 'voice-inline-hint', text: '上滑取消' });
+  const waves = h('span', { class: 'voice-wave-bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i'), h('i'));
   capsuleEl.setAttribute('role', 'status');
   capsuleEl.setAttribute('aria-live', 'polite');
   capsuleEl.style.display = 'none';
-  capsuleEl.append(orbEl, h('div', { class: 'voice-inline-body' }, captionEl, h('div', { class: 'voice-inline-meta' }, timerEl, cancelHintEl)));
+  capsuleEl.append(
+    orbEl,
+    h('div', { class: 'voice-inline-body' }, captionEl, h('div', { class: 'voice-inline-meta' }, timerEl, cancelHintEl)),
+    waves,
+  );
   return capsuleEl;
 }
 
@@ -79,7 +84,11 @@ export function showHoldHint() {
     hintTimer = setTimeout(() => hint.classList.remove('is-visible'), 3000);
     return;
   }
-  whisper('按住左侧话筒随口记一句', 2200);
+  showToast('按住话筒随口说一句', {
+    actionLabel: '打字记一条',
+    onAction: () => actions.openTextCapture?.({ personId: store.get().activePersonId || null }),
+    ms: 3400,
+  });
 }
 
 function setCancelVisual(on) {

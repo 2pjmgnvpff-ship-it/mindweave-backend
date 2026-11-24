@@ -1,0 +1,313 @@
+name: Real Apple iOS Simulator Evaluation (MindWeave)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "ios-ipa-*"]
+    paths:
+      - "web/**"
+      - "ios/**"
+      - "scripts/sync_ios_web_bundle.sh"
+      - ".github/workflows/ios-simulator-eval.yml"
+
+concurrency:
+  group: ios-sim-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-ios-simulator-eval:
+    name: Real iPhone Simulator Video + XCUITest Eval
+    runs-on: macos-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode toolchain
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -n 1 || true)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            XCODE_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+          if [[ -n "${XCODE_APP}" && -d "${XCODE_APP}" ]]; then
+            sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+          xcrun simctl list runtimes
+
+      - name: Sync WebBundle and validate project.yml
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/sync_ios_web_bundle.sh
+          ./scripts/sync_ios_web_bundle.sh
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          (cd ios && xcodegen generate)
+          xcodebuild -project ios/MindWeave.xcodeproj -list
+
+      - name: Set up Python & uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev || uv sync --no-dev
+
+      - name: Bootstrap local PostgreSQL 15 with FORCE RLS roles
+        run: |
+          set -euo pipefail
+          if ! brew list postgresql@15 >/dev/null 2>&1; then
+            brew install postgresql@15
+          fi
+          PG_PREFIX="$(brew --prefix postgresql@15)"
+          PG_BIN="${PG_PREFIX}/bin"
+          PGDATA="${RUNNER_TEMP}/mw-pgdata"
+          rm -rf "${PGDATA}"
+          mkdir -p "${PGDATA}"
+          "${PG_BIN}/initdb" -D "${PGDATA}" --username=postgres --auth=trust --encoding=UTF8 --locale=C >/dev/null
+          "${PG_BIN}/pg_ctl" -D "${PGDATA}" -l "${RUNNER_TEMP}/postgres.log" -o "-p 55432 -h 127.0.0.1 -k /tmp" start
+
+          for i in $(seq 1 30); do
+            if "${PG_BIN}/pg_isready" -h 127.0.0.1 -p 55432 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          "${PG_BIN}/psql" -h 127.0.0.1 -p 55432 -U postgres -d postgres <<'SQL'
+          CREATE ROLE mindweave_owner LOGIN PASSWORD 'mindweave_owner' CREATEDB;
+          CREATE ROLE mindweave_app LOGIN PASSWORD 'mindweave_app' NOSUPERUSER NOBYPASSRLS;
+          CREATE ROLE mindweave_system LOGIN PASSWORD 'mindweave_system' NOSUPERUSER BYPASSRLS;
+          CREATE DATABASE mindweave OWNER mindweave_owner;
+          SQL
+
+          "${PG_BIN}/psql" -h 127.0.0.1 -p 55432 -U postgres -d mindweave <<'SQL'
+          GRANT ALL PRIVILEGES ON DATABASE mindweave TO mindweave_owner;
+          GRANT USAGE, CREATE ON SCHEMA public TO mindweave_owner;
+          GRANT USAGE ON SCHEMA public TO mindweave_app, mindweave_system;
+          SQL
+
+          export MINDWEAVE_APP_DATABASE_URL="postgresql+asyncpg://mindweave_app:mindweave_app@127.0.0.1:55432/mindweave"
+          export MINDWEAVE_SYSTEM_DATABASE_URL="postgresql+asyncpg://mindweave_system:mindweave_system@127.0.0.1:55432/mindweave"
+          export MINDWEAVE_MIGRATION_DATABASE_URL="postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/mindweave"
+          uv run alembic upgrade head
+          uv run python scripts/seed_demo.py --email demo@mindweave.app
+
+      - name: Start live MindWeave backend on 127.0.0.1:8766 & seed real photo slip
+        run: |
+          set -euo pipefail
+          mkdir -p sim_eval_out "${RUNNER_TEMP}/mw-blobs"
+          export MINDWEAVE_ENVIRONMENT="dev"
+          export MINDWEAVE_EMAIL_PROVIDER="noop"
+          export MINDWEAVE_EXPOSE_DEV_OTP_IN_RESPONSE="true"
+          export MINDWEAVE_AI_PRIMARY_PROVIDER="fake"
+          export MINDWEAVE_AI_FALLBACK_PROVIDER="none"
+          export MINDWEAVE_EMBED_WORKER_IN_API="true"
+          export MINDWEAVE_BLOB_STORAGE_DIR="${RUNNER_TEMP}/mw-blobs"
+          export MINDWEAVE_APP_DATABASE_URL="postgresql+asyncpg://mindweave_app:mindweave_app@127.0.0.1:55432/mindweave"
+          export MINDWEAVE_SYSTEM_DATABASE_URL="postgresql+asyncpg://mindweave_system:mindweave_system@127.0.0.1:55432/mindweave"
+          export MINDWEAVE_MIGRATION_DATABASE_URL="postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/mindweave"
+          export MINDWEAVE_CORS_ORIGINS='["mindweave://app","http://127.0.0.1:8766"]'
+
+          nohup uv run uvicorn mindweave.main:app --host 127.0.0.1 --port 8766 --log-level info > sim_eval_out/backend.log 2>&1 &
+          echo $! > "${RUNNER_TEMP}/uvicorn.pid"
+
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8766/healthz >/dev/null 2>&1; then
+              echo "MindWeave backend ready on http://127.0.0.1:8766"
+              break
+            fi
+            sleep 0.5
+          done
+          curl -fsS http://127.0.0.1:8766/healthz
+
+          # Upload one real photographic slip to 妈妈 so Scale-1 & Scale-2 render real photo cards
+          python3 - <<'PY'
+          import json, subprocess, urllib.request
+
+          def api_json(method, path, payload=None, token=None):
+              data = json.dumps(payload).encode() if payload is not None else None
+              headers = {"content-type": "application/json"}
+              if token:
+                  headers["authorization"] = f"Bearer {token}"
+              req = urllib.request.Request(f"http://127.0.0.1:8766{path}", data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=15) as r:
+                  return json.loads(r.read().decode())
+
+          ch = api_json("POST", "/v1/auth/email/otp:request", {"email": "demo@mindweave.app"})
+          auth = api_json("POST", "/v1/auth/email/otp:verify", {
+              "challengeId": ch["challengeId"],
+              "code": ch["devOtpCode"],
+          })
+          token = auth["accessToken"]
+          persons = api_json("GET", "/v1/persons", token=token).get("items", [])
+          mom = next((p for p in persons if p.get("nameCn") == "妈妈"), persons[0])
+          subprocess.run([
+              "curl", "-fsS", "-X", "POST",
+              f"http://127.0.0.1:8766/v1/persons/{mom['id']}/materials",
+              "-H", f"Authorization: Bearer {token}",
+              "-H", "Idempotency-Key: sim-seed-photo-01",
+              "-F", "photo=@web/assets/gleb/lake_bench_clean.jpg;type=image/jpeg",
+              "-F", "kind=photo",
+              "-F", "title=周末陪妈妈在湖边晒太阳",
+              "-F", "body=周末陪妈妈在湖边长椅晒了一下午太阳，微风很暖，聊起小时候的旧事。",
+              "-F", "pinned=false",
+          ], check=True)
+          print("\nUploaded real photo slip to", mom["nameCn"])
+          PY
+
+      - name: Boot real Apple iPhone Simulator, record 60fps H.264 video & run MindWeaveUITests
+        run: |
+          set -euo pipefail
+          mkdir -p sim_eval_out/screenshots
+
+          # Pick newest available flagship iPhone Simulator (prefer iPhone 16 Pro / 17 Pro / 16)
+          UDID="$(python3 - <<'PY'
+          import json, subprocess, sys
+          raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "--json"]).decode()
+          data = json.loads(raw)["devices"]
+          candidates = []
+          for runtime, devs in data.items():
+              if "iOS" not in runtime:
+                  continue
+              for d in devs:
+                  if not d.get("isAvailable", True):
+                      continue
+                  name = d.get("name", "")
+                  if "iPhone" not in name:
+                      continue
+                  score = 0
+                  if "16 Pro" in name and "Max" not in name: score = 100
+                  elif "17 Pro" in name and "Max" not in name: score = 98
+                  elif "16" in name and "Pro" not in name and "Plus" not in name and "e" not in name: score = 90
+                  elif "15 Pro" in name and "Max" not in name: score = 85
+                  else: score = 50
+                  candidates.append((score, runtime, name, d["udid"]))
+          candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+          if not candidates:
+              sys.exit(1)
+          best = candidates[0]
+          print(f"Selected simulator: {best[2]} ({best[1]}) UDID={best[3]}", file=sys.stderr)
+          print(best[3])
+          PY
+          )"
+          echo "SIM_UDID=${UDID}" >> "${GITHUB_ENV}"
+
+          xcrun simctl boot "${UDID}" || true
+          xcrun simctl bootstatus "${UDID}" -b
+
+          # Keynote-clean status bar (9:41, full signal & battery) and pre-granted privacy permissions
+          xcrun simctl status_bar "${UDID}" override \
+            --time "9:41" \
+            --dataNetwork wifi \
+            --wifiMode active \
+            --wifiBars 3 \
+            --cellularMode active \
+            --cellularBars 4 \
+            --batteryState charged \
+            --batteryLevel 100 || true
+
+          # Build for testing FIRST so video recording captures pure live app experience without build wait
+          xcodebuild \
+            -project ios/MindWeave.xcodeproj \
+            -scheme MindWeave \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=${UDID}" \
+            -derivedDataPath "$PWD/ios/DerivedDataSim" \
+            build-for-testing 2>&1 | tee sim_eval_out/xcodebuild_build.log
+
+          # Start continuous real iOS Simulator H.264 video capture
+          xcrun simctl io "${UDID}" recordVideo --codec=h264 --force sim_eval_out/real_ios_simulator_walkthrough.mp4 > sim_eval_out/record_video.log 2>&1 &
+          REC_PID=$!
+          sleep 1.5
+
+          # Run real XCUITest hands-on walkthrough on the booted iOS Simulator
+          set +e
+          rm -rf sim_eval_out/MindWeaveSimEval.xcresult
+          xcodebuild \
+            -project ios/MindWeave.xcodeproj \
+            -scheme MindWeave \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination "id=${UDID}" \
+            -derivedDataPath "$PWD/ios/DerivedDataSim" \
+            -resultBundlePath "$PWD/sim_eval_out/MindWeaveSimEval.xcresult" \
+            -only-testing:MindWeaveUITests/MindWeaveSimulatorEvalTests/testFullRealIOSSimulatorWalkthrough \
+            test-without-building 2>&1 | tee sim_eval_out/xcodebuild_test.log
+          TEST_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          # Gracefully finalize MP4 moov atom via SIGINT
+          kill -INT "${REC_PID}" || true
+          wait "${REC_PID}" || true
+          sleep 1
+
+          echo "=== Video Artifact ==="
+          ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4 || true
+
+          # Extract all lossless Retina PNG screenshots from .xcresult
+          xcrun xcresulttool export attachments \
+            --path "$PWD/sim_eval_out/MindWeaveSimEval.xcresult" \
+            --output-path "$PWD/sim_eval_out/raw_attachments" || true
+
+          python3 - <<'PY'
+          import json, os, shutil
+          raw_dir = "sim_eval_out/raw_attachments"
+          out_dir = "sim_eval_out/screenshots"
+          os.makedirs(out_dir, exist_ok=True)
+          manifest_path = os.path.join(raw_dir, "manifest.json")
+          exported = 0
+          if os.path.exists(manifest_path):
+              data = json.load(open(manifest_path))
+              for entry in data:
+                  for att in entry.get("attachments", []):
+                      src = os.path.join(raw_dir, att.get("exportedFileName", ""))
+                      human = att.get("suggestedHumanReadableName", "") or att.get("exportedFileName", "")
+                      base = os.path.basename(human)
+                      if not base.lower().endswith(".png"):
+                          base = f"{base}.png"
+                      if os.path.exists(src):
+                          shutil.copy2(src, os.path.join(out_dir, base))
+                          exported += 1
+          if exported == 0 and os.path.isdir(raw_dir):
+              for root, _, files in os.walk(raw_dir):
+                  for f in sorted(files):
+                      if f.lower().endswith(".png"):
+                          shutil.copy2(os.path.join(root, f), os.path.join(out_dir, f))
+                          exported += 1
+          print(f"Exported {exported} lossless Retina Simulator screenshots to {out_dir}")
+          for f in sorted(os.listdir(out_dir)):
+              print(" -", f)
+          PY
+
+          echo "=== Backend HTTP Error Check ==="
+          grep -E '" (4[0-9]{2}|5[0-9]{2}) ' sim_eval_out/backend.log || echo "ZERO 4xx/5xx backend HTTP errors!"
+
+          # Shut down simulator cleanly
+          xcrun simctl shutdown "${UDID}" || true
+          if [[ -f "${RUNNER_TEMP}/uvicorn.pid" ]]; then
+            kill "$(cat "${RUNNER_TEMP}/uvicorn.pid")" || true
+          fi
+
+          exit "${TEST_STATUS}"
+
+      - name: Upload Real iOS Simulator Video, Retina Screenshots & Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MindWeave-Real-iOS-Simulator-Eval
+          path: |
+            sim_eval_out/real_ios_simulator_walkthrough.mp4
+            sim_eval_out/screenshots/*.png
+            sim_eval_out/backend.log
+            sim_eval_out/xcodebuild_test.log
+            sim_eval_out/record_video.log
+          retention-days: 14
+          if-no-files-found: warn
