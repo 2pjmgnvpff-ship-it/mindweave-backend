@@ -36,11 +36,18 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             Thread.sleep(forTimeInterval: seconds)
         }
 
+        /// Matches both standard `<button>` and ARIA `<button role="radio|tab|menuitem">` inside iOS WKWebView.
         func firstButton(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
-            let el = app.buttons.matching(pred).firstMatch
-            _ = el.waitForExistence(timeout: timeout)
-            return el
+            let btn = app.buttons.matching(pred).firstMatch
+            if btn.waitForExistence(timeout: min(2.0, timeout)) {
+                return btn
+            }
+            let webAny = app.webViews.firstMatch.descendants(matching: .any).matching(pred).firstMatch
+            if webAny.waitForExistence(timeout: max(1.0, timeout - 2.0)) {
+                return webAny
+            }
+            return btn
         }
 
         func firstStaticText(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
@@ -268,10 +275,11 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         }
 
         // Peek + Edit + Stacked Chinese Lunar Date Wheel ABOVE Peek (P0-03 & P1-10)
-        let slipCandidate = app.buttons.matching(
-            NSPredicate(format: "label CONTAINS[c] '湖边' OR label CONTAINS[c] '桂花' OR label CONTAINS[c] '膝盖' OR label CONTAINS[c] 'osmanthus'")
-        ).firstMatch
-        if slipCandidate.waitForExistence(timeout: 12) {
+        let slipPred = NSPredicate(format: "label CONTAINS[c] '湖边' OR label CONTAINS[c] '桂花' OR label CONTAINS[c] '膝盖' OR label CONTAINS[c] 'osmanthus'")
+        let slipCandidate = app.buttons.matching(slipPred).firstMatch.waitForExistence(timeout: 4)
+            ? app.buttons.matching(slipPred).firstMatch
+            : app.webViews.firstMatch.descendants(matching: .any).matching(slipPred).firstMatch
+        if slipCandidate.waitForExistence(timeout: 10) {
             slipCandidate.tap()
             _ = firstButton(containing: "编辑", timeout: 12)
             pause(0.7)
