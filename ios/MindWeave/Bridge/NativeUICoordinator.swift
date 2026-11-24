@@ -20,6 +20,11 @@ private final class MindWeaveQuickLookItem: NSObject, QLPreviewItem {
     }
 }
 
+/// Strictly `Sendable` sole-ownership transfer box for ObjC types/blocks crossing isolation domains.
+private struct UncheckedSendableBox<T>: @unchecked Sendable {
+    let value: T
+}
+
 /// Strictly `Sendable` thumbnail result decoded off-main via `ImageIO`.
 private struct DecodedImagePayload: Sendable {
     let mimeType: String
@@ -47,9 +52,9 @@ private struct DecodedImagePayload: Sendable {
 /// - `setIdleTimer`: Guards screen wake during active voice recording.
 @MainActor
 final class NativeUICoordinator: NSObject,
-    PHPickerViewControllerDelegate,
-    QLPreviewControllerDataSource,
-    QLPreviewControllerDelegate,
+    @preconcurrency PHPickerViewControllerDelegate,
+    @preconcurrency QLPreviewControllerDataSource,
+    @preconcurrency QLPreviewControllerDelegate,
     UNUserNotificationCenterDelegate {
 
     static let porcelainBarTint = UIColor(red: 0.988, green: 0.984, blue: 0.976, alpha: 1.0) // #FCFBF9
@@ -199,12 +204,16 @@ final class NativeUICoordinator: NSObject,
         let maxDim = activePhotoMaxPixelSize
         activePhotoReqId = nil
 
+        // Extract Sendable boxes BEFORE dismissing so neither `[PHPickerResult]` nor `[NSItemProvider]`
+        // ever crosses into escaping/concurrent closures under Swift 6.0 `complete` concurrency!
+        let providerBoxes = results.map { UncheckedSendableBox(value: $0.itemProvider) }
+
         picker.dismiss(animated: true) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.isPresentingModal = false
 
-                guard !results.isEmpty else {
+                guard !providerBoxes.isEmpty else {
                     self.emitEvent([
                         "type": "nativeUI.photoResult",
                         "reqId": reqId,
@@ -215,13 +224,11 @@ final class NativeUICoordinator: NSObject,
                     return
                 }
 
-                // Extract `NSItemProvider`s on `@MainActor` and decode strictly via `loadFileRepresentation`
-                // + `ImageIO` (`CGImageSourceCreateThumbnailAtIndex`) — NEVER `loadObject(ofClass: UIImage.self)`!
-                // Only `Sendable` `Data` crosses into `Task.detached` for Swift 6.0 `complete` safety.
-                let providers = results.map(\.itemProvider)
+                // Decode strictly via `loadFileRepresentation` + `ImageIO` (`CGImageSourceCreateThumbnailAtIndex`)
+                // — NEVER `loadObject(ofClass: UIImage.self)`!
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    let decoded = await self.downsampleProviders(providers, maxPixelSize: maxDim)
+                    let decoded = await self.downsampleProviders(providerBoxes, maxPixelSize: maxDim)
                     let payloadImages: [[String: Any]] = decoded.map { img in
                         [
                             "mimeType": img.mimeType,
@@ -244,15 +251,15 @@ final class NativeUICoordinator: NSObject,
     }
 
     private func downsampleProviders(
-        _ providers: [NSItemProvider],
+        _ providerBoxes: [UncheckedSendableBox<NSItemProvider>],
         maxPixelSize: Int
     ) async -> [DecodedImagePayload] {
         var out: [DecodedImagePayload] = []
-        for provider in providers {
-            guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
+        for box in providerBoxes {
+            guard box.value.hasItemConformingToTypeIdentifier(UTType.image.identifier) else {
                 continue
             }
-            if let fileData = await Self.loadImageFileData(from: provider),
+            if let fileData = await Self.loadImageFileData(from: box),
                let thumb = await Task.detached(priority: .userInitiated, operation: {
                    Self.makeThumbnailJPEG(from: fileData, maxPixelSize: maxPixelSize)
                }).value {
@@ -262,9 +269,9 @@ final class NativeUICoordinator: NSObject,
         return out
     }
 
-    private static func loadImageFileData(from provider: NSItemProvider) async -> Data? {
+    private static func loadImageFileData(from box: UncheckedSendableBox<NSItemProvider>) async -> Data? {
         await withCheckedContinuation { continuation in
-            provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
+            box.value.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { url, _ in
                 // CRITICAL: Copy bytes synchronously BEFORE closure returns (iOS deletes `url` immediately after!)
                 guard let url else {
                     continuation.resume(returning: nil)
@@ -841,7 +848,6 @@ final class NativeUICoordinator: NSObject,
 
     private func handleSyncReminders(_ dict: [String: Any], reqId: String) {
         let rawItems = (dict["items"] as? [[String: Any]]) ?? []
-        let center = UNUserNotificationCenter.current()
 
         // Parse & sort upcoming reminders chronologically, capping at <= 48 slots (iOS 64-slot OS cap).
         struct ParsedReminder: Sendable {
@@ -886,7 +892,7 @@ final class NativeUICoordinator: NSObject,
         parsed.sort { $0.fireDate < $1.fireDate }
         let capped = Array(parsed.prefix(Self.maxScheduledReminders))
 
-        center.getNotificationSettings { [weak self] settings in
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
             let authorized = (settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional)
             guard authorized else {
                 DispatchQueue.main.async {
@@ -903,12 +909,13 @@ final class NativeUICoordinator: NSObject,
                 return
             }
 
-            center.getPendingNotificationRequests { existing in
+            UNUserNotificationCenter.current().getPendingNotificationRequests { existing in
+                let activeCenter = UNUserNotificationCenter.current()
                 let staleIds = existing
                     .map(\.identifier)
                     .filter { $0.hasPrefix(Self.reminderPrefix) }
                 if !staleIds.isEmpty {
-                    center.removePendingNotificationRequests(withIdentifiers: staleIds)
+                    activeCenter.removePendingNotificationRequests(withIdentifiers: staleIds)
                 }
 
                 var scheduled = 0
@@ -936,7 +943,7 @@ final class NativeUICoordinator: NSObject,
                         content: content,
                         trigger: trigger
                     )
-                    center.add(request, withCompletionHandler: nil)
+                    activeCenter.add(request, withCompletionHandler: nil)
                     scheduled += 1
                 }
 
@@ -964,9 +971,9 @@ final class NativeUICoordinator: NSObject,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        nonisolated(unsafe) let finish = completionHandler
+        let finishBox = UncheckedSendableBox(value: completionHandler)
         DispatchQueue.main.async {
-            finish([.banner, .list, .sound])
+            finishBox.value([.banner, .list, .sound])
         }
     }
 
@@ -1000,7 +1007,7 @@ final class NativeUICoordinator: NSObject,
             center.add(req, withCompletionHandler: nil)
         }
 
-        nonisolated(unsafe) let finish = completionHandler
+        let finishBox = UncheckedSendableBox(value: completionHandler)
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated {
                 self?.handleNotificationInteraction(
@@ -1009,7 +1016,7 @@ final class NativeUICoordinator: NSObject,
                     personId: personId
                 )
             }
-            finish()
+            finishBox.value()
         }
     }
 

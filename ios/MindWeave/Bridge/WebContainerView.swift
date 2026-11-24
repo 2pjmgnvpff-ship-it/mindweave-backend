@@ -373,15 +373,21 @@ struct WebContainerView: UIViewRepresentable {
             }
             notificationObservers.removeAll()
 
+            // Pre-capture `@MainActor` UIResponder notification keys as Sendable `String`s so
+            // non-`Sendable` `Notification` NEVER crosses into `MainActor.assumeIsolated`!
+            let frameEndKey = UIResponder.keyboardFrameEndUserInfoKey
+            let durationKey = UIResponder.keyboardAnimationDurationUserInfoKey
+            let curveKey = UIResponder.keyboardAnimationCurveUserInfoKey
+
             let kbChangeObserver = NotificationCenter.default.addObserver(
                 forName: UIResponder.keyboardWillChangeFrameNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] note in
+                let endFrame = (note.userInfo?[frameEndKey] as? NSValue)?.cgRectValue
+                let durationSec = (note.userInfo?[durationKey] as? NSNumber)?.doubleValue ?? 0.25
+                let curveRaw = (note.userInfo?[curveKey] as? NSNumber)?.intValue ?? 7
                 MainActor.assumeIsolated {
-                    let endFrame = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-                    let durationSec = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-                    let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.intValue ?? 7
                     self?.handleKeyboardFrame(
                         endFrame: endFrame,
                         durationSec: durationSec,
@@ -396,9 +402,9 @@ struct WebContainerView: UIViewRepresentable {
                 object: nil,
                 queue: .main
             ) { [weak self] note in
+                let durationSec = (note.userInfo?[durationKey] as? NSNumber)?.doubleValue ?? 0.25
+                let curveRaw = (note.userInfo?[curveKey] as? NSNumber)?.intValue ?? 7
                 MainActor.assumeIsolated {
-                    let durationSec = (note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0.25
-                    let curveRaw = (note.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.intValue ?? 7
                     self?.handleKeyboardFrame(
                         endFrame: nil,
                         durationSec: durationSec,

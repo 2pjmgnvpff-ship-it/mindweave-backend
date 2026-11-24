@@ -279,10 +279,15 @@ enum NativeAudioSession {
             }
             let session = AVAudioSession.sharedInstance()
             do {
+                let options: AVAudioSession.CategoryOptions
                 #if compiler(>=6.2)
-                let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers]
+                if #available(iOS 26.0, *) {
+                    options = [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers]
+                } else {
+                    options = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+                }
                 #else
-                let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+                options = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
                 #endif
                 try session.setCategory(
                     .playAndRecord,

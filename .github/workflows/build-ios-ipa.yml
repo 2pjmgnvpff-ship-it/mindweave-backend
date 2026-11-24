@@ -217,6 +217,7 @@ jobs:
           MARKETING_VERSION_VALUE="${MARKETING_VERSION_OVERRIDE:-1.0.0}"
 
           mkdir -p ios/build/Release-iphoneos
+          set +e
           xcodebuild \
             -project ios/MindWeave.xcodeproj \
             -scheme MindWeave \
@@ -229,7 +230,15 @@ jobs:
             CONFIGURATION_BUILD_DIR="$PWD/ios/build/Release-iphoneos" \
             MARKETING_VERSION="${MARKETING_VERSION_VALUE}" \
             CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" \
-            build
+            build 2>&1 | tee ios/build/xcodebuild.log
+          XC_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [[ "${XC_STATUS}" -ne 0 ]]; then
+            grep -E "(: error:|^error:|BUILD FAILED|fatal error:)" ios/build/xcodebuild.log | head -n 30 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            exit "${XC_STATUS}"
+          fi
 
           rm -rf ios/build/Payload ios/build/MindWeave.ipa
           mkdir -p ios/build/Payload

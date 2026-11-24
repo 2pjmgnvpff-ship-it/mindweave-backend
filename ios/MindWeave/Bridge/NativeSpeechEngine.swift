@@ -225,11 +225,15 @@ private final class IOS26SpeechAnalyzerDriver: @unchecked Sendable {
         self.continuation = continuation
     }
 
+    private struct UncheckedSpeechBox<T>: @unchecked Sendable {
+        let value: T
+    }
+
     private func startResultLoop(onUpdate: @escaping @Sendable (String, String, Int) -> Void) {
-        let transcriber = self.transcriber
+        let transcriberBox = UncheckedSpeechBox(value: self.transcriber)
         readerTask = Task.detached(priority: .userInitiated) { [weak self] in
             do {
-                for try await result in transcriber.results {
+                for try await result in transcriberBox.value.results {
                     guard let self else { break }
                     let piece = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                     let snapshot: (String, String, Int) = self.lock.withLock { st in
@@ -268,9 +272,10 @@ private final class IOS26SpeechAnalyzerDriver: @unchecked Sendable {
         if !alreadyFinished {
             // CRITICAL (AnySpeechRecognizer fix): ALWAYS finish continuation BEFORE finalize!
             continuation.finish()
+            let analyzerBox = UncheckedSpeechBox(value: analyzer)
             try? await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { [analyzer] in
-                    try await analyzer.finalizeAndFinishThroughEndOfInput()
+                group.addTask {
+                    try await analyzerBox.value.finalizeAndFinishThroughEndOfInput()
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: timeoutMs * 1_000_000)
@@ -292,8 +297,9 @@ private final class IOS26SpeechAnalyzerDriver: @unchecked Sendable {
         continuation.finish()
         readerTask?.cancel()
         readerTask = nil
-        Task.detached { [analyzer] in
-            await analyzer.cancelAndFinishNow()
+        let analyzerBox = UncheckedSpeechBox(value: analyzer)
+        Task.detached {
+            await analyzerBox.value.cancelAndFinishNow()
         }
     }
 }
@@ -1287,10 +1293,15 @@ private final class SpeechAudioPipeline: @unchecked Sendable {
     private func configureAudioSessionIfNeeded(activate: Bool) -> Bool {
         let session = AVAudioSession.sharedInstance()
         do {
+            let options: AVAudioSession.CategoryOptions
             #if compiler(>=6.2)
-            let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers]
+            if #available(iOS 26.0, *) {
+                options = [.defaultToSpeaker, .allowBluetoothHFP, .mixWithOthers]
+            } else {
+                options = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+            }
             #else
-            let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+            options = [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
             #endif
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: options)
             try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
