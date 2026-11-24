@@ -728,6 +728,10 @@ private final class SpeechAudioPipeline: @unchecked Sendable {
                 }
                 #endif
 
+                let initialEngineName = engineName
+                let initialUsingOnDevice = usingOnDevice
+                let finalRecordingURL = recordingURL
+
                 self.stateLock.withLock { st in
                     st.activeSessionId = config.sessionId
                     st.activeMode = config.mode
@@ -736,13 +740,13 @@ private final class SpeechAudioPipeline: @unchecked Sendable {
                     st.committedSegments = []
                     st.currentSegmentText = ""
                     st.segmentCount = 1
-                    st.engineName = engineName
-                    st.onDevice = usingOnDevice
+                    st.engineName = initialEngineName
+                    st.onDevice = initialUsingOnDevice
                     st.contextualStrings = config.contextualStrings
                     st.localeIdentifier = config.localeIdentifier
                     st.preferOnDevice = config.preferOnDevice
                     st.retriedCloudFallback = false
-                    st.recordingFileURL = recordingURL
+                    st.recordingFileURL = finalRecordingURL
                     st.recordAudio = config.recordAudio
                     st.isStopping = false
                 }
@@ -1156,6 +1160,7 @@ private final class SpeechAudioPipeline: @unchecked Sendable {
         }
 
         if let nsErr = error as NSError? {
+            let errCode = nsErr.code
             // F3: On-device model not cached (kAFAssistantErrorDomain 1101/1107/1110) within 1.5s with 0 partials
             let shouldRetryCloud: Bool = stateLock.withLock { st in
                 guard st.activeSessionId == sessionId,
@@ -1167,8 +1172,7 @@ private final class SpeechAudioPipeline: @unchecked Sendable {
                       (ProcessInfo.processInfo.systemUptime - st.startUptime) < 2.0 else {
                     return false
                 }
-                let code = nsErr.code
-                if code == 1101 || code == 1107 || code == 1110 || code == 203 {
+                if errCode == 1101 || errCode == 1107 || errCode == 1110 || errCode == 203 {
                     st.retriedCloudFallback = true
                     st.onDevice = false
                     return true

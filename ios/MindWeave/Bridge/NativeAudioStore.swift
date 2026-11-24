@@ -98,14 +98,14 @@ final class NativeAudioStore: @unchecked Sendable {
     /// Purges expired recordings older than `ttlSeconds` (called at boot and periodically).
     func pruneExpired() {
         let cutoff = Date().addingTimeInterval(-ttlSeconds)
-        var staleURLs: [URL] = []
-
-        lock.withLock { entries in
+        let staleURLs: [URL] = lock.withLock { entries in
+            var collected: [URL] = []
             for (key, entry) in entries where entry.createdAt < cutoff {
                 entries.removeValue(forKey: key)
-                staleURLs.append(entry.fileURL)
-                staleURLs.append(entry.sidecarURL)
+                collected.append(entry.fileURL)
+                collected.append(entry.sidecarURL)
             }
+            return collected
         }
         for url in staleURLs {
             try? FileManager.default.removeItem(at: url)
@@ -130,8 +130,9 @@ final class NativeAudioStore: @unchecked Sendable {
             let sidecar = storeDirectory.appendingPathComponent("\(safeID).json")
             loaded[safeID] = Entry(fileURL: url, sidecarURL: sidecar, createdAt: created)
         }
+        let loadedSnapshot = loaded
         lock.withLock { entries in
-            entries.merge(loaded) { current, _ in current }
+            entries.merge(loadedSnapshot) { current, _ in current }
         }
     }
 

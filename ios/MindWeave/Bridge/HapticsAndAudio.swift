@@ -42,19 +42,7 @@ final class NativeHaptics {
                 let engine = try CHHapticEngine()
                 engine.playsHapticsOnly = true
                 engine.isAutoShutdownEnabled = true
-                engine.resetHandler = { [weak self] in
-                    Task { @MainActor [weak self] in
-                        guard let self else { return }
-                        self.engineRunning = false
-                        try? self.hapticEngine?.start()
-                        self.engineRunning = true
-                    }
-                }
-                engine.stoppedHandler = { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        self?.engineRunning = false
-                    }
-                }
+                Self.installHandlers(on: engine, owner: self)
                 hapticEngine = engine
             } catch {
                 return nil
@@ -74,11 +62,38 @@ final class NativeHaptics {
         return engine
     }
 
+    nonisolated private static func installHandlers(on engine: CHHapticEngine, owner: NativeHaptics) {
+        engine.resetHandler = { [weak owner] in
+            Task { @MainActor [weak owner] in
+                owner?.handleEngineReset()
+            }
+        }
+        engine.stoppedHandler = { [weak owner] _ in
+            Task { @MainActor [weak owner] in
+                owner?.handleEngineStopped()
+            }
+        }
+    }
+
+    private func handleEngineReset() {
+        engineRunning = false
+        do {
+            try hapticEngine?.start()
+            engineRunning = true
+        } catch {
+            engineRunning = false
+        }
+    }
+
+    private func handleEngineStopped() {
+        engineRunning = false
+    }
+
     private func playCoreHapticEvents(_ events: [CHHapticEvent]) -> Bool {
         guard let engine = ensureEngineStarted() else { return false }
         do {
             let pattern = try CHHapticPattern(events: events, parameters: [])
-            let player = try engine.makePlayer(withPattern: pattern)
+            let player = try engine.makePlayer(with: pattern)
             try player.start(atTime: CHHapticTimeImmediate)
             return true
         } catch {

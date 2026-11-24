@@ -60,11 +60,11 @@ final class NativeUICoordinator: NSObject,
     static let porcelainBarTint = UIColor(red: 0.988, green: 0.984, blue: 0.976, alpha: 1.0) // #FCFBF9
     static let warmInkTint = UIColor(red: 0.200, green: 0.173, blue: 0.153, alpha: 1.0)      // #332C27
 
-    private static let reminderCategoryID = "MINDWEAVE_REMINDER"
-    private static let reminderActionDoneID = "MW_ACTION_DONE"
-    private static let reminderActionSnoozeID = "MW_ACTION_SNOOZE_1D"
-    private static let reminderPrefix = "mw.rem."
-    private static let maxScheduledReminders = 48
+    private nonisolated static let reminderCategoryID = "MINDWEAVE_REMINDER"
+    private nonisolated static let reminderActionDoneID = "MW_ACTION_DONE"
+    private nonisolated static let reminderActionSnoozeID = "MW_ACTION_SNOOZE_1D"
+    private nonisolated static let reminderPrefix = "mw.rem."
+    private nonisolated static let maxScheduledReminders = 48
 
     private let config: ServerConfigStore
     private weak var biometricLock: BiometricLockManager?

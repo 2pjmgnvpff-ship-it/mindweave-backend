@@ -3,7 +3,7 @@ import os
 import WebKit
 
 /// Strictly `Sendable` immutable cached bundle asset payload for off-main-thread serving.
-private struct CachedBundleAsset: Sendable {
+fileprivate struct CachedBundleAsset: Sendable {
     let data: Data
     let mimeType: String
     let cacheControl: String
@@ -11,10 +11,21 @@ private struct CachedBundleAsset: Sendable {
 
 /// Strictly `Sendable` local HTTP response payload computed off `@MainActor` and handed back
 /// to `@MainActor` where non-`Sendable` `any WKURLSchemeTask` is invoked safely.
-private struct LocalSchemePayload: Sendable {
+fileprivate struct LocalSchemePayload: Sendable {
     let statusCode: Int
     let headers: [String: String]
     let body: Data
+}
+
+/// Strictly `Sendable` HTTP/URL response snapshot extracted off `@MainActor` inside `URLSessionDataDelegate`
+/// so non-`Sendable` `URLResponse` never crosses into `MainActor.assumeIsolated` under Swift 6.0 `complete`.
+fileprivate struct UpstreamResponseSnapshot: Sendable {
+    let isHTTP: Bool
+    let statusCode: Int
+    let headers: [String: String]
+    let mimeType: String?
+    let expectedContentLength: Int
+    let textEncodingName: String?
 }
 
 /// Custom `WKURLSchemeHandler` serving offline bundled `WebBundle/` assets on `mindweave://app/`,
@@ -49,9 +60,29 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
         ) {
             let taskID = dataTask.taskIdentifier
+            let snapshot: UpstreamResponseSnapshot
+            if let httpResponse = response as? HTTPURLResponse {
+                snapshot = UpstreamResponseSnapshot(
+                    isHTTP: true,
+                    statusCode: httpResponse.statusCode,
+                    headers: MindWeaveSchemeHandler.filteredResponseHeaders(from: httpResponse),
+                    mimeType: httpResponse.mimeType,
+                    expectedContentLength: -1,
+                    textEncodingName: httpResponse.textEncodingName
+                )
+            } else {
+                snapshot = UpstreamResponseSnapshot(
+                    isHTTP: false,
+                    statusCode: 200,
+                    headers: [:],
+                    mimeType: response.mimeType,
+                    expectedContentLength: Int(clamping: response.expectedContentLength),
+                    textEncodingName: response.textEncodingName
+                )
+            }
             let disposition = MainActor.assumeIsolated { () -> URLSession.ResponseDisposition in
                 guard let owner else { return .cancel }
-                return owner.handleDidReceive(response: response, forTaskIdentifier: taskID)
+                return owner.handleDidReceive(responseSnapshot: snapshot, forTaskIdentifier: taskID)
             }
             completionHandler(disposition)
         }
@@ -257,17 +288,17 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             return
         }
 
-        var relativePath = requestURL.path
-        if relativePath.isEmpty || relativePath == "/" {
-            relativePath = "index.html"
+        let rawPath = requestURL.path
+        let normalizedPath: String
+        if rawPath.isEmpty || rawPath == "/" {
+            normalizedPath = "index.html"
         } else {
-            while relativePath.hasPrefix("/") {
-                relativePath.removeFirst()
-            }
+            let stripped = String(rawPath.drop(while: { $0 == "/" }))
+            normalizedPath = stripped.isEmpty ? "index.html" : stripped
         }
 
         // Fast synchronous cache hit (0 disk syscalls, 0 actor hops!).
-        if let cached = assetCache.withLock({ $0[relativePath] }) {
+        if let cached = assetCache.withLock({ $0[normalizedPath] }) {
             let payload = LocalSchemePayload(
                 statusCode: 200,
                 headers: [
@@ -291,7 +322,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         localIOQueue.async { [weak self] in
             let payload = Self.loadBundledAssetOffMain(
                 bundleRoot: bundleRoot,
-                relativePath: relativePath,
+                relativePath: normalizedPath,
                 cache: cache,
                 maxCachedBytes: maxCached
             )
@@ -390,7 +421,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     /// Slices an in-memory media buffer per RFC 9110 `Range: bytes=start-end` (`206` / `416` / `200`).
-    nonisolated static func makeRangeAwarePayload(
+    nonisolated fileprivate static func makeRangeAwarePayload(
         data: Data,
         mimeType: String,
         cacheControl: String,
@@ -523,8 +554,8 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
 
     // MARK: - URLSessionDataDelegate Handlers (MainActor)
 
-    func handleDidReceive(
-        response: URLResponse,
+    fileprivate func handleDidReceive(
+        responseSnapshot: UpstreamResponseSnapshot,
         forTaskIdentifier taskIdentifier: Int
     ) -> URLSession.ResponseDisposition {
         let schemeTask: (any WKURLSchemeTask)?
@@ -549,25 +580,24 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         let proxyResponse: URLResponse
-        if let httpResponse = response as? HTTPURLResponse {
-            let headers = Self.filteredResponseHeaders(from: httpResponse)
+        if responseSnapshot.isHTTP {
             proxyResponse = HTTPURLResponse(
                 url: originalURL,
-                statusCode: httpResponse.statusCode,
+                statusCode: responseSnapshot.statusCode,
                 httpVersion: "HTTP/1.1",
-                headerFields: headers
+                headerFields: responseSnapshot.headers
             ) ?? URLResponse(
                 url: originalURL,
-                mimeType: httpResponse.mimeType,
+                mimeType: responseSnapshot.mimeType,
                 expectedContentLength: -1,
-                textEncodingName: httpResponse.textEncodingName
+                textEncodingName: responseSnapshot.textEncodingName
             )
         } else {
             proxyResponse = URLResponse(
                 url: originalURL,
-                mimeType: response.mimeType,
-                expectedContentLength: Int(clamping: response.expectedContentLength),
-                textEncodingName: response.textEncodingName
+                mimeType: responseSnapshot.mimeType,
+                expectedContentLength: responseSnapshot.expectedContentLength,
+                textEncodingName: responseSnapshot.textEncodingName
             )
         }
 

@@ -883,7 +883,7 @@ struct WebContainerView: UIViewRepresentable {
             requestMediaCapturePermissionFor origin: WKSecurityOrigin,
             initiatedByFrame frame: WKFrameInfo,
             type: WKMediaCaptureType,
-            decisionHandler: @escaping @MainActor (WKPermissionDecision) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
         ) {
             if origin.`protocol`.lowercased() == MindWeaveSchemeHandler.scheme {
                 if type == .microphone || type == .cameraAndMicrophone {
@@ -911,7 +911,7 @@ struct WebContainerView: UIViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptAlertPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor () -> Void
+            completionHandler: @escaping @MainActor @Sendable () -> Void
         ) {
             guard let presenter = topMostViewController() else {
                 completionHandler()
@@ -931,7 +931,7 @@ struct WebContainerView: UIViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptConfirmPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor (Bool) -> Void
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
         ) {
             guard let presenter = topMostViewController() else {
                 completionHandler(false)
@@ -957,7 +957,7 @@ struct WebContainerView: UIViewRepresentable {
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
             guard let url = navigationAction.request.url else {
                 decisionHandler(.allow)
