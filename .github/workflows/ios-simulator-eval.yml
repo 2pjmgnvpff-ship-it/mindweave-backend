@@ -116,7 +116,7 @@ jobs:
           export MINDWEAVE_MIGRATION_DATABASE_URL="postgresql+asyncpg://mindweave_owner:mindweave_owner@127.0.0.1:55432/mindweave"
           export MINDWEAVE_CORS_ORIGINS='["mindweave://app","http://127.0.0.1:8766"]'
 
-          nohup uv run uvicorn mindweave.main:app --host 127.0.0.1 --port 8766 --log-level info > sim_eval_out/backend.log 2>&1 &
+          nohup uv run uvicorn mindweave.main:app --host 127.0.0.1 --port 8766 --timeout-keep-alive 75 --log-level info > sim_eval_out/backend.log 2>&1 &
           echo $! > "${RUNNER_TEMP}/uvicorn.pid"
 
           for i in $(seq 1 40); do

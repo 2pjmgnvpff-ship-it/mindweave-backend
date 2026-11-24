@@ -121,8 +121,10 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
     private var schemeTasksByDataTask: [Int: any WKURLSchemeTask] = [:]
     private var schemeTaskIDsByDataTask: [Int: ObjectIdentifier] = [:]
     private var originalURLsByDataTask: [Int: URL] = [:]
+    private var upstreamRequestsByDataTask: [Int: URLRequest] = [:]
     private var stoppedTasks: Set<ObjectIdentifier> = []
     private var receivedResponseTasks: Set<ObjectIdentifier> = []
+    private var retriedSchemeTasks: Set<ObjectIdentifier> = []
 
     private let delegateProxy: SessionDelegateProxy
     private let sessionHolder = SessionHolder()
@@ -150,7 +152,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         )
     }
 
-    /// Cancels all in-flight upstream and local tasks and purges all 8 tracking maps (`02d LK-9`, `BC5 BOMB-IOS-3`).
+    /// Cancels all in-flight upstream and local tasks and purges all tracking maps (`02d LK-9`, `BC5 BOMB-IOS-3`).
     func cancelAllTasks() {
         pendingLocalTasks.removeAll()
         pendingProxyPreTasks.removeAll()
@@ -162,8 +164,10 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         schemeTasksByDataTask.removeAll()
         schemeTaskIDsByDataTask.removeAll()
         originalURLsByDataTask.removeAll()
+        upstreamRequestsByDataTask.removeAll()
         stoppedTasks.removeAll()
         receivedResponseTasks.removeAll()
+        retriedSchemeTasks.removeAll()
         lock.unlock()
 
         for task in tasksToCancel {
@@ -204,7 +208,9 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
             schemeTasksByDataTask.removeValue(forKey: dataTask.taskIdentifier)
             schemeTaskIDsByDataTask.removeValue(forKey: dataTask.taskIdentifier)
             originalURLsByDataTask.removeValue(forKey: dataTask.taskIdentifier)
+            upstreamRequestsByDataTask.removeValue(forKey: dataTask.taskIdentifier)
             receivedResponseTasks.remove(schemeID)
+            retriedSchemeTasks.remove(schemeID)
         }
         lock.unlock()
 
@@ -547,6 +553,7 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
         schemeTasksByDataTask[taskID] = urlSchemeTask
         schemeTaskIDsByDataTask[taskID] = schemeID
         originalURLsByDataTask[taskID] = originalURL
+        upstreamRequestsByDataTask[taskID] = upstreamRequest
         lock.unlock()
 
         dataTask.resume()
@@ -626,22 +633,53 @@ final class MindWeaveSchemeHandler: NSObject, WKURLSchemeHandler {
     func handleDidComplete(taskIdentifier: Int, error: Error?) {
         let schemeTask: (any WKURLSchemeTask)?
         let wasStopped: Bool
+        let hadReceivedResponse: Bool
+        let savedOriginalURL: URL?
+        let savedRequest: URLRequest?
+        let shouldRetryConnectionLost: Bool
 
         lock.lock()
         let schemeID = schemeTaskIDsByDataTask.removeValue(forKey: taskIdentifier)
-        originalURLsByDataTask.removeValue(forKey: taskIdentifier)
+        savedOriginalURL = originalURLsByDataTask.removeValue(forKey: taskIdentifier)
+        savedRequest = upstreamRequestsByDataTask.removeValue(forKey: taskIdentifier)
         let candidateTask = schemeTasksByDataTask.removeValue(forKey: taskIdentifier)
         if let schemeID {
             wasStopped = stoppedTasks.remove(schemeID) != nil
             activeTasks.removeValue(forKey: schemeID)
-            receivedResponseTasks.remove(schemeID)
+            hadReceivedResponse = receivedResponseTasks.remove(schemeID) != nil
+            let isRetryableConnErr: Bool
+            if let urlErr = error as? URLError {
+                isRetryableConnErr = urlErr.code == .networkConnectionLost || urlErr.code == .cannotConnectToHost
+            } else {
+                isRetryableConnErr = false
+            }
+            if !wasStopped && !hadReceivedResponse && isRetryableConnErr
+                && savedRequest != nil && savedOriginalURL != nil
+                && !retriedSchemeTasks.contains(schemeID) {
+                retriedSchemeTasks.insert(schemeID)
+                shouldRetryConnectionLost = true
+            } else {
+                retriedSchemeTasks.remove(schemeID)
+                shouldRetryConnectionLost = false
+            }
         } else {
             wasStopped = true
+            hadReceivedResponse = false
+            shouldRetryConnectionLost = false
         }
         schemeTask = wasStopped ? nil : candidateTask
         lock.unlock()
 
         guard let schemeTask else {
+            return
+        }
+
+        if shouldRetryConnectionLost, let retryRequest = savedRequest, let retryURL = savedOriginalURL {
+            launchUpstreamDataTask(
+                upstreamRequest: retryRequest,
+                for: schemeTask,
+                originalURL: retryURL
+            )
             return
         }
 

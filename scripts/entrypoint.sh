@@ -97,10 +97,10 @@ if [ "${MINDWEAVE_AUTO_SEED_DEMO:-true}" = "true" ] && [ "${MINDWEAVE_ENVIRONMEN
 fi
 
 if [ "$EMBEDDED_PG_STARTED" = "true" ]; then
-  uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --no-access-log &
+  uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --timeout-keep-alive 75 --no-access-log &
   UVICORN_PID=$!
   trap 'kill -TERM "$UVICORN_PID" 2>/dev/null || true; wait "$UVICORN_PID" 2>/dev/null || true; "$PG_BIN_DIR/pg_ctl" -D "$LOCAL_PGDATA" -m fast stop || true; exit 0' TERM INT
   wait "$UVICORN_PID"
 else
-  exec uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --no-access-log
+  exec uvicorn mindweave.main:app --host 0.0.0.0 --port "${PORT:-8000}" --timeout-keep-alive 75 --no-access-log
 fi
