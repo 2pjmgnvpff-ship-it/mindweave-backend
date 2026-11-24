@@ -273,6 +273,8 @@ html.is-kb-open .splash-bokeh-foreground {
 .auth-link:disabled { color: var(--ink-tertiary); }
 .auth-fine { font-size: 12px; line-height: 1.5; color: var(--ink-tertiary); text-align: center; }
 .auth-server-link { align-self: center; font-size: 12.5px; color: var(--ink-tertiary); padding: 6px 12px; }
+html.is-kb-open .auth-fine,
+html.is-kb-open .auth-server-link { color: rgba(68, 52, 42, 0.80); text-shadow: 0 1px 6px rgba(250, 246, 240, 0.78); }
 .auth-error { font-size: 13px; color: var(--ink-danger); line-height: 1.5; }
 .auth-error:empty { display: none; }
 

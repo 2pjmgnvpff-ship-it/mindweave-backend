@@ -147,21 +147,15 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                 mark("sim_splash_lakeside", hold: 1.0)
             }
 
-            for _ in 0..<3 {
-                emailField.tap()
-                pause(1.0)
-                dismissKeyboardTutorialIfNeeded()
-                pause(0.4)
-                if markSplash {
-                    mark("sim_splash_ios_keyboard", hold: 0.9)
-                }
-                emailField.typeText(email)
-                pause(0.5)
-                if let val = emailField.value as? String, val.contains("@") {
-                    break
-                }
-                dismissKeyboardTutorialIfNeeded()
+            emailField.tap()
+            pause(0.9)
+            dismissKeyboardTutorialIfNeeded()
+            pause(0.35)
+            if markSplash {
+                mark("sim_splash_ios_keyboard", hold: 0.9)
             }
+            emailField.typeText(email)
+            pause(0.55)
 
             XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 15, settle: 0.9), "Should tap 获取验证码")
             let verifyBtn = firstButton(containing: "翻开手帐", timeout: 30)
@@ -205,7 +199,7 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                     pause(0.4)
                 }
                 mark("sim_compose_typed_kb", hold: 0.8)
-                _ = tapButton(containing: "收进", timeout: 10, settle: 1.4)
+                _ = tapButton(containing: "收进手帐", timeout: 10, settle: 1.4)
                 mark("sim_compose_saved_home", hold: 0.9)
             } else {
                 tapBackdropTop()
@@ -246,9 +240,10 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             mark("sim_peek_open", hold: 1.0)
             if tapButton(containing: "编辑", timeout: 10, settle: 0.85) {
                 mark("sim_peek_edit_mode", hold: 0.9)
+                dismissKeyboardIfNeeded()
                 if tapButton(containing: "202", timeout: 10, settle: 0.9) {
                     mark("sim_date_wheel_stacked_above_peek", hold: 1.1)
-                    _ = tapButton(containing: "取消", timeout: 8, settle: 0.65)
+                    _ = tapButton(containing: "确定", timeout: 8, settle: 0.65)
                 }
                 _ = tapButton(containing: "取消", timeout: 8, settle: 0.65)
             }
