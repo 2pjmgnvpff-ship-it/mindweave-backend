@@ -174,11 +174,16 @@ span[aria-hidden="true"] > svg,
 /* ==================== LAKESIDE SOFT-FOCUS GLASS AUTH SPLASH ==================== */
 .splash-screen {
   position: absolute; inset: 0; z-index: 52; background: #ECE5DC;
-  padding: calc(var(--safe-top) + 20px) var(--pad-x) calc(var(--safe-bottom) + var(--mw-kb-inset, 0px) + 20px);
-  display: flex; flex-direction: column; justify-content: flex-end; overflow-y: auto;
+  padding: calc(var(--safe-top) + 18px) var(--pad-x) calc(max(var(--safe-bottom), var(--mw-kb-inset, 0px)) + 16px);
+  display: flex; flex-direction: column; justify-content: flex-start; overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   transition: padding-bottom var(--mw-kb-dur, 250ms) var(--mw-kb-curve, ease), opacity 240ms ease;
 }
+html.is-kb-open .splash-brand-pill,
+html.is-kb-open .splash-quote-sub { display: none; }
+html.is-kb-open .splash-brand { font-size: 30px; }
+html.is-kb-open .splash-quote-text { font-size: 16.5px; }
+html.is-kb-open .splash-bottom-content { gap: 8px; }
 .splash-screen.is-morphing-out, .splash-screen.is-crossfading { opacity: 0; pointer-events: none; }
 
 .splash-photo-sharp {

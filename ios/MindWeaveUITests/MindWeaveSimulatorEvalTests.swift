@@ -120,16 +120,30 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             return false
         }
 
+        func dismissKeyboardTutorialIfNeeded() {
+            for label in ["Continue", "继续", "Not Now", "以后再说"] {
+                let btn = app.buttons[label]
+                if btn.exists && btn.isHittable {
+                    btn.tap()
+                    pause(0.6)
+                    return
+                }
+            }
+        }
+
         func loginWithEmail(_ email: String, snapSplash: Bool) {
             let emailField = app.textFields.firstMatch
             XCTAssertTrue(emailField.waitForExistence(timeout: 20), "Auth email input should appear on splash")
-            pause(0.9)
+            // Allow boot veil fade-out animation to complete cleanly so lakeside glass splash is crystal clear
+            pause(1.8)
             if snapSplash {
                 snap("sim_splash_lakeside")
             }
 
             emailField.tap()
-            pause(0.85)
+            pause(1.0)
+            dismissKeyboardTutorialIfNeeded()
+            pause(0.5)
             if snapSplash {
                 snap("sim_splash_ios_keyboard")
             }
@@ -140,14 +154,14 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                 pause(0.25)
             }
             emailField.typeText(email)
-            pause(0.45)
+            pause(0.5)
 
-            XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 10, settle: 1.5), "Should tap 获取验证码")
+            XCTAssertTrue(tapButton(containing: "获取验证码", timeout: 10, settle: 1.6), "Should tap 获取验证码")
             if snapSplash {
                 snap("sim_otp_step")
             }
 
-            XCTAssertTrue(tapButton(containing: "翻开手帐", timeout: 12, settle: 2.0), "Should tap 翻开手帐")
+            XCTAssertTrue(tapButton(containing: "翻开手帐", timeout: 12, settle: 2.2), "Should tap 翻开手帐")
         }
 
         // Launch MindWeave.app inside the real Apple iOS Simulator!

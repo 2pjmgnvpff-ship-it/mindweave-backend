@@ -162,7 +162,7 @@ html.is-kb-open .mw-sheet { max-height: 94%; }
 .onboarding-stage {
   position: absolute; inset: 0; z-index: 54;
   background-color: var(--bg-canvas); background-image: var(--canvas-bg-image); background-size: var(--canvas-bg-size);
-  padding: calc(var(--safe-top) + 18px) var(--pad-x) calc(var(--safe-bottom) + var(--mw-kb-inset, 0px) + 20px);
+  padding: calc(var(--safe-top) + 18px) var(--pad-x) calc(max(var(--safe-bottom), var(--mw-kb-inset, 0px)) + 16px);
   display: flex; flex-direction: column; justify-content: flex-start; gap: 18px; overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
 .onb-steps { display: flex; justify-content: center; gap: 8px; padding-top: 4px; flex-shrink: 0; }

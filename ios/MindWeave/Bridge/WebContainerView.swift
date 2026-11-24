@@ -154,6 +154,7 @@ struct WebContainerView: UIViewRepresentable {
         webView.backgroundColor = Self.porcelainUIColor
         webView.scrollView.backgroundColor = Self.porcelainUIColor
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         webView.scrollView.alwaysBounceVertical = false
         webView.scrollView.alwaysBounceHorizontal = false
@@ -482,9 +483,10 @@ struct WebContainerView: UIViewRepresentable {
             let durationMs = max(0, Int((durationSec * 1000.0).rounded()))
             let curveCss = Self.cssCurve(for: curveRaw)
 
-            if insetPx == 0 {
-                // Prevent iOS WKWebView from leaving a ghost vertical scroll offset when keyboard dismisses.
-                webView.scrollView.setContentOffset(.zero, animated: false)
+            // Prevent iOS WKWebView from double-shifting the fixed app viewport on top of --mw-kb-inset!
+            webView.scrollView.setContentOffset(.zero, animated: false)
+            DispatchQueue.main.async { [weak webView] in
+                webView?.scrollView.setContentOffset(.zero, animated: false)
             }
 
             let kbOpenJS = insetPx > 0 ? "true" : "false"
@@ -617,6 +619,12 @@ struct WebContainerView: UIViewRepresentable {
                 return false
             }
             return false
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if scrollView === webView?.scrollView && scrollView.contentOffset != .zero {
+                scrollView.contentOffset = .zero
+            }
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {

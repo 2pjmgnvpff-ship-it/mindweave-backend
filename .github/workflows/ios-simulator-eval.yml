@@ -254,16 +254,24 @@ jobs:
           wait "${REC_PID}" || true
           sleep 1
 
-          echo "=== Video Artifact ==="
+          echo "=== Raw Video Artifact ==="
           ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4 || true
+          if command -v ffmpeg >/dev/null 2>&1 && [[ -f sim_eval_out/real_ios_simulator_walkthrough.mp4 ]]; then
+            ffmpeg -y -i sim_eval_out/real_ios_simulator_walkthrough.mp4 \
+              -c:v libx264 -preset fast -crf 23 -pix_fmt yuv420p -r 30 \
+              -vf "scale=586:-2" -movflags +faststart \
+              sim_eval_out/real_ios_simulator_walkthrough_compact.mp4 && \
+            mv sim_eval_out/real_ios_simulator_walkthrough_compact.mp4 sim_eval_out/real_ios_simulator_walkthrough.mp4
+            ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4
+          fi
 
-          # Extract all lossless Retina PNG screenshots from .xcresult
+          # Extract ONLY our lossless numbered Retina PNG screenshots (`01_sim_*.png`, ...) from .xcresult
           xcrun xcresulttool export attachments \
             --path "$PWD/sim_eval_out/MindWeaveSimEval.xcresult" \
             --output-path "$PWD/sim_eval_out/raw_attachments" || true
 
           python3 - <<'PY'
-          import json, os, shutil
+          import json, os, re, shutil
           raw_dir = "sim_eval_out/raw_attachments"
           out_dir = "sim_eval_out/screenshots"
           os.makedirs(out_dir, exist_ok=True)
@@ -276,16 +284,13 @@ jobs:
                       src = os.path.join(raw_dir, att.get("exportedFileName", ""))
                       human = att.get("suggestedHumanReadableName", "") or att.get("exportedFileName", "")
                       base = os.path.basename(human)
-                      if not base.lower().endswith(".png"):
-                          base = f"{base}.png"
+                      if not re.match(r"^\d{2}_sim_", base):
+                          continue
+                      clean_name = re.sub(r"_\d+_[0-9A-F-]+\.png$", ".png", base, flags=re.IGNORECASE)
+                      if not clean_name.lower().endswith(".png"):
+                          clean_name = f"{clean_name}.png"
                       if os.path.exists(src):
-                          shutil.copy2(src, os.path.join(out_dir, base))
-                          exported += 1
-          if exported == 0 and os.path.isdir(raw_dir):
-              for root, _, files in os.walk(raw_dir):
-                  for f in sorted(files):
-                      if f.lower().endswith(".png"):
-                          shutil.copy2(os.path.join(root, f), os.path.join(out_dir, f))
+                          shutil.copy2(src, os.path.join(out_dir, clean_name))
                           exported += 1
           print(f"Exported {exported} lossless Retina Simulator screenshots to {out_dir}")
           for f in sorted(os.listdir(out_dir)):
