@@ -262,6 +262,13 @@ html[data-has-photo="false"] .ios-home-bar {
 }
 html.v15-iphone-sim .ios-home-bar { display: block; }
 
+/* Prevent cold-launch first-frame empty chrome flash before boot() paints Auth Gate or Journal */
+html.mw-booting .top-bar,
+html.mw-booting .main-scroller,
+html.mw-booting .tri-dock-wrap {
+  visibility: hidden;
+}
+
 /* ============================================================================
    1. UNBLURRED FULL-BLEED PHOTOGRAPHY BACKDROP & ARCHITECTURAL SILVER CANVAS
    ============================================================================ */
@@ -272,6 +279,12 @@ html.v15-iphone-sim .ios-home-bar { display: block; }
   overflow: hidden;
   background: #141618;
   transition: background 500ms ease;
+}
+html[data-has-photo="false"] .photo-backdrop {
+  background:
+    radial-gradient(circle at 20% 14%, rgba(236, 198, 148, 0.34) 0%, transparent 50%),
+    radial-gradient(circle at 82% 24%, rgba(218, 174, 134, 0.22) 0%, transparent 46%),
+    linear-gradient(180deg, #FAF5EE 0%, #F4ECE1 56%, #EDE2D3 100%) !important;
 }
 html[data-tier="silver"] .photo-backdrop {
   background:
@@ -1788,11 +1801,11 @@ html[data-has-photo="false"] .drawer-item {
 .glass-sheet {
   position: fixed;
   left: 50%;
-  bottom: 0;
+  bottom: var(--mw-kb-inset, 0px);
   transform: translateX(-50%);
   width: min(560px, 100%);
-  max-height: calc(88dvh - var(--mw-kb-inset, 0px));
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--mw-kb-inset, 0px));
+  max-height: min(88%, calc(100% - max(54px, env(safe-area-inset-top, 54px)) - var(--mw-kb-inset, 0px) - 8px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   border-radius: 30px 30px 0 0;
   background: rgba(20, 22, 28, 0.90);
   backdrop-filter: blur(34px) saturate(195%);
@@ -1804,9 +1817,41 @@ html[data-has-photo="false"] .drawer-item {
   z-index: 66;
   display: none;
   flex-direction: column;
+  transition: bottom var(--mw-kb-dur, 240ms) var(--mw-kb-curve, var(--ease-spring));
+}
+html.is-kb-open .glass-sheet {
+  padding-bottom: 6px;
 }
 .glass-sheet.is-open {
   display: flex;
+}
+.s-field-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 0.9px solid rgba(255, 255, 255, 0.22);
+  color: inherit;
+  font-size: 16px;
+  outline: none;
+}
+.s-field-input::placeholder {
+  color: inherit;
+  opacity: 0.52;
+}
+.s-field-input:focus {
+  border-color: color-mix(in srgb, var(--real-warm, #E6BE86) 72%, #FFFFFF);
+}
+html[data-tier="silver"] .s-field-input,
+html[data-has-photo="false"] .s-field-input {
+  background: rgba(24, 36, 50, 0.05);
+  border-color: rgba(24, 36, 50, 0.18);
+  color: #1A242F;
+}
+html[data-tier="silver"] .s-field-input:focus,
+html[data-has-photo="false"] .s-field-input:focus {
+  background: #FFFFFF;
+  border-color: rgba(34, 54, 74, 0.44);
 }
 .sheet-handle {
   width: 36px; height: 4px; border-radius: 999px;

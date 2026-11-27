@@ -209,6 +209,56 @@ async function tryRefreshTokens() {
   return refreshPromise;
 }
 
+function inferUploadMime(filename, fallbackType) {
+  if (fallbackType && fallbackType !== 'application/octet-stream') return fallbackType;
+  const lower = String(filename || '').toLowerCase();
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  if (lower.endsWith('.gif')) return 'image/gif';
+  return fallbackType || 'application/octet-stream';
+}
+
+async function serializeFormDataForIos(formData) {
+  const boundary = `----MWIOSBoundary${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+  const enc = new TextEncoder();
+  const chunks = [];
+  const pushStr = (s) => chunks.push(enc.encode(s));
+  const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r|\n/g, ' ');
+
+  for (const [key, val] of formData.entries()) {
+    pushStr(`--${boundary}\r\n`);
+    if (typeof Blob !== 'undefined' && val instanceof Blob) {
+      const filename = (typeof val.name === 'string' && val.name) ? val.name : 'upload.bin';
+      const contentType = inferUploadMime(filename, val.type);
+      pushStr(`Content-Disposition: form-data; name="${esc(key)}"; filename="${esc(filename)}"\r\n`);
+      pushStr(`Content-Type: ${contentType}\r\n\r\n`);
+      const ab = await val.arrayBuffer();
+      chunks.push(new Uint8Array(ab));
+      pushStr('\r\n');
+    } else {
+      pushStr(`Content-Disposition: form-data; name="${esc(key)}"\r\n\r\n`);
+      pushStr(String(val));
+      pushStr('\r\n');
+    }
+  }
+  pushStr(`--${boundary}--\r\n`);
+
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return {
+    body: out,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
 async function apiFetch(path, options = {}, allowRetry = true) {
   const method = (options.method || 'GET').toUpperCase();
   const headers = new Headers(options.headers || {});
@@ -223,8 +273,26 @@ async function apiFetch(path, options = {}, allowRetry = true) {
   if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && !path.startsWith('/auth/') && !headers.has('Idempotency-Key')) {
     headers.set('Idempotency-Key', makeUuid());
   }
-  const isRawBody = options.body instanceof FormData || options.body instanceof Blob || typeof options.body === 'string';
-  if (options.body && typeof options.body === 'object' && !isRawBody) {
+
+  const isNativeCustomScheme = Boolean(
+    window.__MW_NATIVE_IOS__ ||
+    window.__MW_IOS_NATIVE__ ||
+    (window.location && window.location.protocol === 'mindweave:')
+  );
+  let fetchBody = options.body;
+  if (fetchBody instanceof FormData && isNativeCustomScheme) {
+    const serialized = await serializeFormDataForIos(fetchBody);
+    fetchBody = serialized.body;
+    headers.set('Content-Type', serialized.contentType);
+  }
+
+  const isRawBody =
+    fetchBody instanceof FormData ||
+    fetchBody instanceof Blob ||
+    fetchBody instanceof ArrayBuffer ||
+    ArrayBuffer.isView(fetchBody) ||
+    typeof fetchBody === 'string';
+  if (fetchBody && typeof fetchBody === 'object' && !isRawBody) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -232,7 +300,7 @@ async function apiFetch(path, options = {}, allowRetry = true) {
     ...options,
     method,
     headers,
-    body: options.body && typeof options.body === 'object' && !isRawBody ? JSON.stringify(options.body) : options.body,
+    body: fetchBody && typeof fetchBody === 'object' && !isRawBody ? JSON.stringify(fetchBody) : fetchBody,
   });
 
   if (resp.status === 401 && !isLoginAuth && allowRetry) {
@@ -2010,9 +2078,9 @@ function renderDirectorySheet() {
     ${state.showNewPersonForm ? `
       <form class="s-card" id="newPersonForm">
         <div class="s-label"><span>新添一页手帐人物</span><button type="button" id="btnCancelNewP" style="opacity:0.7;">收起</button></div>
-        <input class="spot-input" id="newPName" type="text" placeholder="姓名（例如：妈妈 / 表姨 / 张学长）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" required />
-        <input class="spot-input" id="newPRole" type="text" placeholder="关系身份（选填，如：母亲 / 伴侣 / 项目同事）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
-        <input class="spot-input" id="newPMemo" type="text" placeholder="一句初印象或小习惯（选填）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
+        <input class="s-field-input" id="newPName" type="text" placeholder="姓名（例如：妈妈 / 表姨 / 张学长）" required />
+        <input class="s-field-input" id="newPRole" type="text" placeholder="关系身份（选填，如：母亲 / 伴侣 / 项目同事）" />
+        <input class="s-field-input" id="newPMemo" type="text" placeholder="一句初印象或小习惯（选填）" />
         <div class="s-pill-row" id="newPTierRow">
           <button class="s-pill is-active" data-new-tier="gold" type="button">金箭 · 记爱</button>
           <button class="s-pill" data-new-tier="crystal" type="button">水晶箭 · 记繁琐</button>
@@ -2440,10 +2508,7 @@ function openSettingsSheet() {
       try {
         await apiJson('/auth/logout', { method: 'POST', body: { refreshToken: state.session?.refreshToken } });
       } catch (_) {}
-      saveSession(null);
-      state.people = [];
-      state.personId = null;
-      closeAllSheets();
+      resetAllAccountState();
       openAuthGate();
     });
   }
@@ -2887,11 +2952,88 @@ async function seedDemoPackIntoBackend() {
 /* ============================================================================
    11. AUTH GATE (DEV 1-TAP + MANUAL EMAIL OTP)
    ============================================================================ */
+function resetSeedProgressUi() {
+  state.seeding = false;
+  const track = document.getElementById('seedProgressTrack');
+  const fill = document.getElementById('seedProgressFill');
+  const lbl = document.getElementById('seedProgressLabel');
+  const btn = document.getElementById('btnLoadDemoPack');
+  if (track) track.classList.remove('is-active');
+  if (fill) fill.style.width = '0%';
+  if (lbl) lbl.textContent = '';
+  if (btn) btn.disabled = false;
+}
+
+function resetAuthGateUi() {
+  state.otpChallenge = null;
+  state.otpRequesting = false;
+  const emailEl = document.getElementById('authEmailInput');
+  const otpEl = document.getElementById('authOtpInput');
+  const otpRow = document.getElementById('authOtpRow');
+  const hint = document.getElementById('authHint');
+  if (emailEl) emailEl.value = '';
+  if (otpEl) otpEl.value = '';
+  if (otpRow) otpRow.style.display = 'none';
+  if (hint) hint.textContent = '';
+}
+
+function resetAllAccountState() {
+  saveSession(null);
+  state.people = [];
+  state.personId = null;
+  state.inboxItems = [];
+  state.inboxCount = 0;
+  state.scale = 'folio';
+  state.dirFilter = 'all';
+  state.showNewPersonForm = false;
+  state.shieldGlobalOpen = false;
+  state.unveiledIds.clear();
+  state.selectedRingId = null;
+  state.cupidMessages = {};
+  state.cupidLoaded.clear();
+  state.cupidAttachedIds.clear();
+  state.cupidThinking = false;
+  state.cupidTraceOpen = false;
+  state.cupidPerspectiveOpen = false;
+  if (state.voiceTimer) {
+    clearInterval(state.voiceTimer);
+    state.voiceTimer = null;
+  }
+  state.playingVoiceId = null;
+  state.lighting = 'daylight';
+  document.documentElement.setAttribute('data-lighting', 'daylight');
+  document.documentElement.setAttribute('data-tier', 'gold');
+  document.documentElement.setAttribute('data-has-photo', 'false');
+  closeAllSheets();
+  closeCupid();
+  closeVoiceArc();
+  closeSpotlight();
+  const lb = document.getElementById('lightboxOverlay');
+  if (lb) lb.classList.remove('is-open');
+  const dr = document.getElementById('dispatchReceipt');
+  if (dr) dr.classList.remove('is-open');
+  const cap = document.getElementById('capTextarea');
+  if (cap) cap.value = '';
+  const spot = document.getElementById('spotInput');
+  if (spot) spot.value = '';
+  const cupidIn = document.getElementById('cupidChatInput');
+  if (cupidIn) cupidIn.value = '';
+  const feed = document.getElementById('feedViewport');
+  if (feed) feed.innerHTML = '';
+  const bgImg = document.getElementById('backdropImg');
+  if (bgImg) bgImg.removeAttribute('src');
+  resetSeedProgressUi();
+  resetAuthGateUi();
+}
+
 function openAuthGate() {
+  resetAuthGateUi();
   document.getElementById('authGateOverlay').classList.add('is-open');
 }
 function closeAuthGate() {
   document.getElementById('authGateOverlay').classList.remove('is-open');
+  resetAuthGateUi();
+  resetSeedProgressUi();
 }
 
 async function handleQuickGuestLogin() {
@@ -2932,12 +3074,14 @@ async function handleQuickGuestLogin() {
 }
 
 async function handleManualRequestOtp() {
+  if (state.otpRequesting) return;
   const email = (document.getElementById('authEmailInput').value || '').trim().toLowerCase();
   const hint = document.getElementById('authHint');
   if (!email || !email.includes('@')) {
     hint.textContent = '请输入有效邮箱地址';
     return;
   }
+  state.otpRequesting = true;
   hint.textContent = '正在发送验证码…';
   try {
     const ch = await apiJson('/auth/email/otp:request', {
@@ -2951,10 +3095,12 @@ async function handleManualRequestOtp() {
       hint.textContent = '开发验证码已自动填入，轻点登录即可';
     } else {
       hint.textContent = '验证码已发送，请查收邮箱';
+      document.getElementById('authOtpInput').focus();
     }
-    document.getElementById('authOtpInput').focus();
   } catch (err) {
     hint.textContent = err.message || '发送失败';
+  } finally {
+    state.otpRequesting = false;
   }
 }
 
@@ -3002,7 +3148,9 @@ function wireEvents() {
     if (ev.type === 'statusbar.tap') {
       scrollMainToTop(true);
     } else if (ev.type === 'keyboard.change' && typeof ev.height === 'number') {
-      document.documentElement.style.setProperty('--mw-kb-inset', `${Math.max(0, Math.round(ev.height))}px`);
+      const kbPx = Math.max(0, Math.round(ev.height));
+      document.documentElement.style.setProperty('--mw-kb-inset', `${kbPx}px`);
+      document.documentElement.classList.toggle('is-kb-open', kbPx > 0);
     }
   };
 
@@ -3010,7 +3158,9 @@ function wireEvents() {
   if (window.visualViewport && !(window.__MW_NATIVE_IOS__ || window.__MW_IOS_NATIVE__)) {
     const syncVv = () => {
       const kb = Math.max(0, Math.round(window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop));
-      document.documentElement.style.setProperty('--mw-kb-inset', `${kb > 80 ? kb : 0}px`);
+      const kbPx = kb > 80 ? kb : 0;
+      document.documentElement.style.setProperty('--mw-kb-inset', `${kbPx}px`);
+      document.documentElement.classList.toggle('is-kb-open', kbPx > 0);
     };
     window.visualViewport.addEventListener('resize', syncVv);
   }
@@ -3204,16 +3354,20 @@ async function boot() {
   wireEvents();
   animateOrbs();
 
-  if (state.session && state.session.accessToken) {
-    try {
-      await refreshBootstrap({ keepPersonId: false });
-      closeAuthGate();
-      return;
-    } catch (_) {
-      saveSession(null);
+  try {
+    if (state.session && state.session.accessToken) {
+      try {
+        await refreshBootstrap({ keepPersonId: false });
+        closeAuthGate();
+        return;
+      } catch (_) {
+        saveSession(null);
+      }
     }
+    openAuthGate();
+  } finally {
+    document.documentElement.classList.remove('mw-booting');
   }
-  openAuthGate();
 }
 
 boot();
