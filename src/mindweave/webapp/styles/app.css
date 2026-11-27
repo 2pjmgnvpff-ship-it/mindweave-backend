@@ -1787,7 +1787,7 @@ html[data-has-photo="false"] .cupid-send-btn { background: #233344; color: #FFFF
   position: absolute;
   top: 0; right: 0; bottom: 0;
   width: min(312px, 84%);
-  padding: 58px 14px 28px;
+  padding: calc(max(58px, env(safe-area-inset-top, 58px)) + 10px) 14px calc(max(24px, env(safe-area-inset-bottom, 24px)) + 8px);
   background: var(--lg-surface-strong);
   backdrop-filter: blur(36px) saturate(190%);
   -webkit-backdrop-filter: blur(36px) saturate(190%);
@@ -2702,6 +2702,18 @@ html[data-has-photo="false"] .cupid-fullscreen {
   background-color: #F2F6FB !important;
   background-image:
     repeating-linear-gradient(90deg, rgba(32, 52, 74, 0.024) 0 1px, transparent 1px 28px) !important;
+}
+html[data-has-photo="false"]:not([data-tier="silver"]) .cupid-fullscreen {
+  background-color: #FAF5EE !important;
+  background-image:
+    radial-gradient(circle at 20% 14%, rgba(236, 198, 148, 0.24) 0%, transparent 50%),
+    linear-gradient(180deg, #FAF5EE 0%, #F4ECE1 100%) !important;
+}
+html[data-lighting="evening"][data-has-photo="false"]:not([data-tier="silver"]) .cupid-fullscreen {
+  background-color: #F2E7D8 !important;
+  background-image:
+    radial-gradient(circle at 22% 16%, rgba(224, 168, 108, 0.30) 0%, transparent 52%),
+    linear-gradient(180deg, #F3E8D9 0%, #E7D8C3 100%) !important;
 }
 .glass-sheet {
   background-color: rgba(18, 20, 26, 0.95) !important;

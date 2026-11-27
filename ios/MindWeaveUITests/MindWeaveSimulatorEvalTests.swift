@@ -79,15 +79,23 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         func firstStaticText(containing text: String, timeout: TimeInterval = 18) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
             let el = app.staticTexts.matching(pred).firstMatch
-            if el.waitForExistence(timeout: min(4.0, timeout)) {
+            if el.waitForExistence(timeout: min(3.5, timeout)) {
                 return el
             }
+            let linkMatch = app.links.matching(pred).firstMatch
+            if linkMatch.waitForExistence(timeout: min(2.5, max(1.0, timeout - 3.5))) {
+                return linkMatch
+            }
             let otherMatch = app.otherElements.matching(pred).firstMatch
-            if otherMatch.waitForExistence(timeout: max(1.0, min(3.0, timeout - 4.0))) {
+            if otherMatch.waitForExistence(timeout: min(2.5, max(1.0, timeout - 6.0))) {
                 return otherMatch
             }
-            if timeout > 7.0 {
-                _ = el.waitForExistence(timeout: timeout - 7.0)
+            if timeout > 8.5 {
+                if el.waitForExistence(timeout: (timeout - 8.5) / 2.0) {
+                    return el
+                }
+                _ = linkMatch.waitForExistence(timeout: (timeout - 8.5) / 2.0)
+                if linkMatch.exists { return linkMatch }
             }
             return el
         }
