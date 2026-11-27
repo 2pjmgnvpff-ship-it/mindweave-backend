@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="zh-CN" data-tier="gold" data-lighting="daylight" data-has-photo="false" data-face-zone="none">
+<html lang="zh-CN" data-tier="gold" data-lighting="daylight" data-has-photo="false" data-face-zone="none" data-scale="folio" data-photo-luma="normal">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>心络 MindWeave · Lumina 关系手帐</title>
-  <link rel="stylesheet" href="/styles/app.css?v=16" />
+  <link rel="stylesheet" href="/styles/app.css?v=17" />
 </head>
 <body>
 
@@ -88,7 +88,7 @@
             </div>
             <h1 style="font-family:var(--font-serif);font-size:24px;font-weight:600;margin:0;letter-spacing:0.03em;">你的私人关系手帐已就绪</h1>
             <p style="font-size:13.5px;line-height:1.68;opacity:0.74;margin:0;">
-              所有记录均由专属 AES-256-GCM 密钥加密存放在你的私人数据库。你可以一键载入 8 位真实日常示范人物完整体验，也可以直接写下第一页。
+              所有记录均由专属独立密钥加密存放在你的私人空间。你可以一键载入 8 位真实日常示范人物完整体验，也可以直接写下第一页。
             </p>
             <div class="seed-progress-track" id="seedProgressTrack">
               <div class="seed-progress-fill" id="seedProgressFill"></div>
@@ -165,7 +165,7 @@
           <span id="voiceArcTimer">正在聆听 0:04</span>
           <span style="margin-left:auto;opacity:0.62;">上滑自动拆入 · 右滑默认此人</span>
         </div>
-        <textarea class="cap-textarea" id="voiceArcInput" rows="3" style="min-height:74px;background:rgba(255,255,255,0.06);color:#FAF6F0;" placeholder="说一句随记，或直接编辑识别文案…">周六接妈妈去菜地挑豌豆苗记得带保温杯，顺便下班给小满带一盒新鲜草莓。</textarea>
+        <textarea class="cap-textarea" id="voiceArcInput" rows="3" style="min-height:74px;background:rgba(255,255,255,0.06);color:#FAF6F0;" placeholder="说一句随记，或直接编辑识别文案…">周六接妈妈去菜地挑豌豆苗记得带保温杯。另外下班给小满带一盒新鲜草莓。</textarea>
       </div>
       <svg width="320" height="72" viewBox="0 0 320 72" fill="none" aria-hidden="true" style="margin-bottom:10px;overflow:visible;">
         <path d="M 38 66 A 118 118 0 0 1 138 14" stroke="var(--real-warm, #E6BE86)" stroke-width="3.2" stroke-linecap="round" opacity="0.92"/>
@@ -240,7 +240,7 @@
       <div class="sheet-handle"></div>
       <div class="sheet-head">
         <h2 class="sheet-title" id="dossierSheetTitle">人物档案</h2>
-        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+        <button class="sheet-close-btn" data-close-sheet type="button" aria-label="关闭面板">✕</button>
       </div>
       <div class="sheet-scroll" id="dossierSheetBody"></div>
     </section>
@@ -252,7 +252,7 @@
         <h2 class="sheet-title" id="dirSheetTitle">人物名册与记繁琐</h2>
         <div style="display:flex;gap:8px;">
           <button class="s-pill is-active" id="btnToggleNewPersonForm" type="button">+ 新添一页</button>
-          <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+          <button class="sheet-close-btn" data-close-sheet type="button" aria-label="关闭面板">✕</button>
         </div>
       </div>
       <div class="sheet-scroll" id="directorySheetBody"></div>
@@ -263,7 +263,7 @@
       <div class="sheet-handle"></div>
       <div class="sheet-head">
         <h2 class="sheet-title" id="capSheetTitle">随口记一笔</h2>
-        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+        <button class="sheet-close-btn" data-close-sheet type="button" aria-label="关闭面板">✕</button>
       </div>
       <div class="sheet-scroll">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
@@ -289,7 +289,7 @@
         </div>
         <textarea class="cap-textarea" id="capTextarea" placeholder="随口说一句、粘贴一段微信聊天，或为照片写一句轻声备注…"></textarea>
         <div class="s-pill-row">
-          <button class="s-pill" data-cap-sample="周六接妈妈去菜地挑豌豆苗记得带保温杯，顺便下班给小满买盒草莓。" type="button">示例：多人自动拆入</button>
+          <button class="s-pill" data-cap-sample="周六接妈妈去菜地挑豌豆苗记得带保温杯。另外下班给小满买盒草莓。" type="button">示例：多人自动拆入</button>
           <button class="s-pill" data-cap-sample="妈妈：天冷了周末炖排骨萝卜汤，你上午十点前过来吧&#10;我：好嘞，我顺路带无糖清茶过去" type="button">示例：微信对话拆解</button>
         </div>
         <div style="display:flex;gap:8px;">
@@ -304,7 +304,7 @@
       <div class="sheet-handle"></div>
       <div class="sheet-head">
         <h2 class="sheet-title">设置与数据主权</h2>
-        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+        <button class="sheet-close-btn" data-close-sheet type="button" aria-label="关闭面板">✕</button>
       </div>
       <div class="sheet-scroll" id="settingsSheetBody"></div>
     </section>
@@ -314,7 +314,7 @@
       <div class="sheet-handle"></div>
       <div class="sheet-head">
         <h2 class="sheet-title">核对日期 · 农历与公历</h2>
-        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+        <button class="sheet-close-btn" data-close-sheet type="button" aria-label="关闭面板">✕</button>
       </div>
       <div class="sheet-scroll" id="dateWheelBody"></div>
     </section>
@@ -395,6 +395,6 @@
 
 <input type="file" id="dossierBgUploadInput" accept="image/*" hidden />
 
-<script type="module" src="/scripts/app.mjs?v=16"></script>
+<script type="module" src="/scripts/app.mjs?v=17"></script>
 </body>
 </html>

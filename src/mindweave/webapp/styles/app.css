@@ -121,12 +121,16 @@ html.v15-iphone-sim .v15-sim-topbar {
   color: #F7F4EE;
   font-size: 12px;
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
-.v15-sim-pill:hover { background: rgba(255, 255, 255, 0.18); }
+@media (hover: hover) and (pointer: fine) {
+  .v15-sim-pill:hover { background: rgba(255, 255, 255, 0.18); }
+}
 
 .v15-phone-chassis {
   width: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
   position: relative;
 }
 html.v15-iphone-sim .v15-phone-chassis {
@@ -155,6 +159,7 @@ html.v15-iphone-sim .v15-phone-chassis {
   position: relative;
   width: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 html.v15-iphone-sim .v15-app-screen {
   width: 393px;
@@ -168,7 +173,41 @@ html.v15-iphone-sim .v15-app-screen {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-/* Native iOS Status Bar + Dynamic Island (Shown inside Titanium Simulator or mobile <=768px) */
+/* Real Native iOS WKWebView (`window.__MW_NATIVE_IOS__`) & Mobile Safari/WebKit (<=768px):
+   Lock outer viewport to 100dvh so #mainScroller owns 100% of smooth native momentum scrolling
+   with zero scroll deadlock and zero position:fixed coordinate jitter! */
+html.is-native-ios,
+html.is-native-ios body {
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+html.is-native-ios .v15-phone-chassis,
+html.is-native-ios .v15-app-screen {
+  height: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+@media (max-width: 768px) {
+  html,
+  body {
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  .v15-phone-chassis,
+  .v15-app-screen {
+    height: 100%;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+}
+
+/* Native iOS Status Bar + Dynamic Island (ONLY inside Desktop Titanium Simulator — NEVER duplicated on real iOS/mobile!) */
 .ios-status-bar {
   display: none;
   position: fixed;
@@ -192,9 +231,6 @@ html[data-has-photo="false"] .ios-status-bar {
 }
 html.v15-iphone-sim .ios-status-bar {
   display: flex;
-}
-@media (max-width: 768px) {
-  .ios-status-bar { display: flex; }
 }
 .ios-dynamic-island {
   position: absolute;
@@ -225,7 +261,6 @@ html[data-has-photo="false"] .ios-home-bar {
   background: rgba(24, 34, 46, 0.34);
 }
 html.v15-iphone-sim .ios-home-bar { display: block; }
-@media (max-width: 768px) { .ios-home-bar { display: block; } }
 
 /* ============================================================================
    1. UNBLURRED FULL-BLEED PHOTOGRAPHY BACKDROP & ARCHITECTURAL SILVER CANVAS
@@ -324,7 +359,7 @@ html[data-has-photo="false"] .photo-backdrop-scrim {
   position: fixed;
   top: 0; left: 0; right: 0;
   z-index: 40;
-  padding: 16px clamp(16px, 3vw, 32px) 10px;
+  padding: calc(max(12px, env(safe-area-inset-top, 12px)) + 4px) clamp(16px, 3vw, 32px) 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -334,7 +369,7 @@ html.v15-iphone-sim .top-bar {
   padding: 56px 16px 8px;
 }
 @media (max-width: 768px) {
-  .top-bar { padding: 56px 16px 8px; }
+  .top-bar { padding: calc(max(12px, env(safe-area-inset-top, 12px)) + 4px) 16px 8px; }
 }
 .top-bar-group {
   display: inline-flex;
@@ -356,7 +391,9 @@ html.v15-iphone-sim .top-bar {
   box-shadow: var(--lg-shadow);
   transition: transform 200ms var(--ease-spring), background 200ms ease;
 }
-.lg-orb-btn:hover { transform: scale(1.06); }
+@media (hover: hover) and (pointer: fine) {
+  .lg-orb-btn:hover { transform: scale(1.06); }
+}
 .lg-orb-btn:active { transform: scale(0.92); }
 
 .top-brand-pill {
@@ -400,7 +437,9 @@ html.v15-iphone-sim .desktop-only { display: none !important; }
   font-weight: 500;
   transition: transform 200ms var(--ease-spring);
 }
-.arrow-pin-btn:hover { transform: scale(1.04); }
+@media (hover: hover) and (pointer: fine) {
+  .arrow-pin-btn:hover { transform: scale(1.04); }
+}
 .arrow-pin-btn:active { transform: scale(0.94); }
 .arrow-pin-img {
   width: 28px;
@@ -444,9 +483,11 @@ html.v15-iphone-sim .desktop-only { display: none !important; }
   text-align: left;
   transition: background 150ms ease;
 }
-.arrow-opt-btn:hover { background: rgba(255, 255, 255, 0.12); }
-html[data-tier="silver"] .arrow-opt-btn:hover,
-html[data-has-photo="false"] .arrow-opt-btn:hover { background: rgba(24, 34, 46, 0.06); }
+@media (hover: hover) and (pointer: fine) {
+  .arrow-opt-btn:hover { background: rgba(255, 255, 255, 0.12); }
+  html[data-tier="silver"] .arrow-opt-btn:hover,
+  html[data-has-photo="false"] .arrow-opt-btn:hover { background: rgba(24, 34, 46, 0.06); }
+}
 .arrow-opt-btn.is-active {
   background: var(--lg-lens-bg);
   box-shadow: var(--lg-lens-shadow);
@@ -464,19 +505,42 @@ html[data-has-photo="false"] .arrow-opt-btn:hover { background: rgba(24, 34, 46,
   z-index: 5;
   width: 100%;
   min-height: 100vh;
-  padding: 0 clamp(16px, 4vw, 48px) 128px;
+  padding: 0 clamp(16px, 4vw, 48px) calc(132px + env(safe-area-inset-bottom, 0px));
 }
 html.v15-iphone-sim .main-scroller {
   height: 852px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 16px 124px;
+  padding: 0 16px 132px;
   scrollbar-width: none;
 }
-html.v15-iphone-sim .main-scroller::-webkit-scrollbar { display: none; }
+html.is-native-ios .main-scroller {
+  height: 100%;
+  height: 100dvh;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding: 0 16px calc(136px + env(safe-area-inset-bottom, 0px));
+  scrollbar-width: none;
+}
+html.v15-iphone-sim .main-scroller::-webkit-scrollbar,
+html.is-native-ios .main-scroller::-webkit-scrollbar { display: none; }
 @media (max-width: 768px) {
-  .main-scroller { padding: 0 16px 124px; }
+  .main-scroller {
+    height: 100%;
+    height: 100dvh;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    padding: 0 16px calc(136px + env(safe-area-inset-bottom, 0px));
+    scrollbar-width: none;
+  }
+  .main-scroller::-webkit-scrollbar { display: none; }
 }
 
 .journal-column {
@@ -589,7 +653,6 @@ html[data-has-photo="false"] .person-name-h1 {
   font-size: 12.5px;
   letter-spacing: 0.05em;
   color: var(--lg-ink-muted);
-  transition: all 180ms ease;
 }
 .scale-tab.is-active {
   color: var(--lg-ink);
@@ -695,7 +758,9 @@ html[data-has-photo="false"] .slip-inner {
   background: rgba(252, 254, 255, 0.94);
 }
 
-/* True Apple Music Multi-Copy Counter-Rotating Real Photo Layers */
+/* True Apple Music Multi-Copy Real Photo Layers:
+   Each card renders a unique rotated liquid-marbling crop angle (--am-deg) with zero idle GPU spin drain,
+   delivering 120fps ProMotion scrolling & instant touch response across 10+ glass cards on real iPhones! */
 .am-card-canvas {
   position: absolute;
   inset: 0;
@@ -703,46 +768,31 @@ html[data-has-photo="false"] .slip-inner {
   pointer-events: none;
   overflow: hidden;
   border-radius: inherit;
+  contain: layout paint;
 }
 .am-art-layer {
   position: absolute;
   border-radius: 50%;
   background-size: cover;
   background-position: center;
-  will-change: transform;
 }
 .am-art-base {
   inset: -44%;
   background-image: var(--card-art-main, var(--am-art-full));
-  opacity: 0.92;
-  filter: saturate(1.12) brightness(0.92);
-  animation: amSpinA 42s linear infinite;
-  animation-delay: var(--am-phase, 0s);
+  opacity: 0.90;
+  transform: rotate(var(--am-deg-a, 18deg)) scale(1.10);
 }
 .am-art-eddy {
   inset: -28%;
   background-image: var(--card-art-eddy, var(--am-art-vivid));
-  opacity: 0.62;
-  mix-blend-mode: soft-light;
-  filter: saturate(1.22);
-  animation: amSpinB 29s linear infinite;
-  animation-delay: calc(var(--am-phase, 0s) - 7s);
+  opacity: 0.44;
+  transform: rotate(var(--am-deg-b, -112deg)) scale(1.06);
 }
 .am-art-veil {
   position: absolute;
   inset: 0;
   z-index: 2;
   background: var(--card-veil, linear-gradient(155deg, rgba(16, 15, 14, 0.34) 0%, rgba(12, 12, 14, 0.48) 100%));
-}
-@keyframes amSpinA {
-  0%   { transform: rotate(0deg) scale(1.06) translate(0%, 0%); }
-  50%  { transform: rotate(180deg) scale(1.14) translate(3%, -2%); }
-  100% { transform: rotate(360deg) scale(1.06) translate(0%, 0%); }
-}
-@keyframes amSpinB {
-  0%   { transform: rotate(360deg) scale(1.02) translate(-3%, 2%); }
-  50%  { transform: rotate(180deg) scale(1.12) translate(4%, -3%); }
-  100% { transform: rotate(0deg) scale(1.02) translate(-3%, 2%); }
 }
 
 /* Harmonious inter-category tonal diversity — 100% from real photo spatial zones! */
@@ -825,6 +875,7 @@ html[data-tier="silver"] .slip-fav-btn.is-fav { color: #4A6D8C; }
   border-radius: 999px;
   background: rgba(14, 15, 18, 0.36);
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   z-index: 2;
 }
 .photo-pigments i {
@@ -1056,19 +1107,23 @@ html[data-has-photo="false"] .chat-speaker { background: rgba(24, 36, 50, 0.08);
 .rings-card-body {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   align-items: center;
 }
-.rings-svg { width: 100%; max-width: 310px; height: auto; overflow: visible; }
-.rings-inspector { width: 100%; display: flex; flex-direction: column; gap: 9px; }
-.rings-thumb { width: 100%; height: 132px; border-radius: 13px; object-fit: cover; }
+.rings-svg { width: 100%; max-width: 296px; height: auto; overflow: visible; }
+@media (max-width: 768px) {
+  .rings-svg { max-width: 244px; max-height: 244px; }
+}
+html.v15-iphone-sim .rings-svg { max-width: 244px; max-height: 244px; }
+.rings-inspector { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.rings-thumb { width: 100%; height: 118px; border-radius: 13px; object-fit: cover; }
 
 /* ============================================================================
    6. SYMMETRIC TRI-ELEMENT LIQUID GLASS BOTTOM DOCK (`#glebTriDock`)
    ============================================================================ */
 .tri-dock-wrap {
   position: fixed;
-  bottom: 20px;
+  bottom: calc(max(12px, env(safe-area-inset-bottom, 12px)) + 8px);
   left: 50%;
   transform: translateX(-50%);
   width: min(366px, calc(100% - 26px));
@@ -1080,11 +1135,13 @@ html[data-has-photo="false"] .chat-speaker { background: rgba(24, 36, 50, 0.08);
   pointer-events: none;
 }
 html.v15-iphone-sim .tri-dock-wrap { bottom: 24px; }
-@media (max-width: 768px) { .tri-dock-wrap { bottom: 24px; } }
+@media (max-width: 768px) {
+  .tri-dock-wrap { bottom: calc(max(12px, env(safe-area-inset-bottom, 12px)) + 6px); }
+}
 
 .tri-dock-wrap > * { pointer-events: auto; }
 
-/* Left: 52px Voice Hold / Quick-Tap Orb */
+/* Left: 52px Voice Hold / Quick-Tap Orb (Locked against iOS long-press callout & selection) */
 .dock-voice-orb {
   width: 52px;
   height: 52px;
@@ -1100,8 +1157,14 @@ html.v15-iphone-sim .tri-dock-wrap { bottom: 24px; }
   box-shadow: var(--lg-shadow);
   transition: transform 200ms var(--ease-spring);
   position: relative;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
-.dock-voice-orb:hover { transform: scale(1.06); }
+@media (hover: hover) and (pointer: fine) {
+  .dock-voice-orb:hover { transform: scale(1.06); }
+}
 .dock-voice-orb:active { transform: scale(0.92); }
 .dock-voice-dot {
   position: absolute;
@@ -1187,7 +1250,9 @@ html[data-tier="silver"] .dock-seal-btn.is-active {
   background: rgba(255, 255, 255, 0.10);
   transition: background 160ms ease;
 }
-.dock-dir-btn:hover { background: rgba(255, 255, 255, 0.22); }
+@media (hover: hover) and (pointer: fine) {
+  .dock-dir-btn:hover { background: rgba(255, 255, 255, 0.22); }
+}
 html[data-tier="silver"] .dock-dir-btn,
 html[data-has-photo="false"] .dock-dir-btn { background: rgba(24, 36, 50, 0.06); }
 
@@ -1208,9 +1273,11 @@ html[data-has-photo="false"] .dock-dir-btn { background: rgba(24, 36, 50, 0.06);
   box-shadow: var(--lg-shadow);
   transition: transform 220ms var(--ease-spring), box-shadow 220ms ease;
 }
-.dock-cupid-orb:hover {
-  transform: scale(1.08);
-  box-shadow: var(--lg-shadow), 0 0 22px color-mix(in srgb, var(--real-warm, #E6BE86) 45%, transparent);
+@media (hover: hover) and (pointer: fine) {
+  .dock-cupid-orb:hover {
+    transform: scale(1.08);
+    box-shadow: var(--lg-shadow), 0 0 22px color-mix(in srgb, var(--real-warm, #E6BE86) 45%, transparent);
+  }
 }
 .dock-cupid-orb:active { transform: scale(0.92); }
 .dock-cupid-canvas {
@@ -1233,19 +1300,18 @@ html[data-has-photo="false"] .dock-dir-btn { background: rgba(24, 36, 50, 0.06);
   position: fixed;
   inset: 0;
   z-index: 75;
-  background: rgba(10, 12, 16, 0.56);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  display: flex;
+  background: rgba(10, 12, 16, 0.80);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  display: none;
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: 108px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms ease;
+  padding: calc(max(16px, env(safe-area-inset-top, 16px)) + 8px) 16px max(calc(96px + env(safe-area-inset-bottom, 0px)), calc(var(--mw-kb-inset, 0px) + 16px));
 }
-.voice-arc-stage.is-open { opacity: 1; pointer-events: auto; }
+.voice-arc-stage.is-open {
+  display: flex;
+}
 .voice-live-card {
   width: min(344px, calc(100% - 32px));
   padding: 16px 18px;
@@ -1305,26 +1371,31 @@ html[data-has-photo="false"] .dock-dir-btn { background: rgba(24, 36, 50, 0.06);
   background: rgba(255, 255, 255, 0.08);
 }
 
-/* 0-3s Multi-Person AI Dispatch Receipt Card */
+/* 0-5s Multi-Person AI Dispatch Receipt Card */
 .dispatch-receipt {
   position: fixed;
   left: 50%;
-  bottom: 90px;
-  transform: translateX(-50%) translateY(16px);
+  bottom: calc(max(12px, env(safe-area-inset-bottom, 12px)) + 78px);
+  transform: translateX(-50%);
   width: min(362px, calc(100% - 28px));
   padding: 14px 16px;
   border-radius: 22px;
-  background: var(--lg-surface-strong);
-  color: var(--lg-ink);
-  backdrop-filter: blur(34px) saturate(195%);
-  -webkit-backdrop-filter: blur(34px) saturate(195%);
+  background: rgba(18, 20, 26, 0.94);
+  color: #FAF6F0;
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
   box-shadow: var(--lg-shadow), 0 24px 60px rgba(0, 0, 0, 0.42);
   z-index: 62;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms ease, transform 240ms var(--ease-spring);
+  display: none;
 }
-.dispatch-receipt.is-open { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+html[data-tier="silver"] .dispatch-receipt,
+html[data-has-photo="false"] .dispatch-receipt {
+  background: rgba(248, 251, 254, 0.97);
+  color: #1A242F;
+}
+.dispatch-receipt.is-open {
+  display: block;
+}
 .receipt-row {
   display: flex;
   align-items: center;
@@ -1344,31 +1415,23 @@ html[data-has-photo="false"] .receipt-row { border-top-color: rgba(24, 36, 50, 0
   position: fixed;
   inset: 0;
   z-index: 70;
-  display: flex;
+  display: none;
   flex-direction: column;
-  background: rgba(12, 14, 16, 0.74);
-  backdrop-filter: blur(38px) saturate(175%);
-  -webkit-backdrop-filter: blur(38px) saturate(175%);
+  background: #0E1014;
   color: #FAF6F0;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(24px) scale(0.985);
-  transition: opacity 260ms ease, transform 300ms var(--ease-spring);
 }
 .cupid-fullscreen.is-open {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0) scale(1);
+  display: flex;
 }
 html[data-tier="silver"] .cupid-fullscreen,
 html[data-has-photo="false"] .cupid-fullscreen {
-  background: rgba(242, 246, 250, 0.94);
+  background: rgba(242, 246, 250, 0.96);
   color: #1A242F;
 }
 
 /* Cupid Floating Header */
 .cupid-head {
-  padding: 16px 16px 10px;
+  padding: calc(max(12px, env(safe-area-inset-top, 12px)) + 4px) 16px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1376,7 +1439,9 @@ html[data-has-photo="false"] .cupid-fullscreen {
   flex-shrink: 0;
 }
 html.v15-iphone-sim .cupid-head { padding: 56px 16px 10px; }
-@media (max-width: 768px) { .cupid-head { padding: 56px 16px 10px; } }
+@media (max-width: 768px) {
+  .cupid-head { padding: calc(max(12px, env(safe-area-inset-top, 12px)) + 4px) 16px 10px; }
+}
 
 .cupid-center-pill {
   display: inline-flex;
@@ -1580,7 +1645,7 @@ html[data-has-photo="false"] .cupid-prompt-chip {
 
 /* Bottom Cupid Composer with Apple Intelligence 3-State Conic Shimmer (ONLY while thinking!) */
 .cupid-foot {
-  padding: 8px 16px 26px;
+  padding: 8px 16px max(calc(16px + env(safe-area-inset-bottom, 0px)), calc(var(--mw-kb-inset, 0px) + 10px));
   width: 100%;
   max-width: 680px;
   margin: 0 auto;
@@ -1588,6 +1653,7 @@ html[data-has-photo="false"] .cupid-prompt-chip {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: padding-bottom var(--mw-kb-dur, 240ms) var(--mw-kb-curve, var(--ease-spring));
 }
 .cupid-attached-tray {
   display: flex;
@@ -1640,7 +1706,7 @@ html[data-has-photo="false"] .cupid-input-bar {
 html[data-tier="silver"] .cupid-plus-btn,
 html[data-has-photo="false"] .cupid-plus-btn { background: rgba(24, 36, 50, 0.06); }
 .cupid-input {
-  flex: 1; min-width: 0; border: none; background: transparent; color: inherit; font-size: 14px; outline: none;
+  flex: 1; min-width: 0; border: none; background: transparent; color: inherit; font-size: 16px; outline: none;
 }
 .cupid-input::placeholder { color: inherit; opacity: 0.52; }
 .cupid-send-btn {
@@ -1714,36 +1780,34 @@ html[data-has-photo="false"] .drawer-item {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(8, 10, 14, 0.44);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms ease;
+  background: rgba(8, 10, 14, 0.56);
+  display: none;
 }
-.sheet-backdrop.is-open { opacity: 1; pointer-events: auto; }
+.sheet-backdrop.is-open { display: block; }
 
 .glass-sheet {
   position: fixed;
   left: 50%;
   bottom: 0;
-  transform: translateX(-50%) translateY(102%);
+  transform: translateX(-50%);
   width: min(560px, 100%);
-  max-height: 86%;
+  max-height: calc(88dvh - var(--mw-kb-inset, 0px));
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), var(--mw-kb-inset, 0px));
   border-radius: 30px 30px 0 0;
-  background: var(--lg-surface-strong);
-  backdrop-filter: blur(38px) saturate(195%);
-  -webkit-backdrop-filter: blur(38px) saturate(195%);
+  background: rgba(20, 22, 28, 0.90);
+  backdrop-filter: blur(34px) saturate(195%);
+  -webkit-backdrop-filter: blur(34px) saturate(195%);
   box-shadow:
     inset 0 1px 0.75px rgba(255, 255, 255, 0.52),
     0 -18px 60px rgba(0, 0, 0, 0.42);
   color: var(--lg-ink);
   z-index: 66;
-  display: flex;
+  display: none;
   flex-direction: column;
-  transition: transform 300ms var(--ease-spring);
 }
-.glass-sheet.is-open { transform: translateX(-50%) translateY(0); }
+.glass-sheet.is-open {
+  display: flex;
+}
 .sheet-handle {
   width: 36px; height: 4px; border-radius: 999px;
   background: currentColor; opacity: 0.24;
@@ -1921,31 +1985,32 @@ html[data-has-photo="false"] .wheel-col {
 /* Spotlight ⌘K Command Palette */
 .spotlight-overlay {
   position: fixed;
-  top: 72px;
+  top: calc(max(12px, env(safe-area-inset-top, 12px)) + 56px);
   left: 50%;
-  transform: translateX(-50%) translateY(-10px) scale(0.98);
+  transform: translateX(-50%);
   width: min(520px, calc(100% - 28px));
   padding: 10px;
   border-radius: 24px;
-  background: var(--lg-surface-strong);
-  backdrop-filter: blur(36px) saturate(195%);
-  -webkit-backdrop-filter: blur(36px) saturate(195%);
+  background: rgba(19, 21, 27, 0.92);
+  backdrop-filter: blur(34px) saturate(195%);
+  -webkit-backdrop-filter: blur(34px) saturate(195%);
   box-shadow: var(--lg-shadow), 0 28px 70px rgba(0, 0, 0, 0.46);
   color: var(--lg-ink);
   z-index: 82;
-  display: flex;
+  display: none;
   flex-direction: column;
   gap: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 180ms ease, transform 220ms var(--ease-spring);
+}
+html[data-tier="silver"] .spotlight-overlay,
+html[data-has-photo="false"] .spotlight-overlay {
+  background: rgba(248, 251, 254, 0.96);
 }
 html.v15-iphone-sim .spotlight-overlay { top: 104px; }
-@media (max-width: 768px) { .spotlight-overlay { top: 104px; } }
+@media (max-width: 768px) {
+  .spotlight-overlay { top: calc(max(12px, env(safe-area-inset-top, 12px)) + 54px); }
+}
 .spotlight-overlay.is-open {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(-50%) translateY(0) scale(1);
+  display: flex;
 }
 .spot-input-row {
   display: flex;
@@ -1963,7 +2028,13 @@ html[data-has-photo="false"] .spot-input-row {
 }
 .spot-input {
   flex: 1; min-width: 0; border: none; background: transparent;
-  color: var(--lg-ink); caret-color: var(--lg-ink); font-size: 14px; outline: none;
+  color: var(--lg-ink); caret-color: var(--lg-ink); font-size: 16px; outline: none;
+  -webkit-appearance: none;
+}
+.spot-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
 }
 .spot-input::placeholder { color: var(--lg-ink-muted); }
 .spot-mini-btn {
@@ -1984,7 +2055,9 @@ html[data-has-photo="false"] .spot-mini-btn {
   display: flex; align-items: center; gap: 9px; padding: 8px 10px;
   border-radius: 13px; text-align: left; width: 100%;
 }
-.spot-item:hover { background: rgba(255, 255, 255, 0.12); }
+@media (hover: hover) and (pointer: fine) {
+  .spot-item:hover { background: rgba(255, 255, 255, 0.12); }
+}
 .spot-mark {
   background: color-mix(in srgb, var(--real-warm, #E8B878) 42%, transparent);
   color: inherit; border-radius: 4px; padding: 0 2px;
@@ -1995,21 +2068,21 @@ html[data-has-photo="false"] .spot-mini-btn {
   position: fixed;
   inset: 0;
   z-index: 88;
-  background: rgba(7, 8, 10, 0.92);
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
-  padding: 58px 16px 28px;
-  display: flex;
+  background: rgba(7, 8, 10, 0.94);
+  backdrop-filter: blur(26px);
+  -webkit-backdrop-filter: blur(26px);
+  padding: calc(max(16px, env(safe-area-inset-top, 16px)) + 8px) 16px calc(max(20px, env(safe-area-inset-bottom, 20px)) + 8px);
+  display: none;
   flex-direction: column;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
   color: #FAF6F0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms ease;
 }
-.lightbox-overlay.is-open { opacity: 1; pointer-events: auto; }
+html.v15-iphone-sim .lightbox-overlay { padding: 58px 16px 28px; }
+.lightbox-overlay.is-open {
+  display: flex;
+}
 .lb-topbar {
   width: min(820px, 100%);
   display: flex; align-items: center; justify-content: space-between;
@@ -2023,6 +2096,7 @@ html[data-has-photo="false"] .spot-mini-btn {
 .lb-img-main {
   max-width: min(820px, 100%);
   max-height: 46vh;
+  max-height: 46dvh;
   border-radius: 20px;
   box-shadow: 0 26px 76px rgba(0, 0, 0, 0.68), 0 0 0 1px rgba(255, 255, 255, 0.16);
   object-fit: contain;
@@ -2059,7 +2133,7 @@ html[data-has-photo="false"] .cap-wave-cv {
   width: 100%; min-height: 82px; padding: 12px 14px; border-radius: 16px;
   background: rgba(10, 12, 16, 0.28);
   border: 0.75px solid rgba(255, 255, 255, 0.18);
-  color: var(--lg-ink); font-size: 14px; line-height: 1.6; outline: none; resize: none;
+  color: var(--lg-ink); font-size: 16px; line-height: 1.55; outline: none; resize: none;
 }
 html[data-tier="silver"] .cap-textarea,
 html[data-has-photo="false"] .cap-textarea {
@@ -2067,27 +2141,32 @@ html[data-has-photo="false"] .cap-textarea {
   border-color: rgba(24, 36, 50, 0.15);
 }
 
-/* Toast Region */
+/* Toast Region (Cleanly below Top Bar so it NEVER collides with Search / Arrow Pin!) */
 .toast-pill {
   position: fixed;
-  top: 66px;
+  top: calc(max(12px, env(safe-area-inset-top, 12px)) + 56px);
   left: 50%;
-  transform: translateX(-50%) translateY(-14px);
+  transform: translateX(-50%);
+  max-width: calc(100% - 28px);
   padding: 8px 15px;
   border-radius: 999px;
-  background: rgba(18, 20, 24, 0.86);
+  background: rgba(18, 20, 24, 0.92);
   color: #FAF6F0;
-  border: 0.75px solid rgba(255, 255, 255, 0.20);
+  border: 0.75px solid rgba(255, 255, 255, 0.22);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   font-size: 12.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
   z-index: 98;
-  opacity: 0;
+  display: none;
   pointer-events: none;
-  transition: opacity 200ms ease, transform 220ms var(--ease-spring);
 }
-html.v15-iphone-sim .toast-pill { top: 104px; }
-.toast-pill.is-show { opacity: 1; transform: translateX(-50%) translateY(0); }
+html.v15-iphone-sim .toast-pill { top: 106px; }
+.toast-pill.is-show { display: block; }
 
 /* ============================================================================
    V16 PEAK AESTHETIC RESTORATION & ELEVATION
@@ -2118,18 +2197,22 @@ html[data-has-photo="false"] .slip-shell {
   box-shadow: 0 10px 26px -8px rgba(18, 28, 40, 0.09), inset 0 1px 0 #FFFFFF !important;
 }
 
-/* Luminous multi-color Apple Music artwork — banish muddy gray, restore glowing jewel marbling! */
+/* Luminous multi-color Apple Music artwork — banish muddy gray, restore glowing jewel marbling
+   (Pure-JS separable blur + subtle CSS blur guarantees silky liquid light on Apple WebKit & iOS WKWebView!) */
 .am-art-base {
   opacity: 0.96 !important;
-  filter: saturate(1.26) brightness(1.02) contrast(1.04) !important;
+  filter: blur(8px) saturate(1.24) brightness(1.02) contrast(1.04) !important;
 }
 .am-art-eddy {
   opacity: 0.72 !important;
   mix-blend-mode: soft-light !important;
-  filter: saturate(1.36) brightness(1.06) !important;
+  filter: blur(10px) saturate(1.32) brightness(1.05) !important;
 }
 .am-art-veil {
-  background: var(--card-veil, linear-gradient(150deg, rgba(16, 14, 12, 0.20) 0%, rgba(10, 10, 13, 0.38) 100%)) !important;
+  background: var(--card-veil, linear-gradient(150deg, rgba(16, 14, 12, 0.22) 0%, rgba(10, 10, 13, 0.40) 100%)) !important;
+}
+html[data-photo-luma="bright"] .am-art-veil {
+  background: linear-gradient(150deg, rgba(14, 16, 20, 0.42) 0%, rgba(10, 12, 16, 0.56) 100%) !important;
 }
 /* Optical crystal top-left glass refraction sheen inside every crystal card */
 .slip-inner::after {
@@ -2227,19 +2310,47 @@ html[data-tier="silver"] .slip-shell.kind-fact .slip-inner {
     rgba(10, 12, 14, 0.36) 100%
   ) !important;
 }
+html[data-photo-luma="bright"] .photo-backdrop-scrim {
+  background: linear-gradient(
+    180deg,
+    rgba(10, 12, 16, 0.40) 0%,
+    rgba(10, 12, 16, 0.14) 22%,
+    rgba(10, 12, 16, 0.28) 46%,
+    rgba(10, 12, 16, 0.44) 72%,
+    rgba(10, 12, 16, 0.58) 100%
+  ) !important;
+}
 
-/* iPhone / Narrow: Generous 435px upper portrait window so face & smile are 100% unobstructed,
-   while the first sculpted crystal card peeks gracefully above the Symmetric Tri-Dock! */
+/* iPhone / Narrow: Generous upper portrait window in Folio mode so face & smile stay 100% unobstructed;
+   smoothly compacts in Season/Rings so the full astrolabe & gallery sit cleanly above Tri-Dock! */
 .portrait-window {
+  min-height: 418px !important;
+  padding-top: calc(max(12px, env(safe-area-inset-top, 12px)) + 54px) !important;
+  padding-bottom: 10px !important;
+}
+html.v15-iphone-sim .portrait-window {
   min-height: 446px !important;
   padding-top: 106px !important;
-  padding-bottom: 10px !important;
+}
+html[data-scale="rings"] .portrait-window,
+html[data-scale="season"] .portrait-window {
+  min-height: 0 !important;
+  padding-top: calc(max(12px, env(safe-area-inset-top, 12px)) + 56px) !important;
+  padding-bottom: 8px !important;
+}
+html.v15-iphone-sim[data-scale="rings"] .portrait-window,
+html.v15-iphone-sim[data-scale="season"] .portrait-window {
+  padding-top: 104px !important;
 }
 html[data-tier="silver"] .portrait-window,
 html[data-has-photo="false"] .portrait-window {
   min-height: 0 !important;
-  padding-top: 108px !important;
+  padding-top: calc(max(12px, env(safe-area-inset-top, 12px)) + 58px) !important;
   padding-bottom: 12px !important;
+}
+html.v15-iphone-sim[data-tier="silver"] .portrait-window,
+html.v15-iphone-sim[data-has-photo="false"] .portrait-window {
+  padding-top: 108px !important;
 }
 
 .person-name-h1 {
@@ -2308,14 +2419,18 @@ html[data-has-photo="false"] .feed-viewport > .slip-shell {
   z-index: 3;
 }
 .photo-date-chip {
+  max-width: calc(100% - 62px);
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(14, 15, 18, 0.44);
+  background: rgba(14, 15, 18, 0.48);
   border: 0.75px solid rgba(255, 255, 255, 0.22);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   color: #FAF6F0;
   font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .photo-foot-actions {
   display: flex;
@@ -2486,25 +2601,26 @@ html.v15-iphone-sim .feed-viewport > .slip-shell.kind-photo { width: 76% !import
 
 /* -------- 4. PHOTO-INFUSED AMBIENT CRYSTAL BACKDROP INSIDE CUPID & SHEETS -------- */
 .cupid-fullscreen {
-  background:
-    radial-gradient(circle at 22% 14%, color-mix(in srgb, var(--real-warm, #E5BC8B) 26%, transparent) 0%, transparent 52%),
-    radial-gradient(circle at 82% 76%, color-mix(in srgb, var(--real-cool, #88A89A) 22%, transparent) 0%, transparent 54%),
-    rgba(12, 13, 16, 0.72) !important;
+  background-color: #0E1014 !important;
+  background-image:
+    radial-gradient(circle at 22% 14%, color-mix(in srgb, var(--real-warm, #E5BC8B) 24%, transparent) 0%, transparent 54%),
+    radial-gradient(circle at 82% 76%, color-mix(in srgb, var(--real-cool, #88A89A) 18%, transparent) 0%, transparent 56%) !important;
 }
 html[data-tier="silver"] .cupid-fullscreen,
 html[data-has-photo="false"] .cupid-fullscreen {
-  background:
-    repeating-linear-gradient(90deg, rgba(32, 52, 74, 0.022) 0 1px, transparent 1px 28px),
-    rgba(241, 246, 251, 0.96) !important;
+  background-color: #F2F6FB !important;
+  background-image:
+    repeating-linear-gradient(90deg, rgba(32, 52, 74, 0.024) 0 1px, transparent 1px 28px) !important;
 }
 .glass-sheet {
-  background:
-    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--real-warm, #E5BC8B) 20%, transparent) 0%, transparent 48%),
-    var(--lg-surface-strong) !important;
+  background-color: rgba(18, 20, 26, 0.95) !important;
+  background-image:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--real-warm, #E5BC8B) 18%, transparent) 0%, transparent 48%) !important;
 }
 html[data-tier="silver"] .glass-sheet,
 html[data-has-photo="false"] .glass-sheet {
-  background: rgba(248, 251, 254, 0.94) !important;
+  background-color: rgba(248, 251, 254, 0.98) !important;
+  background-image: none !important;
 }
 
 /* Luminous iOS 26 Refractive Liquid Glass polish on Tri-Dock */
@@ -2540,7 +2656,8 @@ html[data-has-photo="false"] .dock-cupid-orb {
   display: none;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: calc(max(16px, env(safe-area-inset-top, 16px)) + 8px) 20px max(24px, calc(var(--mw-kb-inset, 0px) + 16px));
+  overflow-y: auto;
   background:
     radial-gradient(ellipse 80% 70% at 24% 18%, rgba(218, 174, 126, 0.24), transparent 62%),
     radial-gradient(ellipse 75% 70% at 78% 82%, rgba(92, 124, 152, 0.22), transparent 64%),
@@ -2591,7 +2708,7 @@ html.v15-iphone-sim .auth-gate-overlay { position: absolute; border-radius: 51px
   background: rgba(255, 255, 255, 0.09);
   border: 0.85px solid rgba(255, 255, 255, 0.20);
   color: #FFFDF8;
-  font-size: 14px;
+  font-size: 16px;
   outline: none;
 }
 .auth-field::placeholder { color: rgba(255, 250, 242, 0.48); }
@@ -2623,18 +2740,19 @@ html.v15-iphone-sim .auth-gate-overlay { position: absolute; border-radius: 51px
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  min-height: 62vh;
-  padding: 24px 0 100px;
+  min-height: 68dvh;
+  padding: calc(max(12px, env(safe-area-inset-top, 12px)) + 56px) 0 100px;
 }
 .empty-welcome-stage.is-show { display: flex; }
 .empty-welcome-card {
   width: min(460px, 100%);
   border-radius: 30px;
   padding: 28px 24px;
-  background: rgba(255, 255, 255, 0.76);
+  background: rgba(255, 255, 255, 0.78);
   border: 0.9px solid rgba(36, 56, 76, 0.14);
   box-shadow: 0 22px 54px rgba(18, 30, 46, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
   color: #1F2E3D;
   display: flex;
   flex-direction: column;
@@ -2674,9 +2792,16 @@ html.v15-iphone-sim .auth-gate-overlay { position: absolute; border-radius: 51px
   background: rgba(164, 52, 46, 0.26);
   border: 1px solid rgba(255, 174, 166, 0.42);
   backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+html[data-tier="silver"] .cupid-crisis-card,
+html[data-has-photo="false"] .cupid-crisis-card {
+  background: rgba(184, 54, 48, 0.12);
+  border-color: rgba(184, 54, 48, 0.34);
+  color: #4A1412;
 }
 .cupid-crisis-hotlines {
   display: flex;
@@ -2695,6 +2820,29 @@ html.v15-iphone-sim .auth-gate-overlay { position: absolute; border-radius: 51px
   font-weight: 600;
   color: #FFFDF8;
   text-decoration: none;
+}
+html[data-tier="silver"] .cupid-crisis-link,
+html[data-has-photo="false"] .cupid-crisis-link {
+  background: #A8322C;
+  border-color: #8F2520;
+  color: #FFFFFF;
+}
+
+/* Prevent iOS Safari / WKWebView forced viewport auto-zoom on every text input */
+@media (max-width: 768px), (pointer: coarse) {
+  input[type="text"],
+  input[type="email"],
+  input[type="search"],
+  input[type="tel"],
+  textarea {
+    font-size: 16px !important;
+  }
+}
+html.is-native-ios input[type="text"],
+html.is-native-ios input[type="email"],
+html.is-native-ios input[type="search"],
+html.is-native-ios textarea {
+  font-size: 16px !important;
 }
 
 .cap-photo-drop {

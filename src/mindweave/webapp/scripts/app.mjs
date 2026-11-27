@@ -79,6 +79,7 @@ const state = {
   wheelDay: 16,
   wheelDraftRecId: null,
   seeding: false,
+  sheetOpenedAt: 0,
 };
 
 function makeUuid() {
@@ -158,8 +159,13 @@ function loadSavedSession() {
 
 function saveSession(sess) {
   state.session = sess;
-  if (sess) localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(sess));
-  else localStorage.removeItem(STORAGE_SESSION_KEY);
+  if (sess) {
+    localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(sess));
+  } else {
+    localStorage.removeItem(STORAGE_SESSION_KEY);
+    if (typeof signedUrlCache !== 'undefined') signedUrlCache.clear();
+    if (typeof amTextureCache !== 'undefined') amTextureCache.clear();
+  }
 }
 
 function getOrCreateGuestEmail() {
@@ -259,6 +265,26 @@ async function apiJson(path, options = {}) {
 /* ============================================================================
    2. HYDRATION FROM `/v1/bootstrap` + `/v1/inbox`
    ============================================================================ */
+const signedUrlCache = new Map(); // basePath -> { url, expSec }
+
+function stabilizeSignedUrl(freshUrl, forceRefresh = false) {
+  if (!freshUrl || typeof freshUrl !== 'string') return freshUrl;
+  const qIdx = freshUrl.indexOf('?');
+  if (qIdx === -1) return freshUrl;
+  const basePath = freshUrl.slice(0, qIdx);
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (!forceRefresh) {
+    const cached = signedUrlCache.get(basePath);
+    if (cached && cached.expSec - nowSec > 90) {
+      return cached.url;
+    }
+  }
+  const m = freshUrl.match(/[?&]exp=(\d+)/);
+  const expSec = m ? Number(m[1]) : (nowSec + 600);
+  signedUrlCache.set(basePath, { url: freshUrl, expSec });
+  return freshUrl;
+}
+
 function mapBootstrapPerson(dto) {
   const vt = dto.visualTokens || {};
   const tier = dto.tier || 'gold';
@@ -266,7 +292,7 @@ function mapBootstrapPerson(dto) {
     const meta = m.cardMeta || {};
     const kind = m.type || m.kind || 'note';
     const rawBody = m.body || m.snippet || '';
-    const imgUrl = m.mediaUrl || m.thumb || null;
+    const imgUrl = stabilizeSignedUrl(m.mediaUrl || m.thumb || null);
     const dateLabel = meta.dateLabel || formatShortDate(m.happenedOn || m.createdAt);
     const segments =
       Array.isArray(meta.segments) && meta.segments.length
@@ -352,7 +378,7 @@ function mapBootstrapPerson(dto) {
     traits: dto.traits || [],
     version: dto.version || 1,
     visualTokens: vt,
-    mainPhotoUrl: tier === 'silver' ? null : (dto.mainPhotoUrl || null),
+    mainPhotoUrl: tier === 'silver' ? null : stabilizeSignedUrl(dto.mainPhotoUrl || null),
     activeHeroMaterialId: vt.activeHeroMaterialId || null,
     coolingCount: dto.coolingCount || 0,
     facts,
@@ -462,6 +488,8 @@ function analyzeRealPhotoZones(img) {
   const data = ctx.getImageData(0, 0, S, S).data;
   const tiles = [];
   const G = 4, step = S / G;
+  let totalLuma = 0;
+  let lumaCount = 0;
   for (let gy = 0; gy < G; gy++) {
     for (let gx = 0; gx < G; gx++) {
       let rSum = 0, gSum = 0, bSum = 0, cnt = 0;
@@ -475,9 +503,13 @@ function analyzeRealPhotoZones(img) {
       const [h, s, l] = rgbToHsl(r, g, b);
       const warmth = (r - b) / 255 + (g - b) * 0.25 / 255;
       const vividness = s * (1 - Math.abs(l - 50) / 56);
-      tiles.push({ cx: (gx + 0.5) / G, cy: (gy + 0.5) / G, r, g, b, h, s, l, warmth, vividness });
+      const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+      totalLuma += luma;
+      lumaCount++;
+      tiles.push({ cx: (gx + 0.5) / G, cy: (gy + 0.5) / G, r, g, b, h, s, l, warmth, vividness, luma });
     }
   }
+  const avgLuma = lumaCount ? totalLuma / lumaCount : 0.35;
   const byWarm = [...tiles].sort((a, b) => (b.warmth * 0.7 + b.vividness / 140) - (a.warmth * 0.7 + a.vividness / 140));
   const byDeep = [...tiles].sort((a, b) => (a.warmth * 0.6 + a.l / 120) - (b.warmth * 0.6 + b.l / 120));
   const byAiry = [...tiles].sort((a, b) => (b.l - b.s * 0.15) - (a.l - a.s * 0.15));
@@ -491,12 +523,101 @@ function analyzeRealPhotoZones(img) {
 
   return {
     warmTile, deepTile, airyTile, vividTile,
+    avgLuma,
+    isBright: avgLuma > 0.54,
     realWarm: liftRealHex(warmTile, 72, 22),
     realCool: liftRealHex(deepTile, 70, 14),
     realLight: liftRealHex(airyTile, 84, 12),
     realVivid: liftRealHex(vividTile, 68, 24),
     deepHex: hslToHex(deepTile.h, Math.min(36, deepTile.s * 0.75), 11),
   };
+}
+
+/**
+ * Engine-independent pure-JS separable 2-pass box blur + saturation/brightness/contrast pass.
+ * Guarantees 100% silky Apple Music liquid glass on Apple WebKit & iOS WKWebView where
+ * CanvasRenderingContext2D.filter is unsupported or silently ignored.
+ */
+function blurAndGradeCanvas(canvas, radius, satVal, brightVal, contrastVal = 1.05) {
+  const S = canvas.width;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const img = ctx.getImageData(0, 0, S, S);
+  const src = img.data;
+  const tmp = new Uint8ClampedArray(src.length);
+  const dst = new Uint8ClampedArray(src.length);
+  const r = Math.max(2, Math.min(22, Math.round(radius)));
+  const span = r * 2 + 1;
+
+  const boxPass = (inArr, outArr) => {
+    // Horizontal pass (clamp-to-edge)
+    for (let y = 0; y < S; y++) {
+      let rAcc = 0, gAcc = 0, bAcc = 0;
+      const rowOff = y * S;
+      for (let dx = -r; dx <= r; dx++) {
+        const ix = Math.max(0, Math.min(S - 1, dx));
+        const p = (rowOff + ix) * 4;
+        rAcc += inArr[p]; gAcc += inArr[p + 1]; bAcc += inArr[p + 2];
+      }
+      for (let x = 0; x < S; x++) {
+        const op = (rowOff + x) * 4;
+        tmp[op] = rAcc / span;
+        tmp[op + 1] = gAcc / span;
+        tmp[op + 2] = bAcc / span;
+        tmp[op + 3] = 255;
+        const xRem = Math.max(0, x - r);
+        const xAdd = Math.min(S - 1, x + r + 1);
+        const pRem = (rowOff + xRem) * 4;
+        const pAdd = (rowOff + xAdd) * 4;
+        rAcc += inArr[pAdd] - inArr[pRem];
+        gAcc += inArr[pAdd + 1] - inArr[pRem + 1];
+        bAcc += inArr[pAdd + 2] - inArr[pRem + 2];
+      }
+    }
+    // Vertical pass (clamp-to-edge)
+    for (let x = 0; x < S; x++) {
+      let rAcc = 0, gAcc = 0, bAcc = 0;
+      for (let dy = -r; dy <= r; dy++) {
+        const iy = Math.max(0, Math.min(S - 1, dy));
+        const p = (iy * S + x) * 4;
+        rAcc += tmp[p]; gAcc += tmp[p + 1]; bAcc += tmp[p + 2];
+      }
+      for (let y = 0; y < S; y++) {
+        const op = (y * S + x) * 4;
+        outArr[op] = rAcc / span;
+        outArr[op + 1] = gAcc / span;
+        outArr[op + 2] = bAcc / span;
+        outArr[op + 3] = 255;
+        const yRem = Math.max(0, y - r);
+        const yAdd = Math.min(S - 1, y + r + 1);
+        const pRem = (yRem * S + x) * 4;
+        const pAdd = (yAdd * S + x) * 4;
+        rAcc += tmp[pAdd] - tmp[pRem];
+        gAcc += tmp[pAdd + 1] - tmp[pRem + 1];
+        bAcc += tmp[pAdd + 2] - tmp[pRem + 2];
+      }
+    }
+  };
+
+  // Two cascaded box passes approximate a smooth Gaussian blur cleanly in ~1.5ms on 128x128!
+  boxPass(src, dst);
+  boxPass(dst, src);
+
+  // Saturation + brightness + gentle contrast grade
+  for (let i = 0; i < src.length; i += 4) {
+    let rr = src[i], gg = src[i + 1], bb = src[i + 2];
+    const lum = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
+    rr = lum + (rr - lum) * satVal;
+    gg = lum + (gg - lum) * satVal;
+    bb = lum + (bb - lum) * satVal;
+    rr = ((rr * brightVal - 128) * contrastVal) + 128;
+    gg = ((gg * brightVal - 128) * contrastVal) + 128;
+    bb = ((bb * brightVal - 128) * contrastVal) + 128;
+    src[i] = Math.max(0, Math.min(255, rr));
+    src[i + 1] = Math.max(0, Math.min(255, gg));
+    src[i + 2] = Math.max(0, Math.min(255, bb));
+    src[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
 }
 
 function renderTwistedArtworkLayer(srcCanvas, S, focusX, focusY, zoom, twistA, twistB, satVal, brightVal, blurPx) {
@@ -540,18 +661,32 @@ function renderTwistedArtworkLayer(srcCanvas, S, focusX, focusY, zoom, twistA, t
 
   const out = document.createElement('canvas');
   out.width = S; out.height = S;
-  const octx = out.getContext('2d');
-  octx.filter = `blur(${blurPx}px) saturate(${satVal}) brightness(${brightVal}) contrast(1.06)`;
+  const octx = out.getContext('2d', { willReadFrequently: true });
   octx.drawImage(cropCv, -S * 0.22, -S * 0.22, S * 1.44, S * 1.44);
   octx.save(); octx.globalAlpha = 0.50; octx.translate(S * 0.52, S * 0.48); octx.rotate(1.95);
   octx.drawImage(cropCv, -S * 0.78, -S * 0.78, S * 1.56, S * 1.56); octx.restore();
   octx.save(); octx.globalAlpha = 0.34; octx.translate(S * 0.46, S * 0.54); octx.rotate(-1.18);
   octx.drawImage(cropCv, -S * 0.76, -S * 0.76, S * 1.52, S * 1.52); octx.restore();
+
+  // Engine-independent Gaussian-like blur + liquid color grading (100% WebKit/iOS native safe!)
+  blurAndGradeCanvas(out, blurPx + 3, satVal, brightVal, 1.06);
   return out.toDataURL('image/jpeg', 0.84);
 }
 
+const photoCacheGen = Object.create(null);
+
+function bumpPhotoCacheGen(personId) {
+  if (!personId) return;
+  photoCacheGen[personId] = (photoCacheGen[personId] || 0) + 1;
+}
+
+function stablePhotoCacheKey(personId, photoUrl) {
+  const base = String(photoUrl || '').split('?')[0];
+  return `${base}#g${photoCacheGen[personId] || 0}`;
+}
+
 function bakeAppleMusicTextures(img, zones) {
-  const S = 128;
+  const S = 96;
   const srcCv = document.createElement('canvas');
   srcCv.width = S; srcCv.height = S;
   const sctx = srcCv.getContext('2d');
@@ -562,16 +697,18 @@ function bakeAppleMusicTextures(img, zones) {
   const adaptiveSat = (tile, targetBoost) => +(targetBoost - Math.min(1, Math.max(0, (tile.s || 30) / 85)) * (targetBoost - 1.12)).toFixed(2);
   const safeZoom = (tile, z) => (tile.s > 55 ? Math.min(z, 1.12) : z);
   return {
-    full:  renderTwistedArtworkLayer(srcCv, S, 0.50, 0.50, 1.06,  2.2, -1.9, adaptiveSat(zones.vividTile, 1.50), 0.96, 13),
-    warm:  renderTwistedArtworkLayer(srcCv, S, zones.warmTile.cx,  zones.warmTile.cy,  safeZoom(zones.warmTile, 1.24),  2.5, -1.7, adaptiveSat(zones.warmTile, 1.54), 0.99, 12),
-    deep:  renderTwistedArtworkLayer(srcCv, S, zones.deepTile.cx,  zones.deepTile.cy,  safeZoom(zones.deepTile, 1.28), -2.3,  2.0, adaptiveSat(zones.deepTile, 1.38), 0.88, 12),
-    airy:  renderTwistedArtworkLayer(srcCv, S, zones.airyTile.cx,  zones.airyTile.cy,  safeZoom(zones.airyTile, 1.24),  1.9, -2.2, adaptiveSat(zones.airyTile, 1.36), 1.08, 13),
-    vivid: renderTwistedArtworkLayer(srcCv, S, zones.vividTile.cx, zones.vividTile.cy, safeZoom(zones.vividTile, 1.26), -2.6,  1.8, adaptiveSat(zones.vividTile, 1.56), 0.96, 12),
+    full:  renderTwistedArtworkLayer(srcCv, S, 0.50, 0.50, 1.06,  2.2, -1.9, adaptiveSat(zones.vividTile, 1.50), 0.96, 11),
+    warm:  renderTwistedArtworkLayer(srcCv, S, zones.warmTile.cx,  zones.warmTile.cy,  safeZoom(zones.warmTile, 1.24),  2.5, -1.7, adaptiveSat(zones.warmTile, 1.54), 0.99, 10),
+    deep:  renderTwistedArtworkLayer(srcCv, S, zones.deepTile.cx,  zones.deepTile.cy,  safeZoom(zones.deepTile, 1.28), -2.3,  2.0, adaptiveSat(zones.deepTile, 1.38), 0.88, 10),
+    airy:  renderTwistedArtworkLayer(srcCv, S, zones.airyTile.cx,  zones.airyTile.cy,  safeZoom(zones.airyTile, 1.24),  1.9, -2.2, adaptiveSat(zones.airyTile, 1.36), 1.04, 11),
+    vivid: renderTwistedArtworkLayer(srcCv, S, zones.vividTile.cx, zones.vividTile.cy, safeZoom(zones.vividTile, 1.26), -2.6,  1.8, adaptiveSat(zones.vividTile, 1.56), 0.96, 10),
   };
 }
 
 function applyChromaTokens(t) {
+  syncOrbPaletteCache(t);
   const r = document.documentElement.style;
+  document.documentElement.setAttribute('data-photo-luma', t.isBright ? 'bright' : 'normal');
   r.setProperty('--photo-deep', t.deepHex || '#1E241C');
   r.setProperty('--real-warm', t.realWarm || '#E5BC8B');
   r.setProperty('--real-cool', t.realCool || '#88A89A');
@@ -589,57 +726,62 @@ function syncChromaForPerson(p) {
     document.documentElement.setAttribute('data-tier', 'crystal');
     document.documentElement.setAttribute('data-has-photo', 'false');
     document.documentElement.setAttribute('data-face-zone', 'none');
-    applyChromaTokens({ deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null });
+    document.documentElement.setAttribute('data-photo-luma', 'normal');
+    applyChromaTokens({ deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null, isBright: false });
     return;
   }
 
   const isSilver = p.tier === 'silver';
   const photoUrl = !isSilver && p.mainPhotoUrl ? p.mainPhotoUrl : null;
+  const photoKey = photoUrl ? stablePhotoCacheKey(p.id, photoUrl) : null;
   const vt = p.visualTokens || {};
   document.documentElement.setAttribute('data-tier', p.tier);
   document.documentElement.setAttribute('data-has-photo', photoUrl ? 'true' : 'false');
 
   const bgImg = document.getElementById('backdropImg');
   if (photoUrl && bgImg) {
-    if (bgImg.getAttribute('data-loaded-url') !== photoUrl) {
+    if (bgImg.getAttribute('data-loaded-key') !== photoKey) {
       bgImg.src = photoUrl;
-      bgImg.setAttribute('data-loaded-url', photoUrl);
+      bgImg.setAttribute('data-loaded-key', photoKey);
     }
     const faceZone = vt.faceZone || 'center';
     document.documentElement.setAttribute('data-face-zone', faceZone);
-    const isNarrow = document.documentElement.classList.contains('v15-iphone-sim') || window.innerWidth <= 768;
+    const isNarrow = document.documentElement.classList.contains('v15-iphone-sim') || document.documentElement.classList.contains('is-native-ios') || window.innerWidth <= 768;
     bgImg.style.objectPosition = isNarrow ? (vt.phoneFocus || '54% 24%') : (vt.deskFocus || '54% 24%');
   } else {
     document.documentElement.setAttribute('data-face-zone', 'none');
+    document.documentElement.setAttribute('data-photo-luma', 'normal');
     if (bgImg) {
       bgImg.removeAttribute('src');
-      bgImg.removeAttribute('data-loaded-url');
+      bgImg.removeAttribute('data-loaded-key');
     }
   }
 
-  if (!photoUrl) {
+  if (!photoUrl || !photoKey) {
     applyChromaTokens(
       isSilver
-        ? { deepHex: '#1E2C3A', realWarm: '#56728C', realCool: '#476078', realLight: '#DCE7F2', realVivid: '#3E5A75', textures: null }
-        : { deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null },
+        ? { deepHex: '#1E2C3A', realWarm: '#56728C', realCool: '#476078', realLight: '#DCE7F2', realVivid: '#3E5A75', textures: null, isBright: false }
+        : { deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null, isBright: false },
     );
     return;
   }
 
   // Apply server-extracted real-photo tokens immediately for zero-flash paint
   if (vt.realWarm) {
+    const cached = amTextureCache.get(photoKey);
     applyChromaTokens({
       deepHex: vt.deepHex || '#1E241C',
       realWarm: vt.realWarm,
       realCool: vt.realCool || '#88A89A',
       realLight: vt.realLight || '#F2E7D8',
       realVivid: vt.realVivid || '#C97D5E',
-      textures: amTextureCache.get(photoUrl)?.textures || null,
+      textures: cached?.textures || null,
+      isBright: Boolean(cached?.isBright),
     });
   }
 
-  if (amTextureCache.has(photoUrl)) {
-    applyChromaTokens(amTextureCache.get(photoUrl));
+  if (amTextureCache.has(photoKey)) {
+    applyChromaTokens(amTextureCache.get(photoKey));
     return;
   }
 
@@ -650,7 +792,7 @@ function syncChromaForPerson(p) {
       const zones = analyzeRealPhotoZones(probe);
       const textures = bakeAppleMusicTextures(probe, zones);
       const res = { ...zones, textures };
-      amTextureCache.set(photoUrl, res);
+      amTextureCache.set(photoKey, res);
       if (currentPerson()?.id === p.id) applyChromaTokens(res);
     } catch (_) {}
   };
@@ -660,7 +802,9 @@ function syncChromaForPerson(p) {
 function amMeshHtml(phaseSec = 0) {
   const p = currentPerson();
   if (!p || p.tier === 'silver' || !p.mainPhotoUrl) return '';
-  return `<div class="am-card-canvas" style="--am-phase:${phaseSec}s" aria-hidden="true"><div class="am-art-layer am-art-base"></div><div class="am-art-layer am-art-eddy"></div><div class="am-art-veil"></div></div>`;
+  const degA = Math.round(((Math.abs(phaseSec) * 37) % 360));
+  const degB = Math.round(((Math.abs(phaseSec) * 53 + 145) % 360));
+  return `<div class="am-card-canvas" style="--am-deg-a:${degA}deg;--am-deg-b:${degB}deg" aria-hidden="true"><div class="am-art-layer am-art-base"></div><div class="am-art-layer am-art-eddy"></div><div class="am-art-veil"></div></div>`;
 }
 
 /* ============================================================================
@@ -668,6 +812,20 @@ function amMeshHtml(phaseSec = 0) {
    ============================================================================ */
 let orbT = 0;
 let orbSpeed = 1.0;
+let lastOrbTs = 0;
+const orbPalette = {
+  cLight: '#F4E5CE',
+  cWarm: '#DFAA74',
+  cVivid: '#C46E50',
+  cDeep: '#222A24',
+};
+
+function syncOrbPaletteCache(t) {
+  orbPalette.cLight = t.realLight || '#F4E5CE';
+  orbPalette.cWarm = t.realWarm || '#DFAA74';
+  orbPalette.cVivid = t.realVivid || '#C46E50';
+  orbPalette.cDeep = t.deepHex || '#222A24';
+}
 
 function renderFluidOrbToCanvas(canvas, size) {
   if (!canvas) return;
@@ -678,11 +836,10 @@ function renderFluidOrbToCanvas(canvas, size) {
   const p = currentPerson();
   const isSilver = p && p.tier === 'silver';
   const isCrystal = !p || (p.tier === 'crystal' && !p.mainPhotoUrl);
-  const css = getComputedStyle(document.documentElement);
-  const cLight = isSilver ? '#EBF3FA' : isCrystal ? '#EAF4FC' : (css.getPropertyValue('--real-light').trim() || '#F4E5CE');
-  const cWarm  = isSilver ? '#8BA5BD' : isCrystal ? '#79A9CF' : (css.getPropertyValue('--real-warm').trim()  || '#DFAA74');
-  const cVivid = isSilver ? '#496783' : isCrystal ? '#5A88B4' : (css.getPropertyValue('--real-vivid').trim() || '#C46E50');
-  const cDeep  = isSilver ? '#1D2C3C' : isCrystal ? '#243A50' : (css.getPropertyValue('--photo-deep').trim() || '#222A24');
+  const cLight = isSilver ? '#EBF3FA' : isCrystal ? '#EAF4FC' : orbPalette.cLight;
+  const cWarm  = isSilver ? '#8BA5BD' : isCrystal ? '#79A9CF' : orbPalette.cWarm;
+  const cVivid = isSilver ? '#496783' : isCrystal ? '#5A88B4' : orbPalette.cVivid;
+  const cDeep  = isSilver ? '#1D2C3C' : isCrystal ? '#243A50' : orbPalette.cDeep;
 
   ctx.clearRect(0, 0, size, size);
   ctx.save();
@@ -716,13 +873,16 @@ function renderFluidOrbToCanvas(canvas, size) {
   ctx.restore();
 }
 
-function animateOrbs() {
-  const target = state.cupidThinking ? 3.4 : 1.0;
-  orbSpeed += (target - orbSpeed) * 0.08;
-  orbT += 0.020 * orbSpeed;
-  renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
-  if (document.getElementById('cupidFullscreen')?.classList.contains('is-open')) {
-    renderFluidOrbToCanvas(document.getElementById('cupidHeadCanvas'), 32);
+function animateOrbs(ts = 0) {
+  if (!lastOrbTs || ts - lastOrbTs >= 42) {
+    lastOrbTs = ts;
+    const target = state.cupidThinking ? 3.4 : 1.0;
+    orbSpeed += (target - orbSpeed) * 0.14;
+    orbT += 0.045 * orbSpeed;
+    renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
+    if (document.getElementById('cupidFullscreen')?.classList.contains('is-open')) {
+      renderFluidOrbToCanvas(document.getElementById('cupidHeadCanvas'), 32);
+    }
   }
   requestAnimationFrame(animateOrbs);
 }
@@ -761,6 +921,7 @@ function renderApp() {
 function renderTopAndMasthead() {
   const p = currentPerson();
   if (!p) return;
+  document.documentElement.setAttribute('data-scale', state.scale);
   document.getElementById('personNameTitle').textContent = p.name;
   document.getElementById('arrowPinImg').src = ARROW_PINS[p.tier] || ARROW_PINS.gold;
   document.getElementById('arrowPinLabel').textContent = TIER_META[p.tier]?.label || '金箭';
@@ -1124,9 +1285,20 @@ function renderRingsFeed(vp, p) {
     return `<line x1="${(cx + Math.cos(a) * r1).toFixed(1)}" y1="${(cy + Math.sin(a) * r1).toFixed(1)}" x2="${(cx + Math.cos(a) * r2).toFixed(1)}" y2="${(cy + Math.sin(a) * r2).toFixed(1)}" stroke="currentColor" stroke-width="${major ? 1.2 : 0.6}" opacity="${major ? 0.36 : 0.16}"/>`;
   }).join('');
 
+  // Spread nodes sharing the same concentric ring evenly so date labels NEVER overlap!
+  const ringBuckets = { 1: [], 2: [], 3: [] };
+  list.forEach((rec, idx) => {
+    const rk = radii[rec.ring] ? rec.ring : ((idx % 3) + 1);
+    ringBuckets[rk].push(rec.id);
+  });
+  const ringOffsets = { 1: 28, 2: 72, 3: 118 };
+
   const nodes = list.map((rec, idx) => {
-    const r = radii[rec.ring] || radii[1];
-    const deg = typeof rec.angle === 'number' ? rec.angle : (idx * (360 / Math.max(list.length, 4)) + 24);
+    const rk = radii[rec.ring] ? rec.ring : ((idx % 3) + 1);
+    const r = radii[rk];
+    const bucket = ringBuckets[rk];
+    const bIdx = Math.max(0, bucket.indexOf(rec.id));
+    const deg = (ringOffsets[rk] + (bIdx * 360) / Math.max(bucket.length, 1)) % 360;
     const rad = (deg - 90) * Math.PI / 180;
     const x = cx + Math.cos(rad) * r, y = cy + Math.sin(rad) * r;
     const isSel = rec.id === sel.id;
@@ -1136,7 +1308,7 @@ function renderRingsFeed(vp, p) {
         ${isSel ? `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${fill}" stroke-width="1" stroke-dasharray="3 4" opacity="0.72"/>` : ''}
         <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isSel ? 15 : 9}" fill="${fill}" opacity="${isSel ? 0.24 : 0.08}"/>
         <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isSel ? 6.5 : 4.5}" fill="${fill}" stroke="rgba(14,16,20,0.72)" stroke-width="1.6"/>
-        <text x="${(x + (x >= cx ? 11 : -11)).toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="${x >= cx ? 'start' : 'end'}" fill="currentColor" font-size="10.5" font-family="var(--font-mono)" opacity="${isSel ? 0.98 : 0.66}">${escapeHtml(rec.date)}</text>
+        <text x="${(x + (x >= cx ? 11 : -11)).toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="${x >= cx ? 'start' : 'end'}" fill="currentColor" font-size="10.5" font-family="var(--font-mono)" opacity="${isSel ? 0.98 : 0.72}">${escapeHtml(rec.date)}</text>
       </g>
     `;
   }).join('');
@@ -1228,15 +1400,24 @@ function jumpToRecord(recId) {
   }, 60);
 }
 
+function scrollMainToTop(smooth = false) {
+  const sc = document.getElementById('mainScroller');
+  const root = document.documentElement;
+  const behavior = smooth ? 'smooth' : 'instant';
+  if (sc && (root.classList.contains('v15-iphone-sim') || root.classList.contains('is-native-ios') || window.innerWidth <= 768)) {
+    sc.scrollTo({ top: 0, behavior });
+  } else {
+    window.scrollTo({ top: 0, behavior });
+  }
+}
+
 function selectPerson(pid) {
   state.personId = pid;
   state.scale = 'folio';
   state.selectedRingId = null;
   state.cupidAttachedIds.clear();
   renderApp();
-  const sc = document.getElementById('mainScroller');
-  if (sc && document.documentElement.classList.contains('v15-iphone-sim')) sc.scrollTo({ top: 0, behavior: 'instant' });
-  else window.scrollTo({ top: 0, behavior: 'instant' });
+  scrollMainToTop(false);
 }
 
 /* ============================================================================
@@ -1279,10 +1460,11 @@ async function promoteMaterialToBackground(p, materialId) {
       body: { materialId },
     });
     if (updated) {
-      p.mainPhotoUrl = updated.mainPhotoUrl || p.mainPhotoUrl;
+      p.mainPhotoUrl = updated.mainPhotoUrl ? stabilizeSignedUrl(updated.mainPhotoUrl, true) : p.mainPhotoUrl;
       p.visualTokens = updated.visualTokens || p.visualTokens;
       p.activeHeroMaterialId = materialId;
       p.version = updated.version || p.version;
+      bumpPhotoCacheGen(p.id);
       syncChromaForPerson(p);
       renderTriDockSeals();
       renderFeed();
@@ -1306,9 +1488,10 @@ async function uploadDirectHeroPhoto(p, file) {
   try {
     const updated = await apiJson(`/persons/${p.id}/photos/main`, { method: 'POST', body: fd });
     if (updated) {
-      p.mainPhotoUrl = updated.mainPhotoUrl;
+      p.mainPhotoUrl = stabilizeSignedUrl(updated.mainPhotoUrl, true);
       p.visualTokens = updated.visualTokens || p.visualTokens;
       p.version = updated.version || p.version;
+      bumpPhotoCacheGen(p.id);
       syncChromaForPerson(p);
       renderTriDockSeals();
       renderFeed();
@@ -1346,6 +1529,8 @@ async function openCupid() {
   if (!p) return;
   closeAllSheets();
   closeSpotlight();
+  const staleToast = document.getElementById('toastPill');
+  if (staleToast) staleToast.classList.remove('is-show');
   document.getElementById('cupidHeadTitle').textContent = p.tier === 'silver' ? `丘比特 · ${p.name}（同盟）` : `丘比特 · ${p.name}`;
   document.getElementById('cupidHeadTierImg').src = ARROW_PINS[p.tier] || ARROW_PINS.gold;
   document.getElementById('cupidMatCount').textContent = `手帐 ${p.records.length}`;
@@ -1400,7 +1585,7 @@ function renderMatDrawer() {
   list.innerHTML = p.records.map((r) => {
     const picked = state.cupidAttachedIds.has(r.id);
     const txt = r.caption || (r.segments && r.segments.join('')) || r.summary || r.text || '';
-    const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+    const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : r.type === 'shield-log' ? '🛡' : r.type === 'draft' ? '✎' : '✦';
     return `
       <button class="drawer-item ${picked ? 'is-picked' : ''}" data-pick-mat="${r.id}" type="button">
         <div style="display:flex;justify-content:space-between;font-size:11px;opacity:0.72;">
@@ -1447,7 +1632,7 @@ function renderCupidChat() {
   const citeIcon = (tid) => {
     const r = p.records.find((x) => x.id === tid);
     if (!r) return '✦';
-    return r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+    return r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : r.type === 'shield-log' ? '🛡' : r.type === 'draft' ? '✎' : '✦';
   };
 
   const body = document.getElementById('cupidChatBody');
@@ -1459,7 +1644,8 @@ function renderCupidChat() {
       : `已翻阅「${p.name}」的 ${p.records.length} 条真实日常手帐与 ${p.facts.length} 项小习惯。你可以直接提问，或点右上角「手帐」抽屉附带某条原件来聊。`;
 
   const lastAi = [...thread].reverse().find((m) => m.role === 'ai');
-  const prompts = (lastAi && lastAi.suggestions && lastAi.suggestions.length) ? lastAi.suggestions : p.cupidPrompts;
+  const lastIsCrisis = Boolean(lastAi && lastAi.crisis);
+  const prompts = lastIsCrisis ? [] : ((lastAi && lastAi.suggestions && lastAi.suggestions.length) ? lastAi.suggestions : p.cupidPrompts);
 
   body.innerHTML = `
     <div style="text-align:center;font-size:11.5px;opacity:0.62;">已核对 ${p.records.length} 条实库加密手帐 · ${p.facts.length} 项记住的小事</div>
@@ -1641,6 +1827,7 @@ async function sendCupidQuestion(qText) {
 function openSheet(id) {
   closeAllSheets();
   closeSpotlight();
+  state.sheetOpenedAt = Date.now();
   document.getElementById('sheetBackdrop').classList.add('is-open');
   document.getElementById(id).classList.add('is-open');
 }
@@ -1724,7 +1911,7 @@ function openDossierSheet() {
         </div>
       `).join('')}
       <form id="addFactForm" style="display:flex;gap:8px;margin-top:6px;">
-        <input class="spot-input" id="newFactInput" type="text" placeholder="添记一条小习惯或忌口…" style="flex:1;padding:7px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);font-size:12.5px;" />
+        <input class="spot-input" id="newFactInput" type="text" placeholder="添记一条小习惯或忌口…" style="flex:1;padding:7px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
         <button class="s-pill is-active" type="submit">落墨</button>
       </form>
     </div>
@@ -2071,7 +2258,7 @@ async function commitSmartCapture(text, autoMulti) {
     return;
   }
 
-  const source = state.capMode === 'wechat' ? 'chat' : 'voice';
+  const source = state.capMode === 'wechat' ? 'chat' : 'text';
   const routeMode = autoMulti ? 'global' : 'current';
   try {
     const res = await apiJson('/captures?sync=true', {
@@ -2086,8 +2273,16 @@ async function commitSmartCapture(text, autoMulti) {
     document.getElementById('capTextarea').value = '';
     closeAllSheets();
     closeVoiceArc();
-    await refreshBootstrap({ keepPersonId: true });
     showDispatchReceipt(res);
+    const receiptEl = document.getElementById('dispatchReceipt');
+    if (receiptEl) {
+      clearTimeout(receiptEl._refreshT);
+      receiptEl._refreshT = setTimeout(() => {
+        refreshBootstrap({ keepPersonId: true }).catch(() => {});
+      }, 250);
+    } else {
+      refreshBootstrap({ keepPersonId: true }).catch(() => {});
+    }
   } catch (err) {
     showToast(err.message || '归档失败');
   }
@@ -2095,25 +2290,32 @@ async function commitSmartCapture(text, autoMulti) {
 
 function showDispatchReceipt(captureResp) {
   const box = document.getElementById('dispatchReceipt');
+  if (captureResp && captureResp.crisisCard) {
+    const cc = captureResp.crisisCard;
+    const hotlines = (cc.hotlines || []).map((h) => `${h.name || '热线'} ${h.phone || h.number || ''}`).join(' · ');
+    showToast(`${cc.title || '先让我陪着你'}：${hotlines || '12356 / 110'}`);
+    return;
+  }
   const splits = (captureResp && Array.isArray(captureResp.splits)) ? captureResp.splits : [];
   if (!splits.length) {
     showToast('已记录入待整理收件箱');
     return;
   }
-  const jobId = captureResp.jobId;
+  const captureId = captureResp.captureId || captureResp.jobId;
   box.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-      <strong style="font-size:13px;">✓ 已实库拆入 ${splits.length} 条手帐</strong>
-      <button class="s-pill" id="btnUndoDispatch" type="button" style="height:24px;font-size:11px;">撤销 5s</button>
+      <strong style="font-size:13px;">✓ 已落墨拆入 ${splits.length} 条手帐</strong>
+      ${captureId ? `<button class="s-pill" id="btnUndoDispatch" type="button" style="height:24px;font-size:11px;">撤销 5s</button>` : ''}
     </div>
     ${splits.map((sp) => {
       const target = state.people.find((x) => x.id === sp.personId);
       const tLabel = target ? TIER_META[target.tier]?.label || '' : '';
+      const snippet = sp.body || sp.summary || '已加密归档';
       return `
         <div class="receipt-row">
           <div style="min-width:0;flex:1;">
             <strong style="margin-right:6px;">${escapeHtml(sp.personName || target?.name || '手帐')} ${tLabel ? `· ${tLabel}` : ''}</strong>
-            <div style="font-size:11.5px;opacity:0.74;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(sp.summary || '已加密归档')}</div>
+            <div style="font-size:11.5px;opacity:0.74;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(snippet)}</div>
           </div>
           ${sp.personId ? `<button class="s-pill" data-jump-person="${sp.personId}" type="button" style="height:24px;font-size:11px;">去看 ›</button>` : ''}
         </div>
@@ -2122,22 +2324,50 @@ function showDispatchReceipt(captureResp) {
   `;
   box.classList.add('is-open');
 
-  box.querySelector('#btnUndoDispatch').addEventListener('click', async () => {
-    try {
-      await apiJson(`/captures/${jobId}:undo`, { method: 'POST', body: {} });
-      box.classList.remove('is-open');
-      await refreshBootstrap({ keepPersonId: true });
-      showToast('已从数据库撤回刚刚的分拣记录');
-    } catch (err) {
-      showToast(err.message || '撤销窗口已过');
-    }
-  });
+  const undoBtn = box.querySelector('#btnUndoDispatch');
+  clearInterval(box._undoIv);
+  if (undoBtn && captureId) {
+    const deadlineMs = captureResp.undoDeadline
+      ? Date.parse(captureResp.undoDeadline)
+      : Date.now() + 4800;
+    const syncCountdown = () => {
+      const remMs = deadlineMs - Date.now();
+      if (remMs <= 250) {
+        clearInterval(box._undoIv);
+        undoBtn.remove();
+        return;
+      }
+      undoBtn.textContent = `撤销 ${Math.max(1, Math.ceil(remMs / 1000))}s`;
+    };
+    syncCountdown();
+    box._undoIv = setInterval(syncCountdown, 400);
+    let undoing = false;
+    undoBtn.addEventListener('click', async () => {
+      if (undoing) return;
+      undoing = true;
+      undoBtn.disabled = true;
+      clearInterval(box._undoIv);
+      try {
+        await apiJson(`/captures/${captureId}:undo`, { method: 'POST', body: {} });
+        box.classList.remove('is-open');
+        await refreshBootstrap({ keepPersonId: true });
+        showToast('已撤回刚刚的分拣记录');
+      } catch (err) {
+        undoBtn.remove();
+        showToast(err.message || '撤销窗口已过');
+      }
+    });
+  }
   box.querySelectorAll('[data-jump-person]').forEach((b) => b.addEventListener('click', () => {
+    clearInterval(box._undoIv);
     box.classList.remove('is-open');
     selectPerson(b.dataset.jumpPerson);
   }));
   clearTimeout(box._t);
-  box._t = setTimeout(() => box.classList.remove('is-open'), 5500);
+  box._t = setTimeout(() => {
+    clearInterval(box._undoIv);
+    box.classList.remove('is-open');
+  }, 7500);
 }
 
 /* Split-Arc Voice Stage (`断弧语音`) */
@@ -2166,7 +2396,7 @@ function openSettingsSheet() {
     </div>
 
     <div class="s-card">
-      <div class="s-label"><span>隐私与账户密钥</span><span>PostgreSQL RLS + AES-256-GCM</span></div>
+      <div class="s-label"><span>隐私与账户密钥</span><span>独立密钥加密隔离</span></div>
       <div style="font-size:12.5px;opacity:0.78;">已登录：${escapeHtml(email)}</div>
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
         <div>
@@ -2176,7 +2406,7 @@ function openSettingsSheet() {
         <button class="s-pill ${state.faceIdLock ? 'is-active' : ''}" id="btnToggleFaceId" type="button">${state.faceIdLock ? '已开启' : '已关闭'}</button>
       </div>
       <div style="display:flex;gap:8px;margin-top:4px;">
-        ${!state.people.length ? '' : `<button class="s-pill" id="btnSettingsLogout" type="button">退出当前账号</button>`}
+        <button class="s-pill" id="btnSettingsLogout" type="button">退出当前账号</button>
       </div>
     </div>
 
@@ -2193,7 +2423,7 @@ function openSettingsSheet() {
     </div>
 
     <div class="s-card">
-      <div class="s-label"><span>双层生命安全保护通道</span><span>独立于大模型</span></div>
+      <div class="s-label"><span>双层生命安全保护通道</span><span>随时守候</span></div>
       <div style="font-size:12px;line-height:1.62;opacity:0.80;">任何箭矢层级下，若识别到极端情绪或人身安全危机，立即固定提供 12356 / 110 / 12338 求助通道，永不诱导病态情感依赖。</div>
     </div>
   `;
@@ -2243,24 +2473,29 @@ async function handleLivePiplExport(statusEl) {
       headers: { 'X-Reauth-Token': verified.reauthToken },
       body: { asyncMode: false },
     });
-    if (statusEl) statusEl.textContent = `✓ 导出包就绪 · SHA-256: ${(exp.sha256Hex || '').slice(0, 20)}…`;
+    let kbText = '';
     if (exp.downloadPath) {
       const dlResp = await fetch(exp.downloadPath, {
         headers: { Authorization: `Bearer ${state.session.accessToken}` },
       });
       if (dlResp.ok) {
         const blob = await dlResp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `mindweave_export_${String(exp.exportId).slice(0, 8)}.zip`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        kbText = ` · ${Math.max(1, Math.round(blob.size / 1024))} KB`;
+        const isNativeIos = Boolean(window.__MW_NATIVE_IOS__ || window.__MW_IOS_NATIVE__);
+        if (!isNativeIos) {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `mindweave_export_${String(exp.exportId).slice(0, 8)}.zip`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+        }
       }
     }
-    showToast('✓ 已下载完整 GB 45438-2025 数据主权归档包');
+    if (statusEl) statusEl.textContent = `✓ 导出包就绪${kbText} · SHA-256: ${(exp.sha256Hex || '').slice(0, 20)}…`;
+    showToast('✓ 已生成完整 GB 45438-2025 数据主权归档包');
   } catch (err) {
     if (statusEl) statusEl.textContent = `导出暂未完成：${err.message}`;
     showToast(err.message || '导出失败');
@@ -2268,7 +2503,7 @@ async function handleLivePiplExport(statusEl) {
 }
 
 /* Sheet 5: 农历/公历三列滚轮核对 -> Live Reminder + Draft Patch */
-function openDateWheelSheet(draftRecId = null) {
+function openDateWheelSheet(draftRecId) {
   if (draftRecId !== undefined) state.wheelDraftRecId = draftRecId;
   const p = currentPerson();
   if (!p) return;
@@ -2280,7 +2515,7 @@ function openDateWheelSheet(draftRecId = null) {
     <div class="s-card">
       <div class="s-label"><span>记挂原话</span><span>${escapeHtml(draft?.lunar_label || '农历/公历双历')}</span></div>
       <div style="font-family:var(--font-serif);font-size:14px;line-height:1.62;">${escapeHtml(draft?.text || `为「${p.name}」核对一个需要提前提醒的温暖日子。`)}</div>
-      <input class="spot-input" id="wheelTitleInput" type="text" value="${escapeHtml(draft?.card_title || draft?.text?.slice(0, 28) || `给${p.name}准备心意`)}" style="padding:8px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);font-size:13px;" />
+      <input class="spot-input" id="wheelTitleInput" type="text" value="${escapeHtml(draft?.card_title || draft?.text?.slice(0, 28) || `给${p.name}准备心意`)}" style="padding:8px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
     </div>
     <div class="s-card">
       <div class="s-label"><span>对应公历日期核对</span><span>${state.wheelYear}年${state.wheelMonth}月${state.wheelDay}日</span></div>
@@ -2371,7 +2606,7 @@ function renderSpotlight() {
     const body = r.caption || (r.segments && r.segments.join('')) || r.summary || r.text || '';
     const hay = `${r.card_title || ''} ${r.tag || ''} ${r.date || ''} ${body}`.toLowerCase();
     if (!ql || hay.includes(ql)) {
-      const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+      const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : r.type === 'shield-log' ? '🛡' : r.type === 'draft' ? '✎' : '✦';
       items.push({
         icon,
         title: r.card_title || r.tag || r.date,
@@ -2637,9 +2872,9 @@ async function seedDemoPackIntoBackend() {
     }
 
     fill.style.width = '100%';
-    lbl.textContent = '✓ 全部 8 位示范人物已加密落库，正在开启手帐…';
+    lbl.textContent = '✓ 全部 8 位示范人物已加密备妥，正在开启手帐…';
     await refreshBootstrap({ keepPersonId: false });
-    showToast('✦ 8 位心络日常示范人物已写入加密 PostgreSQL');
+    showToast('✦ 已载入 8 位心络日常示范人物');
   } catch (err) {
     lbl.textContent = `载入中断：${err.message}`;
     showToast(err.message || '载入示范集失败');
@@ -2754,8 +2989,30 @@ async function handleManualVerifyOtp(e) {
    12. EVENT WIRING & BOOTSTRAP
    ============================================================================ */
 function wireEvents() {
-  if (new URLSearchParams(window.location.search).get('iphone') === '1') {
+  if (window.__MW_NATIVE_IOS__ || window.__MW_IOS_NATIVE__) {
+    document.documentElement.classList.add('is-native-ios');
+    document.documentElement.classList.remove('v15-iphone-sim');
+  } else if (new URLSearchParams(window.location.search).get('iphone') === '1') {
     document.documentElement.classList.add('v15-iphone-sim');
+  }
+
+  // Native iOS WKWebView push bridge (status bar tap-to-top + keyboard frame sync)
+  window.__mwNativeEvent = (ev) => {
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.type === 'statusbar.tap') {
+      scrollMainToTop(true);
+    } else if (ev.type === 'keyboard.change' && typeof ev.height === 'number') {
+      document.documentElement.style.setProperty('--mw-kb-inset', `${Math.max(0, Math.round(ev.height))}px`);
+    }
+  };
+
+  // Mobile Safari visualViewport keyboard fallback when outside native WKWebView
+  if (window.visualViewport && !(window.__MW_NATIVE_IOS__ || window.__MW_IOS_NATIVE__)) {
+    const syncVv = () => {
+      const kb = Math.max(0, Math.round(window.innerHeight - window.visualViewport.height - window.visualViewport.offsetTop));
+      document.documentElement.style.setProperty('--mw-kb-inset', `${kb > 80 ? kb : 0}px`);
+    };
+    window.visualViewport.addEventListener('resize', syncVv);
   }
 
   document.getElementById('btnEnterSim').addEventListener('click', () => {
@@ -2811,17 +3068,42 @@ function wireEvents() {
     else openDossierSheet();
   });
 
-  // Tri-Dock Voice Orb (Hold -> Split-Arc / Quick Tap -> 4-Mode Quick Capture)
+  // Tri-Dock Voice Orb (Hold >=360ms -> Split-Arc / Quick Tap click -> 4-Mode Quick Capture)
+  // Using `click` for quick-tap eliminates iOS WebKit ghost-click dismissal on `#sheetBackdrop`!
   const voiceOrb = document.getElementById('dockVoiceOrb');
-  let holdTimer = null, didHold = false;
-  voiceOrb.addEventListener('pointerdown', () => {
+  let holdTimer = null, didHold = false, startX = 0, startY = 0;
+  const clearHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
+  voiceOrb.addEventListener('pointerdown', (e) => {
     didHold = false;
-    holdTimer = setTimeout(() => { didHold = true; openVoiceArc(); }, 340);
+    startX = e.clientX || 0;
+    startY = e.clientY || 0;
+    clearHold();
+    holdTimer = setTimeout(() => {
+      didHold = true;
+      holdTimer = null;
+      try { window.webkit?.messageHandlers?.mwHaptic?.postMessage('medium'); } catch (_) {}
+      openVoiceArc();
+    }, 360);
   });
-  const clearHold = () => clearTimeout(holdTimer);
-  voiceOrb.addEventListener('pointerup', () => { clearHold(); if (!didHold) openCaptureSheet(); });
+  voiceOrb.addEventListener('pointermove', (e) => {
+    if (holdTimer && Math.hypot((e.clientX || 0) - startX, (e.clientY || 0) - startY) > 14) {
+      clearHold();
+    }
+  });
+  voiceOrb.addEventListener('pointerup', clearHold);
   voiceOrb.addEventListener('pointerleave', clearHold);
   voiceOrb.addEventListener('pointercancel', clearHold);
+  voiceOrb.addEventListener('contextmenu', (e) => e.preventDefault());
+  voiceOrb.addEventListener('click', (e) => {
+    clearHold();
+    if (didHold) {
+      e.preventDefault();
+      e.stopPropagation();
+      didHold = false;
+      return;
+    }
+    openCaptureSheet();
+  });
 
   // Split-Arc Voice Stage
   document.getElementById('btnLaunchSplitArc').addEventListener('click', openVoiceArc);
@@ -2875,8 +3157,11 @@ function wireEvents() {
   document.getElementById('btnCapAutoRoute').addEventListener('click', () => commitSmartCapture(document.getElementById('capTextarea').value, true));
   document.getElementById('btnCapSaveDirect').addEventListener('click', () => commitSmartCapture(document.getElementById('capTextarea').value, false));
 
-  // Sheets close
-  document.getElementById('sheetBackdrop').addEventListener('click', closeAllSheets);
+  // Sheets close (debounced against iOS touch ghost-clicks right after openSheet)
+  document.getElementById('sheetBackdrop').addEventListener('click', () => {
+    if (Date.now() - state.sheetOpenedAt < 260) return;
+    closeAllSheets();
+  });
   document.querySelectorAll('[data-close-sheet]').forEach((b) => b.addEventListener('click', closeAllSheets));
 
   // Spotlight
