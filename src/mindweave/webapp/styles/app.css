@@ -79,7 +79,21 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 button, input, textarea { font-family: inherit; }
-button { cursor: pointer; border: none; background: none; color: inherit; }
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+button > svg,
+button > canvas,
+button > img {
+  pointer-events: none;
+}
 
 /* ============================================================================
    ZERO-IFRAME TITANIUM iPHONE 16 PRO SIMULATOR CHASSIS (`html.v15-iphone-sim`)
@@ -286,6 +300,12 @@ html[data-has-photo="false"] .photo-backdrop {
     radial-gradient(circle at 82% 24%, rgba(218, 174, 134, 0.22) 0%, transparent 46%),
     linear-gradient(180deg, #FAF5EE 0%, #F4ECE1 56%, #EDE2D3 100%) !important;
 }
+html[data-lighting="evening"][data-has-photo="false"]:not([data-tier="silver"]) .photo-backdrop {
+  background:
+    radial-gradient(circle at 22% 16%, rgba(224, 168, 108, 0.36) 0%, transparent 52%),
+    radial-gradient(circle at 82% 24%, rgba(188, 142, 114, 0.24) 0%, transparent 48%),
+    linear-gradient(180deg, #F1E5D5 0%, #E8D9C5 56%, #DFCCB5 100%) !important;
+}
 html[data-tier="silver"] .photo-backdrop {
   background:
     repeating-linear-gradient(90deg, rgba(32, 52, 74, 0.028) 0 1px, transparent 1px 28px),
@@ -477,15 +497,18 @@ html.v15-iphone-sim .desktop-only { display: none !important; }
   flex-direction: column;
   gap: 3px;
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
   transform: translateY(-6px) scale(0.96);
-  transition: opacity 180ms ease, transform 220ms var(--ease-spring);
+  transition: opacity 180ms ease, transform 220ms var(--ease-spring), visibility 0s linear 180ms;
   z-index: 65;
 }
 .arrow-popover.is-open {
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
   transform: translateY(0) scale(1);
+  transition: opacity 180ms ease, transform 220ms var(--ease-spring), visibility 0s linear 0s;
 }
 .arrow-opt-btn {
   display: flex;
@@ -638,7 +661,9 @@ html[data-has-photo="false"] .person-name-h1 {
   transition: transform 180ms ease;
   flex-shrink: 0;
 }
-.dossier-entry-btn:hover { transform: translateY(-1px); }
+@media (hover: hover) and (pointer: fine) {
+  .dossier-entry-btn:hover { transform: translateY(-1px); }
+}
 
 /* Pure 3-Scale Time Row: 纸页 · 月册 · 年轮 + Count / Silver Veil Switch */
 .scale-bar-row {
@@ -706,7 +731,9 @@ html[data-has-photo="false"] .person-name-h1 {
   font-size: 12.5px;
   transition: transform 180ms ease;
 }
-.care-ribbon-btn:hover { transform: translateY(-1px); }
+@media (hover: hover) and (pointer: fine) {
+  .care-ribbon-btn:hover { transform: translateY(-1px); }
+}
 .care-ribbon-dot {
   width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
   background: var(--real-warm, #E5B982);
@@ -744,7 +771,9 @@ html[data-tier="crystal"] .care-ribbon-dot { background: #6A98BC; box-shadow: no
     inset 0 1px 0.75px rgba(255, 255, 255, 0.54);
   transition: transform 240ms var(--ease-spring), box-shadow 240ms ease;
 }
-.slip-shell:hover { transform: translateY(-2px); }
+@media (hover: hover) and (pointer: fine) {
+  .slip-shell:hover { transform: translateY(-2px); }
+}
 .slip-shell.is-flash {
   box-shadow: 0 0 0 2px var(--real-warm, #EAC696), 0 18px 44px rgba(0, 0, 0, 0.44);
 }
@@ -854,7 +883,9 @@ html[data-has-photo="false"] .slip-inner {
   font-size: 13px; opacity: 0.78;
   transition: transform 160ms ease, opacity 160ms ease;
 }
-.slip-fav-btn:hover { opacity: 1; transform: scale(1.15); }
+@media (hover: hover) and (pointer: fine) {
+  .slip-fav-btn:hover { opacity: 1; transform: scale(1.15); }
+}
 .slip-fav-btn.is-fav { color: var(--real-warm, #F0C886); opacity: 1; }
 html[data-tier="silver"] .slip-fav-btn.is-fav { color: #4A6D8C; }
 
@@ -873,7 +904,9 @@ html[data-tier="silver"] .slip-fav-btn.is-fav { color: #4A6D8C; }
   display: block;
   transition: transform 550ms var(--ease-spring);
 }
-.slip-shell:hover .photo-slip-stage img { transform: scale(1.025); }
+@media (hover: hover) and (pointer: fine) {
+  .slip-shell:hover .photo-slip-stage img { transform: scale(1.025); }
+}
 .photo-slip-scrim {
   position: absolute;
   inset: 0;
@@ -1097,7 +1130,9 @@ html[data-has-photo="false"] .chat-speaker { background: rgba(24, 36, 50, 0.08);
   -webkit-backdrop-filter: blur(18px);
   box-shadow: var(--lg-shadow);
 }
-.question-whisper-btn:hover { color: var(--lg-ink); }
+@media (hover: hover) and (pointer: fine) {
+  .question-whisper-btn:hover { color: var(--lg-ink); }
+}
 
 /* ============================================================================
    5. SEASON (`月册`) & RINGS (`年轮`) VIEWS
@@ -1298,6 +1333,7 @@ html[data-has-photo="false"] .dock-dir-btn { background: rgba(24, 36, 50, 0.06);
   height: 42px;
   border-radius: 50%;
   display: block;
+  pointer-events: none;
 }
 .dock-cupid-spark {
   position: absolute;
@@ -1738,11 +1774,12 @@ html[data-has-photo="false"] .cupid-send-btn { background: #233344; color: #FFFF
   inset: 0;
   background: rgba(0, 0, 0, 0.36);
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  transition: opacity 220ms ease;
+  transition: opacity 220ms ease, visibility 0s linear 220ms;
   z-index: 5;
 }
-.cupid-material-scrim.is-open { opacity: 1; pointer-events: auto; }
+.cupid-material-scrim.is-open { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 220ms ease, visibility 0s linear 0s; }
 .cupid-material-drawer {
   position: absolute;
   top: 0; right: 0; bottom: 0;
@@ -1754,13 +1791,15 @@ html[data-has-photo="false"] .cupid-send-btn { background: #233344; color: #FFFF
   border-left: 0.75px solid var(--lg-border);
   box-shadow: -18px 0 48px rgba(0, 0, 0, 0.36);
   transform: translateX(100%);
-  transition: transform 280ms var(--ease-spring);
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 280ms var(--ease-spring), visibility 0s linear 280ms;
   z-index: 6;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.cupid-material-drawer.is-open { transform: translateX(0); }
+.cupid-material-drawer.is-open { transform: translateX(0); visibility: visible; pointer-events: auto; transition: transform 280ms var(--ease-spring), visibility 0s linear 0s; }
 .drawer-list {
   flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
 }
@@ -1910,7 +1949,7 @@ html[data-has-photo="false"] .s-card {
 }
 .s-pill-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .s-pill {
-  height: 28px; padding: 0 11px; border-radius: 999px; font-size: 12px;
+  height: 32px; padding: 0 12px; border-radius: 999px; font-size: 12.5px;
   white-space: nowrap; flex-shrink: 0;
   background: rgba(255, 255, 255, 0.10);
   border: 0.75px solid rgba(255, 255, 255, 0.18);
@@ -2494,7 +2533,9 @@ html[data-has-photo="false"] .feed-viewport > .slip-shell {
   color: #FAF6F0;
   font-size: 11px;
 }
-.photo-hero-pill:hover { background: rgba(255, 255, 255, 0.28); }
+@media (hover: hover) and (pointer: fine) {
+  .photo-hero-pill:hover { background: rgba(255, 255, 255, 0.28); }
+}
 
 /* Richer WeChat Header Pill + Takeaway Strip (matching v12/v13!) */
 .chat-head-row {

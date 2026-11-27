@@ -942,14 +942,18 @@ function renderFluidOrbToCanvas(canvas, size) {
 }
 
 function animateOrbs(ts = 0) {
-  if (!lastOrbTs || ts - lastOrbTs >= 42) {
+  if (!lastOrbTs || ts - lastOrbTs >= 66) {
     lastOrbTs = ts;
     const target = state.cupidThinking ? 3.4 : 1.0;
     orbSpeed += (target - orbSpeed) * 0.14;
-    orbT += 0.045 * orbSpeed;
-    renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
-    if (document.getElementById('cupidFullscreen')?.classList.contains('is-open')) {
+    orbT += 0.065 * orbSpeed;
+    const cupidOpen = document.getElementById('cupidFullscreen')?.classList.contains('is-open');
+    const authOpen = document.getElementById('authGateOverlay')?.classList.contains('is-open');
+    const sheetOpen = document.getElementById('sheetBackdrop')?.classList.contains('is-open');
+    if (cupidOpen) {
       renderFluidOrbToCanvas(document.getElementById('cupidHeadCanvas'), 32);
+    } else if (!authOpen && !sheetOpen) {
+      renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
     }
   }
   requestAnimationFrame(animateOrbs);
@@ -1637,12 +1641,16 @@ function closeCupid() {
 function openMatDrawer() {
   renderMatDrawer();
   document.getElementById('cupidMatScrim').classList.add('is-open');
-  document.getElementById('cupidMatDrawer').classList.add('is-open');
+  const drawer = document.getElementById('cupidMatDrawer');
+  drawer.classList.add('is-open');
+  drawer.setAttribute('aria-hidden', 'false');
 }
 
 function closeMatDrawer() {
   document.getElementById('cupidMatScrim').classList.remove('is-open');
-  document.getElementById('cupidMatDrawer').classList.remove('is-open');
+  const drawer = document.getElementById('cupidMatDrawer');
+  drawer.classList.remove('is-open');
+  drawer.setAttribute('aria-hidden', 'true');
 }
 
 function renderMatDrawer() {
@@ -2205,26 +2213,34 @@ function renderDirectorySheet() {
 
 /* Sheet 3: 轻声记一笔 (Voice / WeChat Chat / Photo Upload / Care Reminder) */
 function startCaptureWave() {
+  if (state.capWaveRaf) {
+    cancelAnimationFrame(state.capWaveRaf);
+    state.capWaveRaf = null;
+  }
   const cv = document.getElementById('capWaveCv');
   if (!cv) return;
   const ctx = cv.getContext('2d');
+  const warm = getComputedStyle(document.documentElement).getPropertyValue('--real-warm').trim() || '#E5BC8B';
+  const p = currentPerson();
+  const isLight = !p || p.tier === 'silver' || !p.mainPhotoUrl;
   let phase = 0;
-  const draw = () => {
-    const W = cv.width, H = cv.height;
-    ctx.clearRect(0, 0, W, H);
-    const bars = 46, gap = W / bars;
-    const warm = getComputedStyle(document.documentElement).getPropertyValue('--real-warm').trim() || '#E5BC8B';
-    const p = currentPerson();
-    const isLight = !p || p.tier === 'silver' || !p.mainPhotoUrl;
-    for (let i = 0; i < bars; i++) {
-      const amp = 0.25 + 0.65 * Math.abs(Math.sin(phase + i * 0.34) * Math.cos(phase * 0.5 + i * 0.17));
-      const bh = Math.max(5, amp * (H - 12));
-      ctx.fillStyle = i % 4 === 0 ? warm : (isLight ? 'rgba(32,52,74,0.28)' : 'rgba(255,250,242,0.38)');
-      ctx.beginPath();
-      ctx.roundRect(i * gap + 2, (H - bh) / 2, Math.max(3, gap - 5), bh, 3);
-      ctx.fill();
+  let lastTs = 0;
+  const draw = (ts = 0) => {
+    if (!lastTs || ts - lastTs >= 50) {
+      lastTs = ts;
+      const W = cv.width, H = cv.height;
+      ctx.clearRect(0, 0, W, H);
+      const bars = 46, gap = W / bars;
+      for (let i = 0; i < bars; i++) {
+        const amp = 0.25 + 0.65 * Math.abs(Math.sin(phase + i * 0.34) * Math.cos(phase * 0.5 + i * 0.17));
+        const bh = Math.max(5, amp * (H - 12));
+        ctx.fillStyle = i % 4 === 0 ? warm : (isLight ? 'rgba(32,52,74,0.28)' : 'rgba(255,250,242,0.38)');
+        ctx.beginPath();
+        ctx.roundRect(i * gap + 2, (H - bh) / 2, Math.max(3, gap - 5), bh, 3);
+        ctx.fill();
+      }
+      phase += 0.14;
     }
-    phase += 0.08;
     state.capWaveRaf = requestAnimationFrame(draw);
   };
   state.capWaveRaf = requestAnimationFrame(draw);
@@ -3020,6 +3036,10 @@ function resetAllAccountState() {
   if (cupidIn) cupidIn.value = '';
   const feed = document.getElementById('feedViewport');
   if (feed) feed.innerHTML = '';
+  const titleEl = document.getElementById('personNameTitle');
+  if (titleEl) titleEl.textContent = '心络';
+  const sealsEl = document.getElementById('dockSealsCluster');
+  if (sealsEl) sealsEl.innerHTML = '';
   const bgImg = document.getElementById('backdropImg');
   if (bgImg) bgImg.removeAttribute('src');
   resetSeedProgressUi();
@@ -3064,8 +3084,8 @@ async function handleQuickGuestLogin() {
       accessToken: verified.accessToken,
       refreshToken: verified.refreshToken,
     });
-    closeAuthGate();
     await refreshBootstrap({ keepPersonId: false });
+    closeAuthGate();
   } catch (err) {
     hint.textContent = err.message || '登录稍忙，请重试';
   } finally {
@@ -3124,8 +3144,8 @@ async function handleManualVerifyOtp(e) {
       accessToken: verified.accessToken,
       refreshToken: verified.refreshToken,
     });
-    closeAuthGate();
     await refreshBootstrap({ keepPersonId: false });
+    closeAuthGate();
   } catch (err) {
     hint.textContent = err.message || '验证码无效或已过期';
   }
@@ -3195,12 +3215,19 @@ function wireEvents() {
   document.getElementById('btnOpenSpotlight').addEventListener('click', openSpotlight);
 
   const arrowPop = document.getElementById('arrowPopover');
-  document.getElementById('btnArrowPin').addEventListener('click', (e) => {
+  const arrowPinBtn = document.getElementById('btnArrowPin');
+  const setArrowPopoverOpen = (open) => {
+    arrowPop.classList.toggle('is-open', open);
+    arrowPop.setAttribute('aria-hidden', open ? 'false' : 'true');
+    arrowPinBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  arrowPinBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    arrowPop.classList.toggle('is-open');
+    setArrowPopoverOpen(!arrowPop.classList.contains('is-open'));
   });
-  document.addEventListener('click', () => arrowPop.classList.remove('is-open'));
+  document.addEventListener('click', () => setArrowPopoverOpen(false));
   document.querySelectorAll('[data-tier-pick]').forEach((b) => b.addEventListener('click', () => {
+    setArrowPopoverOpen(false);
     switchPersonTier(b.dataset.tierPick);
   }));
 

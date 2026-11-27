@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>心络 MindWeave · Lumina 关系手帐</title>
-  <link rel="stylesheet" href="/styles/app.css?v=18" />
+  <link rel="stylesheet" href="/styles/app.css?v=19" />
 </head>
 <body>
 
@@ -59,7 +59,7 @@
             <img class="arrow-pin-img" id="arrowPinImg" src="/assets/cupid/arrow_pin_gold.webp" alt="" />
             <span id="arrowPinLabel">金箭</span>
           </button>
-          <div class="arrow-popover" id="arrowPopover" role="menu">
+          <div class="arrow-popover" id="arrowPopover" role="menu" aria-hidden="true">
             <button class="arrow-opt-btn" data-tier-pick="gold" type="button">
               <img id="optImgGold" src="/assets/cupid/arrow_pin_gold.webp" alt="" />
               <span class="arrow-opt-txt"><strong>金箭 · 记爱</strong><span>温润珍藏 · 换位视角</span></span>
@@ -220,7 +220,7 @@
 
       <!-- Right-Edge Journal Material Drawer -->
       <div class="cupid-material-scrim" id="cupidMatScrim"></div>
-      <aside class="cupid-material-drawer" id="cupidMatDrawer" aria-label="引用手帐素材">
+      <aside class="cupid-material-drawer" id="cupidMatDrawer" aria-label="引用手帐素材" aria-hidden="true">
         <div style="display:flex;align-items:center;justify-content:space-between;">
           <div>
             <strong id="matDrawerTitle" style="font-family:var(--font-serif);font-size:16px;">手帐素材</strong>
@@ -395,6 +395,6 @@
 
 <input type="file" id="dossierBgUploadInput" accept="image/*" hidden />
 
-<script type="module" src="/scripts/app.mjs?v=18"></script>
+<script type="module" src="/scripts/app.mjs?v=19"></script>
 </body>
 </html>
