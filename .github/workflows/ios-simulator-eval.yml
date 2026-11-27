@@ -201,13 +201,29 @@ jobs:
             -derivedDataPath "$PWD/ios/DerivedDataSim" \
             -enableCodeCoverage NO \
             -only-testing:MindWeaveUITests/MindWeaveSimulatorEvalTests/testRealIOSSimulatorThreeUserSessions \
-            test-without-building 2>&1 | tee sim_eval_out/xcodebuild_test.log
-          TEST_STATUS=${PIPESTATUS[0]}
+            test-without-building > sim_eval_out/xcodebuild_test.log 2>&1 &
+          XB_PID=$!
+          XB_ELAPSED=0
+          XB_MAX=1320
+          while kill -0 "${XB_PID}" 2>/dev/null; do
+            if (( XB_ELAPSED >= XB_MAX )); then
+              echo "WARNING: xcodebuild exceeded ${XB_MAX}s watchdog; terminating to flush video!"
+              kill -TERM "${XB_PID}" 2>/dev/null || true
+              sleep 3
+              kill -KILL "${XB_PID}" 2>/dev/null || true
+              break
+            fi
+            sleep 5
+            XB_ELAPSED=$((XB_ELAPSED + 5))
+          done
+          wait "${XB_PID}"
+          TEST_STATUS=$?
           set -e
 
           kill -INT "${REC_PID}" || true
           wait "${REC_PID}" || true
-          sleep 1
+          sleep 1.5
+          tail -n 60 sim_eval_out/xcodebuild_test.log || true
 
           echo "=== Real iOS Simulator Video Artifact ==="
           ls -lh sim_eval_out/real_ios_simulator_walkthrough.mp4 || true

@@ -45,7 +45,12 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             Thread.sleep(forTimeInterval: seconds)
         }
 
-        func firstButton(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
+        func isOnScreen(_ frame: CGRect) -> Bool {
+            let screenH = max(app.frame.height, 800)
+            return frame.width > 1 && frame.height > 1 && frame.midY >= 16 && frame.midY <= (screenH - 16)
+        }
+
+        func firstButton(containing text: String, timeout: TimeInterval = 18) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
             let matches = app.buttons.matching(pred)
             let first = matches.firstMatch
@@ -54,33 +59,69 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
                 if count > 1 {
                     for i in 0..<count {
                         let cand = matches.element(boundBy: i)
-                        if cand.exists && cand.isHittable {
+                        if cand.exists && cand.isHittable && isOnScreen(cand.frame) {
                             return cand
                         }
                     }
                 }
                 return first
             }
-            let webAny = app.webViews.firstMatch.descendants(matching: .any).matching(pred).firstMatch
-            if webAny.waitForExistence(timeout: max(1.0, timeout - 3.5)) {
-                return webAny
+            let otherMatch = app.otherElements.matching(pred).firstMatch
+            if otherMatch.waitForExistence(timeout: max(1.0, min(4.0, timeout - 3.5))) {
+                return otherMatch
+            }
+            if timeout > 7.5, first.waitForExistence(timeout: timeout - 7.5) {
+                return first
             }
             return first
         }
 
-        func firstStaticText(containing text: String, timeout: TimeInterval = 22) -> XCUIElement {
+        func firstStaticText(containing text: String, timeout: TimeInterval = 18) -> XCUIElement {
             let pred = NSPredicate(format: "label CONTAINS[c] %@", text)
             let el = app.staticTexts.matching(pred).firstMatch
-            if el.waitForExistence(timeout: min(3.5, timeout)) {
+            if el.waitForExistence(timeout: min(4.0, timeout)) {
                 return el
             }
-            let webAny = app.webViews.firstMatch.descendants(matching: .any).matching(pred).firstMatch
-            _ = webAny.waitForExistence(timeout: max(1.0, timeout - 3.5))
-            return webAny
+            let otherMatch = app.otherElements.matching(pred).firstMatch
+            if otherMatch.waitForExistence(timeout: max(1.0, min(3.0, timeout - 4.0))) {
+                return otherMatch
+            }
+            if timeout > 7.0 {
+                _ = el.waitForExistence(timeout: timeout - 7.0)
+            }
+            return el
+        }
+
+        func scrollFeed(up: Bool) {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.72 : 0.28))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.24 : 0.76))
+            start.press(forDuration: 0.04, thenDragTo: end)
+            pause(0.65)
+        }
+
+        func scrollUntilButtonVisible(containing text: String, maxSwipes: Int = 6) -> XCUIElement? {
+            let screenH = max(app.frame.height, 800)
+            for _ in 0...maxSwipes {
+                let btn = firstButton(containing: text, timeout: 2.2)
+                if btn.exists {
+                    let f = btn.frame
+                    if f.height > 1 && f.midY >= 120 && f.midY <= (screenH - 135) && btn.isHittable {
+                        return btn
+                    }
+                    if f.midY < 120 {
+                        scrollFeed(up: false)
+                    } else {
+                        scrollFeed(up: true)
+                    }
+                } else {
+                    scrollFeed(up: true)
+                }
+            }
+            return nil
         }
 
         @discardableResult
-        func tapButton(containing text: String, timeout: TimeInterval = 22, settle: TimeInterval = 0.85) -> Bool {
+        func tapButton(containing text: String, timeout: TimeInterval = 18, settle: TimeInterval = 0.85) -> Bool {
             let btn = firstButton(containing: text, timeout: timeout)
             guard btn.exists else {
                 print("MW_TAP_MISS|\(text)")
@@ -90,6 +131,11 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             let f = btn.frame
             print("MW_TAP|\(text)|x=\(Int(f.origin.x))|y=\(Int(f.origin.y))|w=\(Int(f.size.width))|h=\(Int(f.size.height))|hittable=\(btn.isHittable)")
             fflush(stdout)
+            guard isOnScreen(f) else {
+                print("MW_TAP_OFFSCREEN|\(text)|y=\(Int(f.midY))")
+                fflush(stdout)
+                return false
+            }
             if btn.isHittable {
                 btn.tap()
             } else {
@@ -103,16 +149,21 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         func tapButtonExpecting(
             _ text: String,
             expectButton expected: String,
-            timeout: TimeInterval = 18,
-            expectTimeout: TimeInterval = 6.0,
+            timeout: TimeInterval = 15,
+            expectTimeout: TimeInterval = 5.0,
             settle: TimeInterval = 0.9
         ) -> Bool {
             for attempt in 1...2 {
-                let btn = firstButton(containing: text, timeout: attempt == 1 ? timeout : 6)
+                let btn = firstButton(containing: text, timeout: attempt == 1 ? timeout : 4)
                 guard btn.exists else { return false }
                 let f = btn.frame
                 print("MW_TAP_EXPECT|attempt=\(attempt)|\(text)->\(expected)|x=\(Int(f.origin.x))|y=\(Int(f.origin.y))|w=\(Int(f.size.width))|h=\(Int(f.size.height))|hittable=\(btn.isHittable)")
                 fflush(stdout)
+                guard isOnScreen(f) else {
+                    print("MW_TAP_OFFSCREEN|\(text)|y=\(Int(f.midY))")
+                    fflush(stdout)
+                    return false
+                }
                 if attempt == 1 && btn.isHittable {
                     btn.tap()
                 } else {
@@ -281,36 +332,25 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         mark("s1_03_mom_home", hold: 1.5)
 
         // Real iOS touch swipe scrolling down through Mom's voice memo, real photo cards, and pencil draft slip
-        app.swipeUp()
-        pause(0.9)
-        mark("s1_04_mom_scrolled", hold: 1.1)
-        app.swipeDown()
-        pause(0.85)
+        scrollFeed(up: true)
+        mark("s1_04_mom_scrolled", hold: 1.0)
+        scrollFeed(up: false)
 
         // Scale-2 Monthly Gallery (`月册`) & Scale-3 Concentric Rings (`年轮`)
         XCTAssertTrue(tapButton(containing: "月册", timeout: 12, settle: 1.0), "S1: Switch to 月册")
-        mark("s1_05_season_gallery", hold: 1.1)
+        mark("s1_05_season_gallery", hold: 1.0)
         XCTAssertTrue(tapButton(containing: "年轮", timeout: 12, settle: 1.0), "S1: Switch to 年轮")
-        mark("s1_06_rings_astrolabe", hold: 1.1)
+        mark("s1_06_rings_astrolabe", hold: 1.0)
         XCTAssertTrue(tapButton(containing: "纸页", timeout: 12, settle: 0.9), "S1: Return to 纸页")
 
-        // Scroll to Lunar Draft Slip (`12月16日 ✎ · 轻点核对`) -> 3-Column Lunar Wheel -> Select 17日 -> Confirm!
-        app.swipeUp()
-        pause(0.75)
-        if !firstButton(containing: "轻点核对", timeout: 3).exists {
-            app.swipeUp()
-            pause(0.6)
-        }
-        if tapButtonExpecting("轻点核对", expectButton: "确认落墨", timeout: 10, expectTimeout: 5, settle: 0.9) {
+        // Scroll safely until Lunar Draft Slip (`12月16日 ✎ · 轻点核对`) is visibly on screen -> 3-Column Lunar Wheel -> 17日 -> Confirm!
+        if scrollUntilButtonVisible(containing: "轻点核对", maxSwipes: 7) != nil,
+           tapButtonExpecting("轻点核对", expectButton: "确认落墨", timeout: 8, expectTimeout: 5, settle: 0.9) {
             mark("s1_07_lunar_wheel_open", hold: 0.9)
             _ = tapButton(containing: "17日", timeout: 8, settle: 0.5)
             XCTAssertTrue(tapButton(containing: "确认落墨", timeout: 10, settle: 1.1), "S1: Confirm lunar wheel date")
             mark("s1_08_lunar_wheel_confirmed", hold: 0.9)
         }
-        app.swipeDown()
-        pause(0.6)
-        app.swipeDown()
-        pause(0.5)
 
         // Quick Capture -> Split-Arc Voice (`断弧分拣 ↗`) -> Multi-Person Auto-Split (`↑ 自动分析`) -> Live 5s Undo!
         XCTAssertTrue(tapButtonExpecting("按住断弧语音或轻点随记", expectButton: "断弧分拣", timeout: 12, expectTimeout: 6, settle: 0.9), "S1: Open Quick Capture")
@@ -322,7 +362,8 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
             XCTAssertTrue(tapButton(containing: "撤销", timeout: 5, settle: 1.1), "S1: Tap 5s live Undo")
         }
 
-        // Open Mom Dossier Sheet
+        // Scroll cleanly back to top so `人物档案 ›` is visibly on screen, then open Mom Dossier Sheet
+        _ = scrollUntilButtonVisible(containing: "人物档案", maxSwipes: 7)
         XCTAssertTrue(tapButtonExpecting("人物档案", expectButton: "关闭面板", timeout: 12, expectTimeout: 6, settle: 0.95), "S1: Open Mom Dossier")
         mark("s1_11_mom_dossier", hold: 1.0)
         _ = tapButton(containing: "关闭面板", timeout: 8, settle: 0.75)

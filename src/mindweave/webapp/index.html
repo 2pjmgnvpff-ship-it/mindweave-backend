@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>心络 MindWeave · Lumina 关系手帐</title>
-  <link rel="stylesheet" href="/styles/app.css?v=19" />
+  <link rel="stylesheet" href="/styles/app.css?v=20" />
 </head>
 <body>
 
@@ -158,7 +158,7 @@
     <div class="dispatch-receipt" id="dispatchReceipt" role="status"></div>
 
     <!-- Scene 5: Split-Arc Voice Hold Stage (`断弧语音三向路由`) -->
-    <section class="voice-arc-stage" id="voiceArcStage" aria-label="断弧语音输入">
+    <section class="voice-arc-stage" id="voiceArcStage" role="dialog" aria-modal="true" aria-label="断弧语音输入">
       <div class="voice-live-card">
         <div class="voice-live-wave-row">
           <span style="width:8px;height:8px;border-radius:50%;background:#E86752;box-shadow:0 0 10px #E86752;"></span>
@@ -186,7 +186,7 @@
     </section>
 
     <!-- Scene 6: Full-Screen Immersive Cupid Companion Chat + Right-Edge Material Drawer -->
-    <section class="cupid-fullscreen" id="cupidFullscreen" aria-label="丘比特伴聊">
+    <section class="cupid-fullscreen" id="cupidFullscreen" role="dialog" aria-modal="true" aria-label="丘比特伴聊">
       <header class="cupid-head">
         <button class="lg-orb-btn" id="btnCloseCupid" type="button" aria-label="返回手帐">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
@@ -338,7 +338,7 @@
     </section>
 
     <!-- Apple Photos iOS 26 Darkroom Lightbox -->
-    <section class="lightbox-overlay" id="lightboxOverlay" aria-label="暗房观片">
+    <section class="lightbox-overlay" id="lightboxOverlay" role="dialog" aria-modal="true" aria-label="暗房观片">
       <div class="lb-topbar">
         <div class="lb-pill">
           <span id="lbCounter">01 / 01</span>
@@ -362,7 +362,7 @@
     </section>
 
     <!-- Serene Lumina Auth Gate (Real Email OTP + Dev 1-Tap Sign-In) -->
-    <section class="auth-gate-overlay" id="authGateOverlay" aria-label="登录心络">
+    <section class="auth-gate-overlay" id="authGateOverlay" role="dialog" aria-modal="true" aria-label="登录心络">
       <div class="auth-gate-card">
         <div class="auth-brand-row">
           <span class="auth-orb-badge">络</span>
@@ -395,6 +395,6 @@
 
 <input type="file" id="dossierBgUploadInput" accept="image/*" hidden />
 
-<script type="module" src="/scripts/app.mjs?v=19"></script>
+<script type="module" src="/scripts/app.mjs?v=20"></script>
 </body>
 </html>

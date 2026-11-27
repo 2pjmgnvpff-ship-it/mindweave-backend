@@ -950,9 +950,11 @@ function animateOrbs(ts = 0) {
     const cupidOpen = document.getElementById('cupidFullscreen')?.classList.contains('is-open');
     const authOpen = document.getElementById('authGateOverlay')?.classList.contains('is-open');
     const sheetOpen = document.getElementById('sheetBackdrop')?.classList.contains('is-open');
+    const lbOpen = document.getElementById('lightboxOverlay')?.classList.contains('is-open');
+    const voiceOpen = document.getElementById('voiceArcStage')?.classList.contains('is-open');
     if (cupidOpen) {
       renderFluidOrbToCanvas(document.getElementById('cupidHeadCanvas'), 32);
-    } else if (!authOpen && !sheetOpen) {
+    } else if (!authOpen && !sheetOpen && !lbOpen && !voiceOpen) {
       renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
     }
   }
@@ -1610,6 +1612,7 @@ async function openCupid() {
     ? '尽管跟丘比特吐吐槽，完全站你这边…'
     : `和丘比特说说关于「${p.name}」…`;
   document.getElementById('cupidFullscreen').classList.add('is-open');
+  syncModalAriaState();
   renderMatDrawer();
   renderCupidChat();
 
@@ -1636,6 +1639,7 @@ async function openCupid() {
 function closeCupid() {
   document.getElementById('cupidFullscreen').classList.remove('is-open');
   closeMatDrawer();
+  syncModalAriaState();
 }
 
 function openMatDrawer() {
@@ -1900,18 +1904,40 @@ async function sendCupidQuestion(qText) {
 /* ============================================================================
    8. LIQUID GLASS SHEETS (DOSSIER, DIRECTORY, CAPTURE, SETTINGS, LUNAR WHEEL)
    ============================================================================ */
+function syncModalAriaState() {
+  const modalOpen = Boolean(
+    document.getElementById('authGateOverlay')?.classList.contains('is-open')
+    || document.getElementById('lightboxOverlay')?.classList.contains('is-open')
+    || document.getElementById('cupidFullscreen')?.classList.contains('is-open')
+    || document.getElementById('voiceArcStage')?.classList.contains('is-open')
+    || document.getElementById('sheetBackdrop')?.classList.contains('is-open')
+  );
+  const layers = [
+    document.querySelector('.top-bar'),
+    document.getElementById('mainScroller'),
+    document.getElementById('glebTriDock'),
+  ];
+  layers.forEach((el) => {
+    if (!el) return;
+    if (modalOpen) el.setAttribute('aria-hidden', 'true');
+    else el.removeAttribute('aria-hidden');
+  });
+}
+
 function openSheet(id) {
   closeAllSheets();
   closeSpotlight();
   state.sheetOpenedAt = Date.now();
   document.getElementById('sheetBackdrop').classList.add('is-open');
   document.getElementById(id).classList.add('is-open');
+  syncModalAriaState();
 }
 
 function closeAllSheets() {
   document.getElementById('sheetBackdrop').classList.remove('is-open');
   document.querySelectorAll('.glass-sheet.is-open').forEach((s) => s.classList.remove('is-open'));
   if (state.capWaveRaf) { cancelAnimationFrame(state.capWaveRaf); state.capWaveRaf = null; }
+  syncModalAriaState();
 }
 
 /* Sheet 1: 人物档案口袋 */
@@ -2389,7 +2415,7 @@ function showDispatchReceipt(captureResp) {
   box.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
       <strong style="font-size:13px;">✓ 已落墨拆入 ${splits.length} 条手帐</strong>
-      ${captureId ? `<button class="s-pill" id="btnUndoDispatch" type="button" style="height:24px;font-size:11px;">撤销 5s</button>` : ''}
+      ${captureId ? `<button class="s-pill" id="btnUndoDispatch" type="button" style="height:28px;min-width:68px;justify-content:center;font-size:11.5px;font-variant-numeric:tabular-nums;">撤销 5s</button>` : ''}
     </div>
     ${splits.map((sp) => {
       const target = state.people.find((x) => x.id === sp.personId);
@@ -2461,9 +2487,11 @@ function openVoiceArc() {
   closeAllSheets();
   document.getElementById('routeCurrentLabel').textContent = `→ 默认此人（${p.name}）`;
   document.getElementById('voiceArcStage').classList.add('is-open');
+  syncModalAriaState();
 }
 function closeVoiceArc() {
   document.getElementById('voiceArcStage').classList.remove('is-open');
+  syncModalAriaState();
 }
 
 /* Sheet 4: 设置 · 生物锁 · 真实 PIPL 数据主权导出 */
@@ -2728,6 +2756,13 @@ function openLightboxById(recId) {
   state.lbIndex = Math.max(0, photos.findIndex((x) => x.id === recId));
   renderLightbox();
   document.getElementById('lightboxOverlay').classList.add('is-open');
+  syncModalAriaState();
+}
+
+function closeLightbox() {
+  const lb = document.getElementById('lightboxOverlay');
+  if (lb) lb.classList.remove('is-open');
+  syncModalAriaState();
 }
 
 function renderLightbox() {
@@ -3024,8 +3059,7 @@ function resetAllAccountState() {
   closeCupid();
   closeVoiceArc();
   closeSpotlight();
-  const lb = document.getElementById('lightboxOverlay');
-  if (lb) lb.classList.remove('is-open');
+  closeLightbox();
   const dr = document.getElementById('dispatchReceipt');
   if (dr) dr.classList.remove('is-open');
   const cap = document.getElementById('capTextarea');
@@ -3044,16 +3078,19 @@ function resetAllAccountState() {
   if (bgImg) bgImg.removeAttribute('src');
   resetSeedProgressUi();
   resetAuthGateUi();
+  syncModalAriaState();
 }
 
 function openAuthGate() {
   resetAuthGateUi();
   document.getElementById('authGateOverlay').classList.add('is-open');
+  syncModalAriaState();
 }
 function closeAuthGate() {
   document.getElementById('authGateOverlay').classList.remove('is-open');
   resetAuthGateUi();
   resetSeedProgressUi();
+  syncModalAriaState();
 }
 
 async function handleQuickGuestLogin() {
@@ -3352,7 +3389,10 @@ function wireEvents() {
   }));
 
   // Lightbox
-  document.getElementById('btnLbClose').addEventListener('click', () => document.getElementById('lightboxOverlay').classList.remove('is-open'));
+  document.getElementById('btnLbClose').addEventListener('click', closeLightbox);
+  document.getElementById('lightboxOverlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeLightbox();
+  });
   document.getElementById('btnLbPrev').addEventListener('click', () => { state.lbIndex = (state.lbIndex - 1 + state.lbPhotos.length) % state.lbPhotos.length; renderLightbox(); });
   document.getElementById('btnLbNext').addEventListener('click', () => { state.lbIndex = (state.lbIndex + 1) % state.lbPhotos.length; renderLightbox(); });
   document.getElementById('btnLbFav').addEventListener('click', () => {
@@ -3371,7 +3411,7 @@ function wireEvents() {
       closeSpotlight();
       closeAllSheets();
       closeVoiceArc();
-      document.getElementById('lightboxOverlay').classList.remove('is-open');
+      closeLightbox();
     }
   });
   window.addEventListener('resize', () => syncChromaForPerson(currentPerson()));
