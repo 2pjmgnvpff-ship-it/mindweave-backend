@@ -2442,9 +2442,11 @@ function showDispatchReceipt(captureResp) {
       : Date.now() + 4800;
     const syncCountdown = () => {
       const remMs = deadlineMs - Date.now();
-      if (remMs <= 250) {
+      if (remMs <= 0) {
         clearInterval(box._undoIv);
-        undoBtn.remove();
+        undoBtn.disabled = true;
+        undoBtn.textContent = '已入账';
+        undoBtn.style.opacity = '0.48';
         return;
       }
       undoBtn.textContent = `撤销 ${Math.max(1, Math.ceil(remMs / 1000))}s`;

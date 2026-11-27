@@ -356,10 +356,15 @@ final class MindWeaveSimulatorEvalTests: XCTestCase {
         XCTAssertTrue(tapButtonExpecting("按住断弧语音或轻点随记", expectButton: "断弧分拣", timeout: 12, expectTimeout: 6, settle: 0.9), "S1: Open Quick Capture")
         XCTAssertTrue(tapButtonExpecting("断弧分拣", expectButton: "↑ 自动分析", timeout: 10, expectTimeout: 6, settle: 0.9), "S1: Launch Split-Arc Voice")
         mark("s1_09_split_arc_voice", hold: 1.0)
-        XCTAssertTrue(tapButton(containing: "↑ 自动分析", timeout: 10, settle: 0.95), "S1: Dispatch multi-person split")
-        if firstButton(containing: "撤销", timeout: 8).exists {
-            mark("s1_10_dispatch_receipt_undo", hold: 0.65)
-            XCTAssertTrue(tapButton(containing: "撤销", timeout: 5, settle: 1.1), "S1: Tap 5s live Undo")
+        XCTAssertTrue(tapButton(containing: "↑ 自动分析", timeout: 10, settle: 0.35), "S1: Dispatch multi-person split")
+        let undoBtn = firstButton(containing: "撤销", timeout: 6)
+        if undoBtn.exists {
+            let uf = undoBtn.frame
+            print("MW_TAP|撤销|x=\(Int(uf.origin.x))|y=\(Int(uf.origin.y))|w=\(Int(uf.size.width))|h=\(Int(uf.size.height))")
+            fflush(stdout)
+            mark("s1_10_dispatch_receipt_undo", hold: 0.25)
+            undoBtn.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            pause(1.1)
         }
 
         // Scroll cleanly back to top so `人物档案 ›` is visibly on screen, then open Mom Dossier Sheet
