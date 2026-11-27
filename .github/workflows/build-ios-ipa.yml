@@ -1,0 +1,176 @@
+name: Build iOS IPA (MindWeave)
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base_url:
+        description: "Optional default backend URL baked into Info.plist (e.g. https://your-service.run.app)"
+        required: false
+        type: string
+        default: ""
+      marketing_version:
+        description: "Optional CFBundleShortVersionString override (default 1.0.0)"
+        required: false
+        type: string
+        default: ""
+  push:
+    branches: ["main", "develop", "ios-ipa-*"]
+    paths:
+      - "src/mindweave/webapp/**"
+      - "ios/**"
+      - "scripts/sync_ios_web_bundle.sh"
+      - ".github/workflows/build-ios-ipa.yml"
+  pull_request:
+    paths:
+      - "src/mindweave/webapp/**"
+      - "ios/**"
+      - "scripts/sync_ios_web_bundle.sh"
+      - ".github/workflows/build-ios-ipa.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    name: Build arm64 MindWeave.ipa
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode toolchain
+        run: |
+          set -euo pipefail
+          XCODE_APP="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | grep -v beta | sort -V | tail -n 1 || true)"
+          if [[ -z "${XCODE_APP}" ]]; then
+            XCODE_APP="$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1 || true)"
+          fi
+          if [[ -n "${XCODE_APP}" && -d "${XCODE_APP}" ]]; then
+            sudo xcode-select -s "${XCODE_APP}/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+
+      - name: Validate project.yml and opaque AppIcon asset
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml || python3 -m pip install --quiet pyyaml
+          python3 -c "import yaml; yaml.safe_load(open('ios/project.yml'))"
+          sips -g hasAlpha ios/MindWeave/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png | grep -q "hasAlpha: no"
+
+      - name: Sync v16 Lumina webapp into iOS WebBundle
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/sync_ios_web_bundle.sh
+          ./scripts/sync_ios_web_bundle.sh
+
+      - name: Apply optional build-time Info.plist overrides
+        env:
+          API_BASE_URL: ${{ inputs.api_base_url }}
+        run: |
+          set -euo pipefail
+          PLIST_PATH="ios/MindWeave/Resources/Info.plist"
+          if [[ -n "${API_BASE_URL}" ]]; then
+            if [[ ! "${API_BASE_URL}" =~ ^https?://[^[:space:]\'\"]+$ ]]; then
+              echo "error: api_base_url must be a valid http:// or https:// URL" >&2
+              exit 1
+            fi
+            /usr/libexec/PlistBuddy -c "Set :MWDefaultAPIBaseURL ${API_BASE_URL}" "${PLIST_PATH}"
+            echo "Baked MWDefaultAPIBaseURL=${API_BASE_URL} into ${PLIST_PATH}"
+          fi
+          plutil -lint "${PLIST_PATH}"
+
+      - name: Install XcodeGen and generate MindWeave.xcodeproj
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          (cd ios && xcodegen generate)
+          xcodebuild -project ios/MindWeave.xcodeproj -list
+
+      - name: Build unsigned Release arm64 app and package MindWeave.ipa
+        env:
+          MARKETING_VERSION_OVERRIDE: ${{ inputs.marketing_version }}
+        run: |
+          set -euo pipefail
+          MARKETING_VERSION_VALUE="${MARKETING_VERSION_OVERRIDE:-1.0.0}"
+
+          mkdir -p ios/build/Release-iphoneos
+          set +e
+          xcodebuild \
+            -project ios/MindWeave.xcodeproj \
+            -scheme MindWeave \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CONFIGURATION_BUILD_DIR="$PWD/ios/build/Release-iphoneos" \
+            MARKETING_VERSION="${MARKETING_VERSION_VALUE}" \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER:-1}" \
+            build 2>&1 | tee ios/build/xcodebuild.log
+          XC_STATUS=${PIPESTATUS[0]}
+          set -e
+          if [[ "${XC_STATUS}" -ne 0 ]]; then
+            grep -E "(: error:|^error:|BUILD FAILED|fatal error:)" ios/build/xcodebuild.log | head -n 30 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+            exit "${XC_STATUS}"
+          fi
+
+          rm -rf ios/build/Payload ios/build/MindWeave.ipa
+          mkdir -p ios/build/Payload
+          cp -R ios/build/Release-iphoneos/MindWeave.app ios/build/Payload/MindWeave.app
+          (cd ios/build && zip -r -y MindWeave.ipa Payload)
+
+      - name: Verify arm64 Mach-O binary, v16 WebBundle, AppIcon, and IPA contents
+        run: |
+          set -euo pipefail
+          IPA_PATH="ios/build/MindWeave.ipa"
+          VERIFY_DIR="ios/build/verify_ipa"
+
+          test -f "${IPA_PATH}"
+          rm -rf "${VERIFY_DIR}"
+          mkdir -p "${VERIFY_DIR}"
+          unzip -q "${IPA_PATH}" -d "${VERIFY_DIR}"
+
+          APP_DIR="${VERIFY_DIR}/Payload/MindWeave.app"
+          test -d "${APP_DIR}"
+          test -f "${APP_DIR}/MindWeave"
+          test -f "${APP_DIR}/Info.plist"
+          test -f "${APP_DIR}/Assets.car"
+          test -f "${APP_DIR}/WebBundle/index.html"
+          test -f "${APP_DIR}/WebBundle/styles/app.css"
+          test -f "${APP_DIR}/WebBundle/scripts/app.mjs"
+          test -f "${APP_DIR}/WebBundle/assets/v16/seed_bundle.json"
+          test ! -d "${APP_DIR}/WebBundle/tests"
+          test ! -d "${APP_DIR}/WebBundle/screenshots"
+
+          BINARY_INFO="$(file "${APP_DIR}/MindWeave")"
+          echo "Binary: ${BINARY_INFO}"
+          echo "${BINARY_INFO}" | grep -q "Mach-O 64-bit executable arm64"
+
+          plutil -lint "${APP_DIR}/Info.plist"
+          ! strings "${APP_DIR}/MindWeave" | grep -qE "ServerConfigSheet|mwConfig|openServerConfig|127\.0\.0\.1"
+
+          if command -v node >/dev/null 2>&1; then
+            node --check "${APP_DIR}/WebBundle/scripts/app.mjs"
+          fi
+
+          ls -lh "${IPA_PATH}"
+
+      - name: Upload MindWeave.ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MindWeave-iOS-IPA
+          path: ios/build/MindWeave.ipa
+          retention-days: 30
+          if-no-files-found: error

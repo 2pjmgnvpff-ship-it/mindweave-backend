@@ -9,3 +9,10 @@ __pycache__/
 htmlcov/
 .data/
 .env
+
+# iOS Xcode generated artifacts (Single Source of Truth lives in src/mindweave/webapp/ + ios/project.yml)
+ios/MindWeave/WebBundle/
+ios/MindWeave.xcodeproj/
+ios/build/
+ios/DerivedData*/
+sim_eval_out/
