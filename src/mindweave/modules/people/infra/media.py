@@ -9,6 +9,7 @@ from io import BytesIO
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from mindweave.core.errors import PayloadTooLargeError, ValidationFailedError
+from mindweave.core.photo_chroma import PhotoChromaProfile, extract_photo_chroma_and_framing
 
 MAX_IMAGE_PIXELS = 36_000_000  # 6000x6000 safety ceiling against decompression bombs
 
@@ -22,6 +23,7 @@ class ProcessedPhoto:
     extension: str
     width: int
     height: int
+    chroma: PhotoChromaProfile | None = None
 
 
 def _process_image_sync(raw_bytes: bytes, *, max_bytes: int) -> ProcessedPhoto:
@@ -58,6 +60,7 @@ def _process_image_sync(raw_bytes: bytes, *, max_bytes: int) -> ProcessedPhoto:
             oriented = ImageOps.exif_transpose(img)
             final_w, final_h = oriented.size
             has_alpha = "A" in oriented.getbands() or "transparency" in oriented.info
+            chroma = extract_photo_chroma_and_framing(oriented)
 
             out = BytesIO()
             if detected_format == "JPEG":
@@ -88,6 +91,7 @@ def _process_image_sync(raw_bytes: bytes, *, max_bytes: int) -> ProcessedPhoto:
                 extension=ext,
                 width=final_w,
                 height=final_h,
+                chroma=chroma,
             )
     except (ValidationFailedError, PayloadTooLargeError):
         raise

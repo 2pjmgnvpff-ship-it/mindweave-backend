@@ -1,801 +1,400 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
+<!doctype html>
+<html lang="zh-CN" data-tier="gold" data-lighting="daylight" data-has-photo="false" data-face-zone="none">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#f9f4ec" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <title>心络 MindWeave</title>
-  <link rel="preload" as="image" href="./assets/gleb/lake_bench_clean.jpg" />
-  <style>.ai-chat-fullscreen:not(.is-active), .events-full-screen:not(.is-active), .splash-screen:not(.is-active) { opacity: 0; visibility: hidden; pointer-events: none; }</style>
-  <link rel="stylesheet" href="./styles/app.css?v=201" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>心络 MindWeave · Lumina 关系手帐</title>
+  <link rel="stylesheet" href="/styles/app.css?v=16" />
 </head>
 <body>
-  <div class="studio-workspace" id="studioWorkspace">
 
-    <div class="phone-pedestal-wrap" id="phonePedestalWrap">
-      <div class="gleb-iphone-shell">
-        <div class="gleb-iphone-bezel">
-          <main
-            class="gleb-viewport"
-            id="glebViewport"
-            data-arrow-tier="gold"
-            data-journal-edition="cotton"
-            data-cupid-style="a"
-            data-view-mode="person-journal"
-            data-has-photo="true"
-          >
-            <div class="ios-dynamic-island" aria-hidden="true"></div>
-
-            <div class="tier-transition-toast" id="tierTransitionToast" role="status" aria-live="polite"></div>
-
-            <div class="splash-morph-actor" id="splashMorphActor" aria-hidden="true">
-              <div class="morph-full-photo" id="morphFullPhoto"></div>
-              <div class="morph-capsule-glass" id="morphCapsuleGlass"></div>
-            </div>
-
-            <!-- ============================================================
-                 SCENE 1: Crisp Alpine Lake & Bench Splash + Seamless Auth
-                 ============================================================ -->
-            <section class="splash-screen" id="splashScreen" aria-label="每日开屏">
-              <div class="splash-photo-sharp" id="splashPhotoSharp"></div>
-              <div class="splash-warm-gradient"></div>
-
-              <div class="splash-top-sunburst" id="splashTopSunburst">
-                <svg class="splash-sunburst-icon" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                  <circle cx="16" cy="16" r="3.0" fill="currentColor" />
-                  <line x1="16" y1="2" x2="16" y2="7" />
-                  <line x1="16" y1="25" x2="16" y2="30" />
-                  <line x1="2" y1="16" x2="7" y2="16" />
-                  <line x1="25" y1="16" x2="30" y2="16" />
-                  <line x1="6.1" y1="6.1" x2="9.6" y2="9.6" />
-                  <line x1="22.4" y1="22.4" x2="25.9" y2="25.9" />
-                  <line x1="25.9" y1="6.1" x2="22.4" y2="9.6" />
-                  <line x1="9.6" y1="22.4" x2="6.1" y2="25.9" />
-                </svg>
-              </div>
-
-              <div class="splash-bottom-content" id="splashBottomContent">
-                <div class="splash-quote-mark">”</div>
-                <h2 class="splash-quote-text" id="splashQuoteMain">
-                  Today is a fresh start, and you're ready for its wonders
-                </h2>
-                <p class="splash-quote-sub" id="splashQuoteSub">
-                  今日万物如新，去温柔接住每一份微光。
-                </p>
-
-                <div class="splash-actions-centered" id="splashPrimaryActions">
-                  <button type="button" class="splash-letsgo-btn" id="btnSplashLetsGo">
-                    <span id="splashLetsGoLabel">Let's Go</span>
-                  </button>
-                  <button type="button" class="splash-email-link" id="btnToggleSplashEmail">
-                    邮箱同步
-                  </button>
-                </div>
-
-                <form class="splash-auth-card" id="splashAuthForm" hidden>
-                  <div class="splash-auth-row">
-                    <input
-                      type="email"
-                      id="splashEmailInput"
-                      class="splash-auth-input"
-                      placeholder="输入邮箱"
-                      autocomplete="email"
-                    />
-                    <button type="button" class="splash-auth-mini-btn" id="btnSendOtp">验证码</button>
-                  </div>
-                  <div class="splash-auth-row" id="splashOtpRow" hidden>
-                    <input
-                      type="text"
-                      id="splashOtpInput"
-                      class="splash-auth-input"
-                      placeholder="6位验证码"
-                      inputmode="numeric"
-                      maxlength="6"
-                      autocomplete="one-time-code"
-                    />
-                    <button type="submit" class="splash-auth-mini-btn primary" id="btnVerifyOtp">进入</button>
-                  </div>
-                  <div class="splash-auth-foot">
-                    <span class="splash-auth-hint" id="splashAuthHint"></span>
-                    <button type="button" class="splash-auth-back" id="btnCancelSplashEmail">返回</button>
-                  </div>
-                </form>
-              </div>
-            </section>
-
-            <!-- ============================================================
-                 SCENE 2: Spacious Tactile Scrapbook Journal Page
-                 ============================================================ -->
-            <section class="journal-atelier-canvas" id="journalAtelierCanvas" aria-label="心络手帐本">
-              <div class="paper-fiber-layer" aria-hidden="true"></div>
-              <div class="paper-sunlight-dapple" aria-hidden="true"></div>
-              <div class="paper-margin-rule" aria-hidden="true"></div>
-              <div class="tn-elastic-band" aria-hidden="true">
-                <span class="tn-tin-clasp"></span>
-              </div>
-
-              <div class="hobo-date-masthead" id="hoboDateMasthead" aria-hidden="true">
-                <span class="hobo-big-num" id="hoboBigDay">17</span>
-                <div class="hobo-date-col">
-                  <span class="hobo-month-wk" id="hoboMonthWk">APR · THU</span>
-                  <span class="hobo-quote-line">今日一页 · 心绪留痕</span>
-                </div>
-              </div>
-
-              <div class="journal-top-left-bar" id="journalTopLeftBar">
-                <button type="button" class="back-to-casual-pill" id="btnBackToCasualList" hidden>
-                  <span>‹</span>
-                  <span>记繁琐</span>
-                </button>
-                <div class="journal-folio-whisper" id="journalFolioWhisper" role="button" tabindex="0" aria-label="切换纸张">
-                  <span class="folio-date" id="journalFolioDate">APR 17</span>
-                  <span class="folio-sep">·</span>
-                  <span class="folio-subject" id="journalFolioSubject">沈清秋</span>
-                </div>
-              </div>
-
-              <div class="top-right-arrow-pin-anchor" id="topRightArrowAnchor">
-                <button
-                  type="button"
-                  class="pinned-arrow-tack-btn"
-                  id="journalArrowPinBtn"
-                  data-tier="gold"
-                  aria-haspopup="true"
-                  aria-expanded="false"
-                  aria-label="金箭、银箭或水晶箭"
-                >
-                  <span class="pinned-paper-chit" aria-hidden="true">
-                    <span class="chit-inner-border"></span>
-                    <span class="chit-dog-ear"></span>
-                  </span>
-                  <span class="arrow-shaft-cast-shadow" aria-hidden="true"></span>
-                  <img
-                    src="./assets/cupid/arrow_pin_gold.webp"
-                    alt=""
-                    class="pinned-arrow-3d-img"
-                    id="journalArrowPinImg"
-                    draggable="false"
-                  />
-                </button>
-
-                <div class="arrow-selector-popover" id="arrowSelectorPopover" role="menu" aria-hidden="true">
-                  <button type="button" class="arrow-choice-item is-selected" data-select-tier="gold" role="menuitemradio">
-                    <span class="choice-icon-orb gold" id="popIconGold"></span>
-                    <span class="choice-copy"><strong>金箭</strong></span>
-                    <span class="choice-check">✓</span>
-                  </button>
-
-                  <button type="button" class="arrow-choice-item" data-select-tier="silver" role="menuitemradio">
-                    <span class="choice-icon-orb silver" id="popIconSilver"></span>
-                    <span class="choice-copy"><strong>银箭</strong></span>
-                    <span class="choice-check">✓</span>
-                  </button>
-
-                  <button type="button" class="arrow-choice-item" data-select-tier="crystal" role="menuitemradio">
-                    <span class="choice-icon-orb crystal" id="popIconCrystal"></span>
-                    <span class="choice-copy"><strong>水晶箭</strong></span>
-                    <span class="choice-check">✓</span>
-                  </button>
-                </div>
-              </div>
-
-              <input type="file" id="photoUploadInput" accept="image/jpeg,image/png,image/webp" hidden />
-
-              <div class="scrapbook-artifacts-stage" id="scrapbookArtifactsStage">
-
-                <article class="artifact-photo-mount" id="artifactPhotoMount" tabindex="0">
-                  <div class="mount-hw hw-brass-clip" aria-hidden="true">
-                    <svg viewBox="0 0 44 82" fill="none">
-                      <defs>
-                        <linearGradient id="brassGrad" x1="0" y1="0" x2="1" y2="1">
-                          <stop offset="0%" stop-color="#F6E2A8" />
-                          <stop offset="45%" stop-color="#C99A49" />
-                          <stop offset="80%" stop-color="#8F6523" />
-                          <stop offset="100%" stop-color="#E5C478" />
-                        </linearGradient>
-                      </defs>
-                      <path d="M13 24 V60 C13 69.5 31 69.5 31 60 V15 C31 7.5 17 7.5 17 15 V52 C17 56.5 26 56.5 26 52 V26"
-                        stroke="url(#brassGrad)" stroke-width="3.2" stroke-linecap="round" />
-                    </svg>
-                  </div>
-
-                  <div class="mount-hw hw-enamel-pin" aria-hidden="true"></div>
-                  <span class="photo-corner tl" aria-hidden="true"></span>
-                  <span class="photo-corner tr" aria-hidden="true"></span>
-                  <span class="photo-corner bl" aria-hidden="true"></span>
-                  <span class="photo-corner br" aria-hidden="true"></span>
-
-                  <div class="ticket-stub-bar" aria-hidden="true">
-                    <span>ADMIT ONE · JOURNEY</span>
-                    <span id="ticketSerialNo">NO. 0417-A</span>
-                  </div>
-
-                  <span class="hobo-mt-tape left" aria-hidden="true"></span>
-                  <span class="hobo-mt-tape right" aria-hidden="true"></span>
-
-                  <div class="photo-frame-inner">
-                    <div class="film-sprocket-rail left" aria-hidden="true"></div>
-                    <div class="photo-slot-primary">
-                      <img src="./assets/photos/photo_9.jpg" alt="手帐主照片" id="journalMainPhoto" />
-                      <button type="button" class="photo-upload-fab" id="btnUploadPhotoOnPolaroid" aria-label="更换相纸">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                          <circle cx="12" cy="13" r="4"></circle>
-                        </svg>
-                      </button>
-                    </div>
-                    <div class="photo-slot-secondary">
-                      <img src="./assets/photos/photo_12.jpg" alt="胶片副格照片" id="journalSubPhoto" />
-                    </div>
-                    <div class="film-sprocket-rail right" aria-hidden="true"></div>
-                    <div class="polaroid-hand-caption" id="journalPhotoCaption">
-                      Kamakura Coast · 海风与木栈道
-                    </div>
-                  </div>
-                </article>
-
-                <article class="artifact-dossier-card" id="artifactDossierCard" hidden>
-                  <span class="dossier-top-tape" id="dossierTopTape" aria-hidden="true"></span>
-                  <button type="button" class="dossier-photo-add-btn" id="btnUploadPhotoOnDossier" aria-label="添入相纸">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
-                      <circle cx="12" cy="13" r="4"></circle>
-                    </svg>
-                  </button>
-                  <div class="dossier-card-head">
-                    <span class="dossier-monogram-seal" id="dossierMonogram">陈</span>
-                    <div class="dossier-head-meta">
-                      <div class="dossier-name-line">
-                        <strong class="dossier-person-name" id="dossierPersonName">陈教授</strong>
-                        <span class="dossier-role-pill" id="dossierRoleTag">论文导师</span>
-                      </div>
-                      <span class="dossier-context-sub" id="dossierContextSub">学术往来 · 学院南楼 402</span>
-                    </div>
-                  </div>
-                  <div class="dossier-divider" aria-hidden="true"></div>
-                  <ul class="dossier-traits-list" id="dossierTraitsList"></ul>
-                </article>
-
-                <article class="artifact-text-note" id="artifactTextNote" tabindex="0">
-                  <span class="note-washi-tape" aria-hidden="true"></span>
-                  <span class="note-botanical-seal" aria-hidden="true">
-                    <svg viewBox="0 0 36 36" fill="none">
-                      <path d="M18 31 C18 23 18 19 18 19 M18 19 C10 18 6 12 8 6 C12 8 15 11 18 8 C21 11 24 8 28 6 C30 12 26 18 18 19 Z"
-                        fill="rgba(198, 162, 92, 0.34)" stroke="#9D7A3A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                  </span>
-                  <p class="note-handwriting-body" id="journalNoteBody">
-                    她说每年四月都想来吹一次海风；生理期前三天忌冰美式，要记得点街角那杯温热的桂花燕麦拿铁。
-                  </p>
-                  <div class="note-subtle-sign" id="journalNoteSign">
-                    — 四月十七 · 午后手札
-                  </div>
-                </article>
-
-                <button type="button" class="artifact-voice-charm" id="artifactVoiceCharm" aria-label="原声挂签">
-                  <span class="voice-charm-hole" aria-hidden="true"></span>
-                  <span class="voice-charm-play" id="voiceCharmPlayIcon">▶</span>
-                  <span class="voice-charm-bars" aria-hidden="true">
-                    <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
-                  </span>
-                  <span class="voice-charm-dur" id="journalVoiceDur">0:18</span>
-                </button>
-
-                <div class="voice-extracted-artifacts-mount" id="voiceExtractedMount" aria-live="polite"></div>
-
-                <div class="artifact-postmark-stamp" id="artifactPostmarkStamp" aria-hidden="true">
-                  <span class="stamp-ring-outer">
-                    <span class="stamp-code" id="journalStampCode">KAMAKURA · 04.17</span>
-                  </span>
-                </div>
-              </div>
-
-              <!-- "记繁琐" Directory -->
-              <div class="casual-relationships-hub" id="casualRelationshipsHub" aria-hidden="true">
-                <div class="casual-hub-header">
-                  <div class="casual-hub-titles">
-                    <h2 class="casual-hub-heading">记繁琐</h2>
-                  </div>
-                  <div class="casual-hub-actions">
-                    <span class="casual-count-seal" id="casualDirectoryCount">6</span>
-                    <button type="button" class="casual-add-person-btn" id="btnOpenNewPerson" aria-label="添入人物">＋</button>
-                  </div>
-                </div>
-
-                <div class="casual-folio-directory" id="casualEntriesStage" role="list"></div>
-              </div>
-
-              <!-- AI Multi-Person Voice Split Dispatch Modal -->
-              <div class="ai-voice-dispatch-modal" id="aiVoiceDispatchModal" aria-hidden="true">
-                <div class="dispatch-folio-sheet">
-                  <div class="dispatch-sheet-head">
-                    <div class="dispatch-title-group">
-                      <h3 class="dispatch-heading">已整理入各自手帐</h3>
-                    </div>
-                    <div class="dispatch-head-btns">
-                      <button type="button" class="dispatch-undo-pill" id="btnUndoVoiceCapture" hidden>撤回</button>
-                      <button type="button" class="dispatch-close-btn" id="btnCloseDispatchModal" aria-label="关闭">✕</button>
-                    </div>
-                  </div>
-                  <div class="dispatch-cards-list" id="dispatchCardsList"></div>
-                </div>
-              </div>
-
-              <!-- Minimal Paper Slip Modal: Add Person -->
-              <div class="paper-sheet-modal" id="personCreateModal" aria-hidden="true">
-                <form class="paper-sheet-card" id="personCreateForm">
-                  <div class="paper-sheet-head">
-                    <h3 class="paper-sheet-title">新添一页</h3>
-                    <button type="button" class="paper-sheet-close" id="btnCloseNewPerson" aria-label="关闭">✕</button>
-                  </div>
-                  <input
-                    type="text"
-                    id="newPersonNameInput"
-                    class="paper-line-input"
-                    placeholder="姓名"
-                    maxlength="40"
-                    required
-                  />
-                  <input
-                    type="text"
-                    id="newPersonRoleInput"
-                    class="paper-line-input"
-                    placeholder="身份（选填）"
-                    maxlength="32"
-                  />
-                  <div class="paper-tier-row" id="newPersonTierGroup" role="radiogroup" aria-label="箭矢">
-                    <button type="button" class="paper-tier-pill is-active" data-new-tier="gold">金箭</button>
-                    <button type="button" class="paper-tier-pill" data-new-tier="silver">银箭</button>
-                    <button type="button" class="paper-tier-pill" data-new-tier="crystal">水晶箭</button>
-                  </div>
-                  <div class="paper-sheet-foot">
-                    <button type="submit" class="paper-primary-btn" id="btnSubmitNewPerson">添入</button>
-                  </div>
-                </form>
-              </div>
-
-              <!-- Minimal Paper Slip Modal: Edit Note / Profile -->
-              <div class="paper-sheet-modal" id="noteEditModal" aria-hidden="true">
-                <form class="paper-sheet-card" id="noteEditForm">
-                  <div class="paper-sheet-head">
-                    <h3 class="paper-sheet-title" id="noteEditTitle">手札</h3>
-                    <button type="button" class="paper-sheet-close" id="btnCloseNoteEdit" aria-label="关闭">✕</button>
-                  </div>
-                  <input
-                    type="text"
-                    id="editShortMemoInput"
-                    class="paper-line-input"
-                    placeholder="简记"
-                    maxlength="120"
-                  />
-                  <textarea
-                    id="editNoteBodyInput"
-                    class="paper-area-input"
-                    rows="4"
-                    placeholder="写下关于 TA 的细节…"
-                    maxlength="2000"
-                  ></textarea>
-                  <div class="paper-sheet-foot between">
-                    <button type="button" class="paper-danger-link" id="btnDeletePerson">移除</button>
-                    <button type="submit" class="paper-primary-btn" id="btnSaveNoteEdit">落笔</button>
-                  </div>
-                </form>
-              </div>
-
-              <!-- Minimal Quick Voice/Text Slip (On short tap of left mic orb) -->
-              <div class="quick-capture-sheet" id="quickCaptureSheet" aria-hidden="true">
-                <div class="quick-capture-card">
-                  <input
-                    type="text"
-                    id="quickCaptureInput"
-                    class="quick-capture-input"
-                    placeholder="随口记下一句…"
-                    maxlength="1000"
-                  />
-                  <div class="quick-capture-actions">
-                    <button type="button" class="quick-route-btn" data-quick-route="current" id="btnQuickRouteCurrent">默认此人</button>
-                    <button type="button" class="quick-route-btn accent" data-quick-route="global" id="btnQuickRouteGlobal">自动分析</button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Quiet Corner Living Stone Gem Seal -->
-              <button type="button" class="corner-stone-gem-btn" id="btnToggleMiniStone" aria-label="心情灵石">
-                <span class="mini-seal-gem"></span>
-              </button>
-
-              <!-- Mood Stone Popover + Subtle Account Row -->
-              <div class="mood-stone-popover" id="moodStonePopover" aria-hidden="true">
-                <div class="stone-popover-card">
-                  <div class="stone-popover-head">
-                    <span class="stone-popover-label">今日心绪灵石</span>
-                    <button type="button" class="stone-popover-close" id="btnCloseMiniStone">✕</button>
-                  </div>
-                  <div class="stone-visual-row compact">
-                    <div class="stone-mood-readout">
-                      <div class="stone-im-label">I'm</div>
-                      <div class="stone-mood-word" id="stoneMoodWord">Okay</div>
-                    </div>
-                    <div class="stone-3d-stage compact" id="stone3dStage">
-                      <canvas id="stoneGrowthCanvas" class="stone-growth-canvas" width="220" height="200"></canvas>
-                    </div>
-                  </div>
-                  <div class="stone-slider-wrap" id="stoneSliderWrap" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="64" tabindex="0">
-                    <div class="stone-slider-dots" id="stoneSliderDots">
-                      <span class="stone-slider-dot"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot is-active"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot"></span><span class="stone-slider-dot"></span>
-                      <span class="stone-slider-dot"></span>
-                    </div>
-                    <div class="stone-slider-knob" id="stoneSliderKnob" style="left: 64%;">
-                      <span class="knob-grip-bar"></span>
-                      <span class="knob-grip-bar"></span>
-                    </div>
-                  </div>
-                  <div class="stone-account-bar">
-                    <span class="stone-account-id" id="stoneAccountLabel">心络手帐</span>
-                    <div class="stone-account-links">
-                      <button type="button" class="stone-subtle-link" id="btnOpenSplashCover">封面</button>
-                      <button type="button" class="stone-subtle-link" id="btnSwitchAccount">切换邮箱</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <!-- ============================================================
-                 SCENE 4: "My Events" Full-Bleed Cinema & Polaroid Flip
-                 ============================================================ -->
-            <section class="events-full-screen" id="eventsFullScreen" aria-label="周历与相册">
-              <div class="events-nav-header">
-                <button type="button" class="top-icon-btn" id="btnEventsBack" aria-label="返回">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="19" y1="12" x2="5" y2="12"></line>
-                    <polyline points="12 19 5 12 12 5"></polyline>
-                  </svg>
-                </button>
-                <span class="events-nav-title">My Events</span>
-                <span style="width: 40px;"></span>
-              </div>
-
-              <div class="week-calendar-strip">
-                <div class="week-day-cell">
-                  <span class="week-day-name">Mo</span>
-                  <span class="week-day-num">16</span>
-                  <div class="week-day-dots"></div>
-                </div>
-                <div class="week-day-cell is-active">
-                  <span class="week-day-name">Tu</span>
-                  <span class="week-day-num">17</span>
-                  <div class="week-day-dots">
-                    <span class="week-dot orange"></span>
-                    <span class="week-dot green"></span>
-                  </div>
-                </div>
-                <div class="week-day-cell">
-                  <span class="week-day-name">We</span>
-                  <span class="week-day-num">18</span>
-                  <div class="week-day-dots"></div>
-                </div>
-                <div class="week-day-cell">
-                  <span class="week-day-name">Th</span>
-                  <span class="week-day-num">19</span>
-                  <div class="week-day-dots">
-                    <span class="week-dot red"></span>
-                    <span class="week-dot green"></span>
-                  </div>
-                </div>
-                <div class="week-day-cell">
-                  <span class="week-day-name">Fr</span>
-                  <span class="week-day-num">20</span>
-                  <div class="week-day-dots"></div>
-                </div>
-                <div class="week-day-cell">
-                  <span class="week-day-name">Sa</span>
-                  <span class="week-day-num">21</span>
-                  <div class="week-day-dots"></div>
-                </div>
-              </div>
-
-              <div class="cinema-card-perspective">
-                <article class="cinema-event-card" id="cinemaCard1">
-                  <div class="cinema-card-face cinema-card-front">
-                    <img src="./assets/gleb/seagulls_ocean.jpg" alt="" class="cinema-card-photo" id="eventsCard1Photo" />
-                    <div class="cinema-card-shade"></div>
-                    <span class="cinema-tag-pill">
-                      <span class="week-dot orange"></span>
-                      <span id="eventsCard1Tag">Orange</span>
-                    </span>
-                    <span class="cinema-flip-hint" aria-hidden="true">↻</span>
-
-                    <div class="cinema-bottom-info">
-                      <h3 class="cinema-event-title" id="eventsCard1Title">
-                        Compassion in Action: Strategies for Uplifting Others
-                      </h3>
-                      <p class="cinema-event-loc" id="eventsCard1Loc">
-                        17 Apr · Kamakura Coast · 与沈清秋的海边日落手账
-                      </p>
-                      <div class="cinema-meta-bar">
-                        <div class="avatar-stack">
-                          <img src="./assets/cupid/avatar_chloe.webp" alt="" class="avatar-stack-item" id="eventsAvatar1" />
-                          <img src="./assets/cupid/avatar_xubai.webp" alt="" class="avatar-stack-item" />
-                        </div>
-                        <div class="cinema-pills-right">
-                          <span class="cinema-dark-pill">1:30 - 2:40 PM</span>
-                          <span class="cinema-dark-pill">In Person</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div class="cinema-card-face cinema-card-back">
-                    <div class="polaroid-back-stamp">
-                      <span id="eventsCard1Stamp">POLAROID ARCHIVE · #MW-0417</span>
-                      <span id="eventsCard1Owner">沈清秋</span>
-                    </div>
-                    <p class="polaroid-back-handwriting" id="eventsCard1BackText">
-                      “那天的海风很轻，清秋站在木栈道边喂海鸥，突然回头跟我说：以后每年四月我们都来这里看一次海好不好。”
-                    </p>
-                    <div class="polaroid-back-audio">
-                      <span id="eventsCard1Dur">▶ 00:18</span>
-                      <span aria-hidden="true">↺</span>
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              <div class="cinema-card-perspective">
-                <article class="cinema-event-card" id="cinemaCard2" style="height: 242px;">
-                  <div class="cinema-card-face cinema-card-front">
-                    <img src="./assets/gleb/bw_portrait_strip.jpg" alt="" class="cinema-card-photo" id="eventsCard2Photo" />
-                    <div class="cinema-card-shade"></div>
-                    <span class="cinema-tag-pill">
-                      <span class="week-dot green"></span>
-                      <span>Green</span>
-                    </span>
-                    <span class="cinema-flip-hint" aria-hidden="true">↻</span>
-                    <div class="cinema-bottom-info">
-                      <h3 class="cinema-event-title">
-                        The Power of Listening: Deep Empathy Notes
-                      </h3>
-                      <p class="cinema-event-loc" id="eventsCard2Loc">17 Apr · 桂花拿铁少冰 · 燕麦奶备忘</p>
-                    </div>
-                  </div>
-                  <div class="cinema-card-face cinema-card-back">
-                    <div class="polaroid-back-stamp">
-                      <span>#MW-0419</span>
-                      <span>04.19</span>
-                    </div>
-                    <p class="polaroid-back-handwriting" id="eventsCard2BackText">
-                      “她生理期前三天不喝冰美式，最喜欢街角那家手冲店的温热桂花燕麦拿铁（半糖）。”
-                    </p>
-                    <div class="polaroid-back-audio">
-                      <span>04.19</span>
-                      <span aria-hidden="true">↺</span>
-                    </div>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <!-- ============================================================
-                 SCENE 5: Ultra-Minimal Split-Arc Voice Input UI
-                 ============================================================ -->
-            <div class="voice-hold-stage" id="voiceHoldStage" data-voice-zone="current" aria-hidden="true">
-              <div class="voice-hold-scrim" id="voiceHoldScrim"></div>
-
-              <div class="voice-minimal-wave-pill" id="voiceMinimalWavePill">
-                <span class="voice-minimal-dot" aria-hidden="true"></span>
-                <div class="voice-silk-canvas-wrap">
-                  <canvas id="voiceSilkCanvas" width="210" height="42"></canvas>
-                </div>
-                <span class="voice-minimal-timer" id="voiceHoldTimer">0:01</span>
-              </div>
-
-              <svg class="voice-split-arc-svg" id="voiceSplitArcSvg" viewBox="0 0 384 838" fill="none" aria-hidden="true">
-                <path
-                  class="voice-inner-whisper-arc"
-                  d="M 52.2 715.2 A 78 78 0 0 1 124.8 787.8"
-                />
-                <path
-                  id="voiceArcUp"
-                  class="voice-split-arc-seg seg-up"
-                  d="M 56.3 659.3 A 134 134 0 0 1 129.5 687.4"
-                />
-                <path
-                  id="voiceArcRight"
-                  class="voice-split-arc-seg seg-right"
-                  d="M 149.6 706.9 A 134 134 0 0 1 180.3 779.0"
-                />
-              </svg>
-
-              <button
-                type="button"
-                class="voice-arc-label label-up"
-                id="voiceZoneUpGlobal"
-                data-trigger-voice-route="global"
-              >自动分析</button>
-
-              <button
-                type="button"
-                class="voice-arc-label label-right is-highlighted"
-                id="voiceZoneRightCurrent"
-                data-trigger-voice-route="current"
-              >默认此人</button>
-
-              <div class="voice-drag-finger-puck" id="voiceDragPuck" aria-hidden="true"></div>
-
-              <div class="voice-orb-ripples" id="voiceOrbRipples" aria-hidden="true">
-                <span class="orb-ripple r1"></span>
-                <span class="orb-ripple r2"></span>
-              </div>
-            </div>
-
-            <!-- ============================================================
-                 SYMMETRIC TRI-ELEMENT DOCK (#glebTriDock)
-                 ============================================================ -->
-            <nav class="gleb-tri-dock" id="glebTriDock" aria-label="功能底座">
-
-              <button
-                type="button"
-                class="dock-circle-btn voice-orb"
-                id="dockVoiceOrbBtn"
-                aria-label="语音或随记"
-              >
-                <span class="voice-orb-core-glow"></span>
-                <svg class="voice-orb-icon" viewBox="0 0 24 24" fill="none">
-                  <rect x="9" y="3.2" width="6" height="11.2" rx="3" stroke="currentColor" stroke-width="1.85" />
-                  <path d="M5.8 10.8a6.2 6.2 0 0 0 12.4 0" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" />
-                  <line x1="12" y1="17.2" x2="12" y2="20.5" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" />
-                </svg>
-              </button>
-
-              <div
-                class="dock-center-capsule"
-                id="dockCenterCapsule"
-                role="group"
-                aria-label="人物胶囊"
-              >
-                <div class="capsule-landscape-bg" id="capsuleLandscapeBg"></div>
-                <div class="capsule-glass-sheen"></div>
-
-                <div class="capsule-collapsed-content" id="capsuleCollapsedContent">
-                  <div class="capsule-portrait-cluster" id="capsulePortraitCluster"></div>
-                </div>
-
-                <div class="capsule-expanded-items" id="capsuleExpandedItems" aria-hidden="true"></div>
-              </div>
-
-              <button
-                type="button"
-                class="dock-circle-btn ai-orb"
-                id="btnOpenAiOrb"
-                aria-label="丘比特对话"
-              >
-                <span class="ai-orb-aura"></span>
-                <svg class="ai-orb-spark-icon" viewBox="0 0 24 24" fill="none">
-                  <path d="M12 3.2C12.7 7.6 16.4 11.3 20.8 12C16.4 12.7 12.7 16.4 12 20.8C11.3 16.4 7.6 12.7 3.2 12C7.6 11.3 11.3 7.6 12 3.2Z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" fill="rgba(255,255,255,0.32)"/>
-                  <circle cx="18.2" cy="5.8" r="1.25" fill="currentColor"/>
-                </svg>
-              </button>
-
-            </nav>
-
-            <!-- ============================================================
-                 SCENE 6: Muse-Style Top-Center Fair Living-Skin Cupid Chat
-                 ============================================================ -->
-            <section
-              class="ai-chat-fullscreen"
-              id="aiChatFullscreen"
-              data-arrow-tier="gold"
-              data-cupid-layout="a"
-              aria-label="丘比特对话"
-            >
-              <header class="muse-chat-header" id="museChatHeader">
-                <div class="muse-header-controls">
-                  <button type="button" class="muse-glass-circle-btn" id="btnCloseAiChat" aria-label="返回">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="19" y1="12" x2="5" y2="12"></line>
-                      <polyline points="12 19 5 12 12 5"></polyline>
-                    </svg>
-                  </button>
-                  <button type="button" class="muse-glass-circle-btn subtle" id="btnClearChatHistory" aria-label="清空对话">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                      <polyline points="3 6 5 6 21 6"></polyline>
-                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
-                    </svg>
-                  </button>
-                </div>
-
-                <div class="muse-companion-centerpiece" id="museCompanionCenterpiece">
-                  <button
-                    type="button"
-                    class="muse-cupid-medallion"
-                    id="museCupidMedallion"
-                    aria-label="丘比特"
-                  >
-                    <span class="muse-medallion-glow" aria-hidden="true"></span>
-                    <img
-                      src="./assets/cupid/muse_cupid_a_listen.webp?v=200"
-                      alt="丘比特"
-                      class="muse-medallion-img"
-                      id="museCupidPortraitImg"
-                      draggable="false"
-                    />
-                  </button>
-
-                  <div class="muse-cupid-status-pill" id="cupidChatTitlePill">
-                    <div class="muse-status-main-row">
-                      <span class="cupid-chat-name" id="aiChatHeaderName">丘比特</span>
-                      <span class="cupid-inline-arrow" id="chatHeaderArrowWrap" aria-hidden="true"></span>
-                    </div>
-                  </div>
-                </div>
-              </header>
-
-              <div class="muse-chat-time-divider" id="chatTimeDivider" aria-hidden="true">18:05</div>
-
-              <div class="ai-chat-messages" id="aiChatMessages"></div>
-
-              <div class="chat-right-edge-gesture-zone" id="chatRightEdgeZone" aria-hidden="true"></div>
-
-              <div class="chat-material-scrim" id="chatMaterialScrim" aria-hidden="true"></div>
-              <aside class="chat-material-drawer" id="chatMaterialDrawer" aria-label="手帐素材" aria-hidden="true">
-                <div class="drawer-inner-header">
-                  <div>
-                    <h3 class="drawer-title" id="drawerOwnerTitle">沈清秋</h3>
-                  </div>
-                  <span class="drawer-count-pill" id="drawerSelectedCount" hidden>1</span>
-                </div>
-                <div class="drawer-materials-list" id="drawerMaterialsList"></div>
-              </aside>
-
-              <div class="ai-chat-composer-wrap" id="aiChatComposerWrap">
-                <div class="chat-attached-tray" id="chatAttachedTray" hidden></div>
-
-                <div class="muse-composer-pill-bar" id="aiChatInputRow">
-                  <button
-                    type="button"
-                    class="muse-composer-plus-btn"
-                    id="btnOpenMaterialDrawerPlus"
-                    aria-label="引用手帐素材"
-                  >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                      <line x1="12" y1="5" x2="12" y2="19"></line>
-                      <line x1="5" y1="12" x2="19" y2="12"></line>
-                    </svg>
-                  </button>
-
-                  <input
-                    type="text"
-                    class="chat-text-input"
-                    id="chatTextInput"
-                    placeholder="嘿，丘比特…"
-                  />
-
-                  <button type="button" class="chat-send-btn" id="btnSendChatMsg" aria-label="发送">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                      <line x1="12" y1="19" x2="12" y2="5"></line>
-                      <polyline points="5 12 12 5 19 12"></polyline>
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            </section>
-
-          </main>
-        </div>
+<div class="v15-sim-topbar" id="v15SimTopbar">
+  <span>iPhone 16 Pro · 393×852pt · 心络全栈实机同步</span>
+  <button class="v15-sim-pill" id="btnExitSim" type="button">切回全宽桌面</button>
+</div>
+
+<div class="v15-phone-chassis" id="v15PhoneChassis">
+  <div class="v15-app-screen" id="v15AppScreen">
+
+    <!-- Native iPhone 16 Pro Status Bar & Dynamic Island -->
+    <div class="ios-status-bar" aria-hidden="true">
+      <span id="iosClockText">9:41</span>
+      <div class="ios-dynamic-island"></div>
+      <div style="display:flex;align-items:center;gap:5px;">
+        <svg width="16" height="11" viewBox="0 0 18 12" fill="currentColor"><rect x="0" y="7" width="3" height="5" rx="1"/><rect x="4.5" y="5" width="3" height="7" rx="1"/><rect x="9" y="2.5" width="3" height="9.5" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1"/></svg>
+        <svg width="24" height="12" viewBox="0 0 26 12" fill="none"><rect x="0.8" y="0.8" width="21" height="10.4" rx="2.8" stroke="currentColor" stroke-width="1.2"/><rect x="2.8" y="2.8" width="15" height="6.4" rx="1.4" fill="currentColor"/><path d="M23.5 4.2v3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
       </div>
-      <div class="phone-pedestal-shadow"></div>
     </div>
 
-  </div>
+    <!-- Unblurred Real Photography Backdrop (Strictly Hidden on Silver Arrow!) -->
+    <div class="photo-backdrop" id="photoBackdrop">
+      <img class="photo-backdrop-img" id="backdropImg" src="" alt="" crossorigin="anonymous" />
+      <div class="photo-backdrop-scrim"></div>
+    </div>
 
-  <script type="module" src="./scripts/app.mjs?v=201"></script>
+    <div class="edge-blur-top" aria-hidden="true"></div>
+    <div class="edge-blur-bottom" aria-hidden="true"></div>
+
+    <!-- Minimalist Original Top Bar: [⚙ Settings] · [🔍 Search] [3D Gold/Silver/Crystal Arrow Pin] -->
+    <header class="top-bar">
+      <div class="top-bar-group">
+        <button class="lg-orb-btn" id="btnOpenSettings" type="button" aria-label="设置与数据主权" title="设置与数据主权">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div class="top-brand-pill desktop-only">
+          <span>心络</span>
+        </div>
+      </div>
+
+      <div class="top-bar-group">
+        <button class="top-brand-pill desktop-only" id="btnEnterSim" type="button" title="切换 iPhone 16 Pro 实机框">
+          <span>实机</span>
+        </button>
+        <button class="lg-orb-btn" id="btnOpenSpotlight" type="button" aria-label="寻句检索" title="寻句检索（⌘K）">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        </button>
+
+        <div class="arrow-pin-wrap" id="arrowPinWrap">
+          <button class="arrow-pin-btn" id="btnArrowPin" type="button" aria-haspopup="true" aria-expanded="false" title="切换金箭 / 银箭 / 水晶箭">
+            <img class="arrow-pin-img" id="arrowPinImg" src="/assets/cupid/arrow_pin_gold.webp" alt="" />
+            <span id="arrowPinLabel">金箭</span>
+          </button>
+          <div class="arrow-popover" id="arrowPopover" role="menu">
+            <button class="arrow-opt-btn" data-tier-pick="gold" type="button">
+              <img id="optImgGold" src="/assets/cupid/arrow_pin_gold.webp" alt="" />
+              <span class="arrow-opt-txt"><strong>金箭 · 记爱</strong><span>温润珍藏 · 换位视角</span></span>
+            </button>
+            <button class="arrow-opt-btn" data-tier-pick="crystal" type="button">
+              <img id="optImgCrystal" src="/assets/cupid/arrow_pin_crystal.webp" alt="" />
+              <span class="arrow-opt-txt"><strong>水晶箭 · 记繁琐</strong><span>清爽备忘 · 往来权责</span></span>
+            </button>
+            <button class="arrow-opt-btn" data-tier-pick="silver" type="button">
+              <img id="optImgSilver" src="/assets/cupid/arrow_pin_silver.webp" alt="" />
+              <span class="arrow-opt-txt"><strong>银箭 · 记恨</strong><span>零照片 · 顺毛同盟 · 留痕</span></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Scrollable Journal Stage -->
+    <main class="main-scroller" id="mainScroller">
+      <div class="journal-column" id="journalColumn">
+        <!-- Empty-Journal Welcome Stage (Zero Auto-Seeded Fictional Data on Fresh Account) -->
+        <section class="empty-welcome-stage" id="emptyWelcomeStage" aria-label="开启心络手帐">
+          <div class="empty-welcome-card">
+            <div style="display:flex;justify-content:center;">
+              <span class="auth-orb-badge" style="width:54px;height:54px;font-size:22px;">络</span>
+            </div>
+            <h1 style="font-family:var(--font-serif);font-size:24px;font-weight:600;margin:0;letter-spacing:0.03em;">你的私人关系手帐已就绪</h1>
+            <p style="font-size:13.5px;line-height:1.68;opacity:0.74;margin:0;">
+              所有记录均由专属 AES-256-GCM 密钥加密存放在你的私人数据库。你可以一键载入 8 位真实日常示范人物完整体验，也可以直接写下第一页。
+            </p>
+            <div class="seed-progress-track" id="seedProgressTrack">
+              <div class="seed-progress-fill" id="seedProgressFill"></div>
+            </div>
+            <div id="seedProgressLabel" style="font-size:12px;opacity:0.68;min-height:16px;"></div>
+            <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+              <button class="s-btn-primary" id="btnLoadDemoPack" type="button" style="height:44px;font-size:14px;">✦ 载入心络手帐示范集（真实日常 8 人）</button>
+              <button class="s-btn-ghost" id="btnWelcomeCreateFirst" type="button" style="height:42px;font-size:13.5px;">＋ 新添我的第一页人物</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Upper Portrait Breathing Window + Person Masthead -->
+        <section class="portrait-window" id="portraitWindow">
+          <div class="person-masthead">
+            <h1 class="person-name-h1" id="personNameTitle">心络</h1>
+            <button class="dossier-entry-btn" id="btnOpenDossier" type="button">
+              <span>人物档案</span>
+              <span>›</span>
+            </button>
+          </div>
+
+          <!-- Pure 3-Scale Time Row -->
+          <div class="scale-bar-row">
+            <div class="scale-tabs" role="tablist" aria-label="时间尺度">
+              <button class="scale-tab is-active" data-scale="folio" type="button">纸页</button>
+              <button class="scale-tab" data-scale="season" type="button">月册</button>
+              <button class="scale-tab" data-scale="rings" type="button">年轮</button>
+            </div>
+            <button class="scale-meta-pill" id="btnScaleRightAction" type="button">2026 · 0 页</button>
+          </div>
+
+          <!-- Luminous Upcoming Care Ribbon -->
+          <button class="care-ribbon-btn" id="btnCareRibbon" type="button">
+            <span class="care-ribbon-dot" aria-hidden="true"></span>
+            <span class="care-ribbon-text" id="careRibbonText">轻点人物档案，添入第一个记挂的日子</span>
+            <span class="care-ribbon-eta" id="careRibbonEta">查看 ›</span>
+          </button>
+        </section>
+
+        <!-- Immediate Pure Resting-Slip Journal Feed -->
+        <section class="feed-viewport" id="feedViewport" aria-label="手帐记录"></section>
+      </div>
+    </main>
+
+    <!-- Authentic Symmetric Tri-Element Liquid Glass Bottom Dock (`#glebTriDock`) -->
+    <nav class="tri-dock-wrap" id="glebTriDock" aria-label="底部三元操控坞">
+      <button class="dock-voice-orb" id="dockVoiceOrb" type="button" aria-label="按住断弧语音或轻点随记" title="按住说话触发断弧路由 · 轻点文字/微信/照片随记">
+        <span class="dock-voice-dot" aria-hidden="true"></span>
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 10.8a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="17.3" x2="12" y2="21"/></svg>
+      </button>
+
+      <div class="dock-center-capsule" id="dockCenterCapsule">
+        <div class="dock-seals-cluster" id="dockSealsCluster"></div>
+        <button class="dock-dir-btn" id="btnOpenDirectory" type="button" aria-label="全部人物与记繁琐名册" title="全部人物与记繁琐名册">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="15" y2="17"/></svg>
+        </button>
+      </div>
+
+      <button class="dock-cupid-orb" id="dockCupidOrb" type="button" aria-label="进入丘比特全屏对话" title="丘比特 · 私人关系伴侣">
+        <canvas class="dock-cupid-canvas" id="dockCupidCanvas" width="42" height="42" aria-hidden="true"></canvas>
+        <svg class="dock-cupid-spark" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.5L14.3 9.7L21.5 12L14.3 14.3L12 21.5L9.7 14.3L2.5 12L9.7 9.7L12 2.5Z"/></svg>
+      </button>
+    </nav>
+
+    <!-- 0-5s Multi-Person AI Dispatch Receipt with Live Undo -->
+    <div class="dispatch-receipt" id="dispatchReceipt" role="status"></div>
+
+    <!-- Scene 5: Split-Arc Voice Hold Stage (`断弧语音三向路由`) -->
+    <section class="voice-arc-stage" id="voiceArcStage" aria-label="断弧语音输入">
+      <div class="voice-live-card">
+        <div class="voice-live-wave-row">
+          <span style="width:8px;height:8px;border-radius:50%;background:#E86752;box-shadow:0 0 10px #E86752;"></span>
+          <span id="voiceArcTimer">正在聆听 0:04</span>
+          <span style="margin-left:auto;opacity:0.62;">上滑自动拆入 · 右滑默认此人</span>
+        </div>
+        <textarea class="cap-textarea" id="voiceArcInput" rows="3" style="min-height:74px;background:rgba(255,255,255,0.06);color:#FAF6F0;" placeholder="说一句随记，或直接编辑识别文案…">周六接妈妈去菜地挑豌豆苗记得带保温杯，顺便下班给小满带一盒新鲜草莓。</textarea>
+      </div>
+      <svg width="320" height="72" viewBox="0 0 320 72" fill="none" aria-hidden="true" style="margin-bottom:10px;overflow:visible;">
+        <path d="M 38 66 A 118 118 0 0 1 138 14" stroke="var(--real-warm, #E6BE86)" stroke-width="3.2" stroke-linecap="round" opacity="0.92"/>
+        <path d="M 168 14 A 118 118 0 0 1 282 66" stroke="rgba(255,255,255,0.42)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="5 5"/>
+        <circle cx="88" cy="30" r="6" fill="var(--real-warm, #E6BE86)" stroke="#FFFDF8" stroke-width="2"/>
+      </svg>
+      <div class="voice-arc-routes">
+        <button class="voice-route-pill is-primary" id="btnRouteAuto" type="button">
+          <strong>↑ 自动分析</strong>
+          <span>多人自动拆入各自手帐</span>
+        </button>
+        <button class="voice-route-pill" id="btnRouteCurrent" type="button">
+          <strong id="routeCurrentLabel">→ 默认此人</strong>
+          <span>完整存入当前手帐</span>
+        </button>
+      </div>
+      <button class="voice-cancel-link" id="btnRouteCancel" type="button">取消本次录音</button>
+    </section>
+
+    <!-- Scene 6: Full-Screen Immersive Cupid Companion Chat + Right-Edge Material Drawer -->
+    <section class="cupid-fullscreen" id="cupidFullscreen" aria-label="丘比特伴聊">
+      <header class="cupid-head">
+        <button class="lg-orb-btn" id="btnCloseCupid" type="button" aria-label="返回手帐">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+
+        <div class="cupid-center-pill">
+          <canvas class="cupid-medallion-cv" id="cupidHeadCanvas" width="32" height="32" aria-hidden="true"></canvas>
+          <span class="cupid-head-title" id="cupidHeadTitle">丘比特</span>
+          <img class="cupid-head-tier-img" id="cupidHeadTierImg" src="/assets/cupid/arrow_pin_gold.webp" alt="" />
+        </div>
+
+        <button class="cupid-drawer-pill" id="btnToggleMatDrawer" type="button">
+          <span id="cupidMatCount">手帐 0</span>
+        </button>
+      </header>
+
+      <div class="cupid-chat-body" id="cupidChatBody"></div>
+
+      <div class="cupid-foot">
+        <div class="cupid-attached-tray" id="cupidAttachedTray"></div>
+        <div class="cupid-shimmer-shell" id="cupidShimmerShell">
+          <form class="cupid-input-bar" id="cupidChatForm">
+            <button class="cupid-plus-btn" id="btnCupidPlusMat" type="button" aria-label="引用手帐素材" title="从右侧抽屉引用手帐素材">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
+            <input class="cupid-input" id="cupidChatInput" type="text" placeholder="和丘比特说说…" autocomplete="off" />
+            <button class="cupid-send-btn" type="submit" aria-label="发送">↑</button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Right-Edge Journal Material Drawer -->
+      <div class="cupid-material-scrim" id="cupidMatScrim"></div>
+      <aside class="cupid-material-drawer" id="cupidMatDrawer" aria-label="引用手帐素材">
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <strong id="matDrawerTitle" style="font-family:var(--font-serif);font-size:16px;">手帐素材</strong>
+            <div style="font-size:11.5px;opacity:0.65;margin-top:2px;">点选任意记录，直接附带问丘比特</div>
+          </div>
+          <button class="sheet-close-btn" id="btnCloseMatDrawer" type="button">✕</button>
+        </div>
+        <div class="drawer-list" id="matDrawerList"></div>
+      </aside>
+    </section>
+
+    <!-- Backdrop for Liquid Glass Sheets -->
+    <div class="sheet-backdrop" id="sheetBackdrop"></div>
+
+    <!-- Sheet 1: 人物档案口袋 (Dossier + Live Background Switcher + Care Days + Editable Facts) -->
+    <section class="glass-sheet" id="dossierSheet" aria-label="人物档案">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2 class="sheet-title" id="dossierSheetTitle">人物档案</h2>
+        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+      </div>
+      <div class="sheet-scroll" id="dossierSheetBody"></div>
+    </section>
+
+    <!-- Sheet 2: 记繁琐 · 全部人物名册 + 72h 冷静区 + 待归属 + 新添人物 -->
+    <section class="glass-sheet" id="directorySheet" aria-label="人物名册与记繁琐">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2 class="sheet-title" id="dirSheetTitle">人物名册与记繁琐</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="s-pill is-active" id="btnToggleNewPersonForm" type="button">+ 新添一页</button>
+          <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+        </div>
+      </div>
+      <div class="sheet-scroll" id="directorySheetBody"></div>
+    </section>
+
+    <!-- Sheet 3: 轻声记一笔 (Live 4-Mode Composer: Voice / WeChat Chat / Photo / Care) -->
+    <section class="glass-sheet" id="captureSheet" aria-label="随口记一笔">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2 class="sheet-title" id="capSheetTitle">随口记一笔</h2>
+        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+      </div>
+      <div class="sheet-scroll">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="s-pill-row">
+            <button class="s-pill is-active" data-cap-mode="voice" type="button">🎙 语音速记</button>
+            <button class="s-pill" data-cap-mode="wechat" type="button">💬 微信拆解</button>
+            <button class="s-pill" data-cap-mode="photo" type="button">🖼 留影相纸</button>
+            <button class="s-pill" data-cap-mode="care" type="button">✦ 记挂待办</button>
+          </div>
+          <button class="s-pill" id="btnLaunchSplitArc" type="button">断弧分拣 ↗</button>
+        </div>
+        <canvas class="cap-wave-cv" id="capWaveCv" width="480" height="42"></canvas>
+        <div class="cap-photo-drop" id="capPhotoDrop">
+          <span id="capPhotoName">选择一张生活或人像照片（自动剥离 EXIF 并提取色域）</span>
+          <label class="s-pill is-active" style="cursor:pointer;">
+            挑选相片
+            <input type="file" id="capPhotoFile" accept="image/*" hidden />
+          </label>
+        </div>
+        <div class="s-card" style="padding:9px 12px;flex-direction:row;align-items:center;justify-content:space-between;font-size:12px;">
+          <span id="capAiRoutePreview">智能拆解 → 自动生成手帐卡</span>
+          <span style="opacity:0.58;">实库加密写入</span>
+        </div>
+        <textarea class="cap-textarea" id="capTextarea" placeholder="随口说一句、粘贴一段微信聊天，或为照片写一句轻声备注…"></textarea>
+        <div class="s-pill-row">
+          <button class="s-pill" data-cap-sample="周六接妈妈去菜地挑豌豆苗记得带保温杯，顺便下班给小满买盒草莓。" type="button">示例：多人自动拆入</button>
+          <button class="s-pill" data-cap-sample="妈妈：天冷了周末炖排骨萝卜汤，你上午十点前过来吧&#10;我：好嘞，我顺路带无糖清茶过去" type="button">示例：微信对话拆解</button>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button class="s-btn-ghost" id="btnCapAutoRoute" style="flex:1;" type="button">自动分析拆入</button>
+          <button class="s-btn-primary" id="btnCapSaveDirect" style="flex:1;" type="button">存入当前人物</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sheet 4: 设置 · 生物锁 · PIPL 数据主权 -->
+    <section class="glass-sheet" id="settingsSheet" aria-label="设置与数据主权">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2 class="sheet-title">设置与数据主权</h2>
+        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+      </div>
+      <div class="sheet-scroll" id="settingsSheetBody"></div>
+    </section>
+
+    <!-- Sheet 5: 农历/公历三列滚轮核对 -->
+    <section class="glass-sheet" id="dateWheelSheet" aria-label="核对提醒日期">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <h2 class="sheet-title">核对日期 · 农历与公历</h2>
+        <button class="sheet-close-btn" data-close-sheet type="button">✕</button>
+      </div>
+      <div class="sheet-scroll" id="dateWheelBody"></div>
+    </section>
+
+    <!-- Spotlight ⌘K Command Palette -->
+    <section class="spotlight-overlay" id="spotlightOverlay" aria-label="寻句检索">
+      <div class="spot-input-row">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" opacity="0.72"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input class="spot-input" id="spotInput" type="search" placeholder="寻句检索手帐、玉签或人物（⌘K）…" autocomplete="off" />
+        <button class="spot-mini-btn" id="btnSpotClear" type="button">清空</button>
+        <button class="spot-mini-btn" id="btnSpotClose" type="button" aria-label="关闭搜索">✕</button>
+      </div>
+      <div class="s-pill-row" id="spotFilterRow">
+        <button class="s-pill is-active" data-sfilter="all" type="button">全部</button>
+        <button class="s-pill" data-sfilter="voice" type="button">语音</button>
+        <button class="s-pill" data-sfilter="chat" type="button">微信</button>
+        <button class="s-pill" data-sfilter="photo" type="button">相片</button>
+        <button class="s-pill" data-sfilter="fact" type="button">玉签</button>
+      </div>
+      <div class="spot-results" id="spotResults"></div>
+    </section>
+
+    <!-- Apple Photos iOS 26 Darkroom Lightbox -->
+    <section class="lightbox-overlay" id="lightboxOverlay" aria-label="暗房观片">
+      <div class="lb-topbar">
+        <div class="lb-pill">
+          <span id="lbCounter">01 / 01</span>
+          <span id="lbPigments" style="display:inline-flex;gap:4px;"></span>
+        </div>
+        <button class="lg-orb-btn" id="btnLbClose" type="button" aria-label="关闭灯箱" style="background:rgba(30,32,38,0.68);color:#fff;">✕</button>
+      </div>
+      <img class="lb-img-main" id="lbMainImg" src="" alt="" />
+      <div class="lb-dock">
+        <div id="lbCaption" style="font-family:var(--font-serif);font-size:14.5px;line-height:1.58;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <div class="lb-thumbs" id="lbThumbs"></div>
+          <div style="display:inline-flex;gap:6px;">
+            <button class="spot-mini-btn" id="btnLbPrev" type="button" style="color:#FAF6F0;">←</button>
+            <button class="spot-mini-btn" id="btnLbFav" type="button" style="color:#FAF6F0;">☆ 珍藏</button>
+            <button class="spot-mini-btn" id="btnLbSetBg" type="button" style="color:#FAF6F0;">✦ 映作背景</button>
+            <button class="spot-mini-btn" id="btnLbNext" type="button" style="color:#FAF6F0;">→</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Serene Lumina Auth Gate (Real Email OTP + Dev 1-Tap Sign-In) -->
+    <section class="auth-gate-overlay" id="authGateOverlay" aria-label="登录心络">
+      <div class="auth-gate-card">
+        <div class="auth-brand-row">
+          <span class="auth-orb-badge">络</span>
+          <div>
+            <h1 style="font-family:var(--font-serif);font-size:21px;font-weight:600;margin:0;letter-spacing:0.04em;">心络 MindWeave</h1>
+            <div style="font-size:12px;opacity:0.68;margin-top:2px;">私人关系记忆 · 端到端独立密钥加密</div>
+          </div>
+        </div>
+
+        <button class="s-btn-primary" id="btnQuickGuestLogin" type="button" style="height:44px;font-size:14px;">✦ 立即开启我的私人手帐</button>
+
+        <div class="auth-divider">或使用邮箱验证码登录</div>
+
+        <form id="authOtpForm" style="display:flex;flex-direction:column;gap:10px;">
+          <input class="auth-field" id="authEmailInput" type="email" placeholder="输入邮箱地址…" autocomplete="email" />
+          <div id="authOtpRow" style="display:none;gap:8px;">
+            <input class="auth-field" id="authOtpInput" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" style="flex:1;letter-spacing:0.2em;text-align:center;" />
+            <button class="s-btn-primary" id="btnVerifyOtp" type="submit" style="height:44px;padding:0 18px;">登录</button>
+          </div>
+          <button class="s-btn-ghost" id="btnRequestOtp" type="button" style="height:40px;color:#FAF6F0;border-color:rgba(255,255,255,0.22);">发送验证码</button>
+        </form>
+        <div class="auth-hint" id="authHint"></div>
+      </div>
+    </section>
+
+    <div class="toast-pill" id="toastPill" role="status"></div>
+    <div class="ios-home-bar" aria-hidden="true"></div>
+  </div>
+</div>
+
+<input type="file" id="dossierBgUploadInput" accept="image/*" hidden />
+
+<script type="module" src="/scripts/app.mjs?v=16"></script>
 </body>
 </html>

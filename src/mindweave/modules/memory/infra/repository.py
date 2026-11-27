@@ -163,6 +163,59 @@ def decrypt_record_fields(
     )
 
 
+def _sanitize_meta_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 4:
+        raise ValidationFailedError("cardMeta nesting depth exceeds limit")
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if isinstance(value, str):
+        if "\x00" in value:
+            raise ValidationFailedError("Null bytes are not permitted in cardMeta")
+        return strip_forbidden_dev_jargon(value[:2000])
+    if isinstance(value, list):
+        if len(value) > 64:
+            raise ValidationFailedError("cardMeta array exceeds 64 items")
+        return [_sanitize_meta_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 32:
+            raise ValidationFailedError("cardMeta object exceeds 32 keys")
+        cleaned: dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k).strip()
+            if not key or len(key) > 64 or "\x00" in key:
+                raise ValidationFailedError("Invalid key in cardMeta")
+            cleaned[key] = _sanitize_meta_value(v, depth=depth + 1)
+        return cleaned
+    raise ValidationFailedError("Unsupported value type in cardMeta")
+
+
+def sanitize_card_meta(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate and sanitize structured card metadata before AES-256-GCM encryption."""
+    if not raw:
+        return {}
+    result = _sanitize_meta_value(raw, depth=0)
+    assert isinstance(result, dict)
+    return result
+
+
+def decrypt_record_card_meta(
+    cipher: EnvelopeCipher,
+    dek: bytes,
+    row: RecordRow,
+) -> dict[str, Any]:
+    if row.card_meta_enc is None:
+        return {}
+    raw = cipher.decrypt_json(
+        dek,
+        row.card_meta_enc,
+        user_id=row.user_id,
+        table="records",
+        column="card_meta_enc",
+        row_id=row.id,
+    )
+    return raw if isinstance(raw, dict) else {}
+
+
 def decrypt_fact_content(
     cipher: EnvelopeCipher,
     dek: bytes,

@@ -1,0 +1,2821 @@
+{
+  "schema_version": "mindweave.everyday_diary_pack.v10_portrait_vessels",
+  "generated_at": "2026-11-26",
+  "persona_count": 5,
+  "personas": [
+    {
+      "id": "mom",
+      "name": "妈妈",
+      "initial": "妈",
+      "tier": "gold",
+      "shield": false,
+      "role": "金箭 · 母亲",
+      "accent": "#8F7A52",
+      "hero_key": "pt_mom_garden",
+      "polarity": "dark",
+      "ambient_mode": "sunbeams",
+      "stage_cue": "周六 · 接妈妈出门",
+      "persona_description": {
+        "summary": "嘴上总说「不想出门，在家歇着就好」，轻声哄一句「都在家待一周了，一块出去走走」就会笑盈盈换鞋出门。挑菜最讲究，豌豆苗只掐最顶上那截嫩尖尖煮汤；傍晚常在家蒸豆沙包子、熬红豆汤，总把最好的那口留给孩子。",
+        "facts": [
+          {
+            "kind": "喜好",
+            "tone": "warm",
+            "text": "嫩豌豆苗清汤 · 现蒸豆沙包 · 午后清茶",
+            "target_id": "mom_p1"
+          },
+          {
+            "kind": "忌口",
+            "tone": "tense",
+            "text": "最近控糖，少碰芋泥点心和原味奶茶",
+            "target_id": "mom_v1"
+          },
+          {
+            "kind": "习惯",
+            "tone": "calm",
+            "text": "出门听不太清别人说话，放慢步子走她手边",
+            "target_id": "mom_p1"
+          },
+          {
+            "kind": "记挂",
+            "tone": "warm",
+            "text": "周六接她去郊外菜地转转，别忘了带保温杯",
+            "target_id": "mom_c1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "记挂 · 本周六",
+        "date_code": "11·28",
+        "short": "周六上午 · 接妈妈出门走走",
+        "text": "这周六别让她一个人在家闷着，提前一天轻声约好去郊外逛逛菜地，顺路带一袋无糖清茶，别买太甜的点心。",
+        "target_id": "mom_v1",
+        "done": false
+      },
+      "voice_memos": [
+        {
+          "id": "mom_v1",
+          "type": "voice",
+          "date": "11·16",
+          "time": "19:20",
+          "ring": 1,
+          "angle": 54,
+          "tag": "语音速记",
+          "duration": 18,
+          "fav": true,
+          "context": "刚陪妈妈测完动态血糖 · 随手记下饮食提醒",
+          "segments": [
+            "给老妈戴了十四天动态血糖仪，总算摸清她平时的血糖刺客了。",
+            "原味奶茶和带芋泥馅的点心一吃就冲到七点八以上，",
+            "以后回家买手信千万别再挑芋泥蛋糕和甜面包，",
+            "换成清淡的现蒸粗粮和她爱喝的清茶，饭后陪她在小区慢走二十分钟。"
+          ],
+          "card_title": "动态血糖仪摸清控糖雷区"
+        }
+      ],
+      "photo_records": [
+        {
+          "id": "mom_p1",
+          "type": "photo",
+          "date": "11·14",
+          "time": "14:20",
+          "ring": 1,
+          "angle": 132,
+          "fav": true,
+          "tag": "乡下鲜蔬",
+          "scene_label": "周五午后 · 乡下菜地",
+          "media_slug": "wm_m61663250",
+          "palette": [
+            "#918f9a",
+            "#726974",
+            "#afa9b0"
+          ],
+          "polarity": "dark",
+          "caption": "哄着妈妈出门去乡下拔萝卜、掐豌豆苗，她一眼就能挑出最顶上那截嫩尖尖，回来煮了一大锅清汤。",
+          "note": "原本她说在家歇着不想去，听见「都在家一周了，一块出去转转」才笑盈盈跟着出门。",
+          "credit": {
+            "vault_id": "wm_m61663250",
+            "source_library": "Wikimedia Commons",
+            "author": "Markus Spiske",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Basket_of_Vegetables_(Unsplash).jpg",
+            "palette": [
+              "#918f9a",
+              "#726974",
+              "#afa9b0"
+            ]
+          }
+        },
+        {
+          "id": "mom_p2",
+          "type": "photo",
+          "date": "11·09",
+          "time": "17:45",
+          "ring": 1,
+          "angle": 206,
+          "fav": true,
+          "tag": "暖桌瓷壶",
+          "scene_label": "傍晚 17:45 · 家里餐桌",
+          "media_slug": "ul_fCW4E22uIxI",
+          "palette": [
+            "#272a1f",
+            "#21241b",
+            "#424035"
+          ],
+          "polarity": "dark",
+          "caption": "傍晚蒸了一笼热腾腾的豆沙包子，炉子上还小火熬着红豆汤，嘱咐我趁热先装一篮送去姥姥家。",
+          "note": "她和姨妈们轮流照顾八十岁的二老，自己却总说不累。",
+          "credit": {
+            "vault_id": "ul_fCW4E22uIxI",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Masha Rostovskaya",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/fCW4E22uIxI",
+            "palette": [
+              "#272a1f",
+              "#21241b",
+              "#424035"
+            ]
+          }
+        },
+        {
+          "id": "mom_p3",
+          "type": "photo",
+          "date": "11·03",
+          "time": "11:30",
+          "ring": 2,
+          "angle": 260,
+          "fav": false,
+          "tag": "午后日光",
+          "scene_label": "周日中午 · 家里饭厅",
+          "media_slug": "ul_urH155LONWs",
+          "palette": [
+            "#7c6a52",
+            "#b9b09e",
+            "#d6d0c3"
+          ],
+          "polarity": "light",
+          "caption": "山姆买了六根牛腿骨，吃着吃着才发现妈妈又悄悄把好的全夹到我碗里，自己扒拉着边角。",
+          "note": "每次跟她说每人两根公平分，她嘴上答应，回头还是偷偷让出来。",
+          "credit": {
+            "vault_id": "ul_urH155LONWs",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Clay Banks",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/urH155LONWs",
+            "palette": [
+              "#7c6a52",
+              "#b9b09e",
+              "#d6d0c3"
+            ]
+          }
+        },
+        {
+          "id": "mom_p4",
+          "type": "photo",
+          "date": "10·27",
+          "time": "22:55",
+          "ring": 3,
+          "angle": 316,
+          "fav": false,
+          "tag": "夜话柔光",
+          "scene_label": "周二夜里 · 挂完电话后",
+          "media_slug": "wm_m61856012",
+          "palette": [
+            "#958b89",
+            "#d4d6df",
+            "#f2f3f7"
+          ],
+          "polarity": "light",
+          "caption": "快十一点才到家，电话里聊完家长里短，她还是轻轻提点一句：「你喜欢写字记录，再忙也别把这个好习惯丢了。」",
+          "note": "听得出她是怕我最近加班太紧，连停下来喘口气的时间都没有。",
+          "credit": {
+            "vault_id": "wm_m61856012",
+            "source_library": "Wikimedia Commons",
+            "author": "Nik Lanús",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Buenos_Aires,_Argentina_(Unsplash_YMOHw3F1Hdk).jpg",
+            "palette": [
+              "#958b89",
+              "#d4d6df",
+              "#f2f3f7"
+            ]
+          }
+        }
+      ],
+      "chat_records": [
+        {
+          "id": "mom_c1",
+          "type": "chat",
+          "date": "11·12",
+          "time": "20:14",
+          "ring": 1,
+          "angle": 168,
+          "tag": "微信片段",
+          "channel": "微信片段 · 周四晚闲聊",
+          "mood_label": "惦记 → 轻哄 → 安心",
+          "fav": true,
+          "messages": [
+            {
+              "sender": "妈妈",
+              "is_target": true,
+              "time": "20:10",
+              "mood": "warm",
+              "text": "这周冷空气下来了，你晚上骑车回来记得把厚外套穿上。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "20:12",
+              "mood": "neutral",
+              "text": "穿啦穿啦，这周六我调休半天，开车接你去郊外摘点新鲜蔬菜好不好？"
+            },
+            {
+              "sender": "妈妈",
+              "is_target": true,
+              "time": "20:13",
+              "mood": "calm",
+              "text": "哎呀我就不去了吧，大老远的折腾，我在家歇着就行。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "20:13",
+              "mood": "warm",
+              "text": "你都在家待一整周啦，地里的豌豆苗正嫩呢，你不去我们都不会挑尖尖。"
+            },
+            {
+              "sender": "妈妈",
+              "is_target": true,
+              "time": "20:14",
+              "mood": "warm",
+              "text": "哈哈那行吧，明天我去备好保温杯，你们早上别起太晚哦。"
+            }
+          ],
+          "summary": "心络记住了：妈妈说「不想去」往往是怕麻烦孩子，给一个需要她帮忙的小理由（挑菜/带路），她最开心。",
+          "card_title": "哄妈妈出门的小法子",
+          "distilled": "冷空气下来她先叮嘱我穿厚外套，约她周六去郊外摘菜却推辞怕折腾；换口说「我们不会挑嫩豌豆苗尖尖，得请你掌眼」，她立马笑着去备保温杯。",
+          "takeaway": "给一个「需要她帮忙」的小理由，比单说带她散心更让她开心。"
+        },
+        {
+          "id": "mom_c2",
+          "type": "chat",
+          "date": "10·30",
+          "time": "22:48",
+          "ring": 2,
+          "angle": 292,
+          "tag": "微信片段",
+          "channel": "微信片段 · 加班夜的叮嘱",
+          "mood_label": "牵挂 → 贴心",
+          "fav": false,
+          "messages": [
+            {
+              "sender": "妈妈",
+              "is_target": true,
+              "time": "22:44",
+              "mood": "calm",
+              "text": "到家了吗？我看你朋友圈和日记好久没更新了，是不是最近太累了。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "22:46",
+              "mood": "neutral",
+              "text": "刚到家正准备洗漱呢，这阵子项目收尾比较紧，脑子里其实攒了好多想写的。"
+            },
+            {
+              "sender": "妈妈",
+              "is_target": true,
+              "time": "22:48",
+              "mood": "warm",
+              "text": "你有一个愿意记录生活的好爱好，再忙也别丢了，周末回来妈给你蒸豆沙包。"
+            }
+          ],
+          "summary": "心络记住了：妈妈一直在默默看我的近况；周日回家记得多留出半小时陪她聊天。",
+          "card_title": "深夜来电记挂我的小爱好",
+          "distilled": "快十一点才下班到家，妈妈一直默默留意着我好久没更新日记，柔声提醒再忙也别丢掉喜欢写字记录的好习惯，还说周末给我蒸豆沙包。",
+          "takeaway": "妈妈一直在安静看我的近况；周日回家留半小时陪她慢慢聊。"
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [
+        {
+          "slug": "pt_mom_garden",
+          "label": "花园暖笑",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "60% 20%",
+          "phoneFocus": "68% 22%",
+          "faceZone": "right",
+          "palette": [
+            "#1c3424",
+            "#d9a98e",
+            "#8fb36b"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "37911765"
+          }
+        },
+        {
+          "slug": "pt_mom_tea",
+          "label": "庭院暖茶",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "48% 26%",
+          "phoneFocus": "48% 26%",
+          "faceZone": "center",
+          "palette": [
+            "#3e2c22",
+            "#e28c45",
+            "#c8b8a4"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "5709522"
+          }
+        },
+        {
+          "slug": "ul_BfMbxUu0EGE",
+          "label": "清晨纱帘",
+          "polarity": "light",
+          "palette": [
+            "#cec9be",
+            "#948f82",
+            "#d7d2c8"
+          ],
+          "credit": {
+            "vault_id": "ul_BfMbxUu0EGE",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Steinar Engeland",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/BfMbxUu0EGE",
+            "palette": [
+              "#cec9be",
+              "#948f82",
+              "#d7d2c8"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "wm_m61663250",
+          "label": "乡下鲜蔬",
+          "polarity": "dark",
+          "palette": [
+            "#918f9a",
+            "#726974",
+            "#afa9b0"
+          ],
+          "credit": {
+            "vault_id": "wm_m61663250",
+            "source_library": "Wikimedia Commons",
+            "author": "Markus Spiske",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Basket_of_Vegetables_(Unsplash).jpg",
+            "palette": [
+              "#918f9a",
+              "#726974",
+              "#afa9b0"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "ul_fCW4E22uIxI",
+          "label": "暖桌瓷壶",
+          "polarity": "dark",
+          "palette": [
+            "#272a1f",
+            "#21241b",
+            "#424035"
+          ],
+          "credit": {
+            "vault_id": "ul_fCW4E22uIxI",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Masha Rostovskaya",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/fCW4E22uIxI",
+            "palette": [
+              "#272a1f",
+              "#21241b",
+              "#424035"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        }
+      ],
+      "cupid": {
+        "sub": "已读完 7 条日常手帐 · 记住 4 项小习惯",
+        "trace_summary": "核对了妈妈近一个月的 4 组真实生活记录",
+        "traces": [
+          "11·16 语音速记：动态血糖仪测出原味奶茶和芋泥点心是血糖刺客（7.8+）",
+          "11·14 菜地记事：她说不想折腾，听见「你来帮挑嫩豌豆苗」就开心换鞋出门",
+          "11·12 微信片段：冷空气下来第一时间叮嘱穿厚外套，怕麻烦孩子才总推辞"
+        ],
+        "letter": "翻看你最近记下的几件小事，妈妈所有的推辞几乎都是怕折腾你。这周六接她出门，别只说「带你散心」，换成请她掌眼挑嫩豌豆苗尖尖，顺手带好保温杯、避开芋泥和甜奶茶。在人多的地方记得放慢步子走她手边——她最近听不太清别人说话，有你在身边会踏实很多。",
+        "cites": [
+          {
+            "label": "11·16 控糖语音",
+            "targetId": "mom_v1"
+          },
+          {
+            "label": "11·14 菜地挑豌豆苗",
+            "targetId": "mom_p1"
+          },
+          {
+            "label": "11·12 晚间微信",
+            "targetId": "mom_c1"
+          }
+        ],
+        "action_label": "周六上午 · 带保温杯接妈妈去郊外挑豌豆苗",
+        "prompts": [
+          "这周六带妈妈出门要注意什么？",
+          "回家给妈妈带什么吃的不会踩控糖雷区？",
+          "妈妈总说不想麻烦我，怎么约她才自然？"
+        ],
+        "answers": {
+          "这周六带妈妈出门要注意什么？": "翻了你最近的记录，有三件顺手就能让她特别舒心的小事：一是提前带好保温杯，别买芋泥或甜奶茶（上次测血糖会飙升）；二是在菜地或人多的地方放慢步子走她手边，她最近听不太清别人说话，你在身旁她会踏实很多；三是请她掌眼挑最嫩的豌豆苗尖尖，她最有成就感。",
+          "回家给妈妈带什么吃的不会踩控糖雷区？": "你 11·16 语音里记过，原味奶茶和芋泥馅点心一吃血糖就会冲到 7.8+ mmol/L。换成清淡的无糖清茶、现磨黑芝麻或新鲜低糖浆果会稳妥得多，陪她饭后慢走二十分钟她也很受用。",
+          "妈妈总说不想麻烦我，怎么约她才自然？": "按 11·12 那次微信的经验，直接说「带你去玩」她第一反应会怕折腾而推辞；换成「我们都不会挑嫩豌豆苗，得请你出马掌掌眼」这样带一点被需要感的小理由，她一下就高兴答应了。"
+        },
+        "perspective": "妈妈嘴上总说「不想出门、别折腾你」，其实是怕耽误你休息。换个说法请她「帮忙掌眼挑最嫩的豌豆苗」，她会觉得自己被需要，整个人都会笑开了。",
+        "action_time": "11月28日 09:00 · 备好保温杯接妈妈"
+      },
+      "diary_sources": [
+        {
+          "blog": "Moatkon's Blog",
+          "title": "今天去拔萝卜了",
+          "date": "2025-11-14",
+          "url": "https://blog.moatkon.com/posts/2025/11/14/1/"
+        },
+        {
+          "blog": "陈昱行博客",
+          "title": "她老了",
+          "date": "2021-02-05",
+          "url": "https://yuhang.ch/posts/thoughts/old-and-old/"
+        },
+        {
+          "blog": "Cosmos的博客",
+          "title": "佩戴动态血糖仪后，我找到了哪些血糖刺客？",
+          "date": "2026-10-04",
+          "url": "https://cosmo-polite.com/"
+        },
+        {
+          "blog": "见字如面",
+          "title": "忙忙碌碌，也别错过生活本身",
+          "date": "2026-04-06",
+          "url": "https://hiwannz.com/archives/1243.html"
+        },
+        {
+          "blog": "Moatkon's Blog",
+          "title": "2026年 元旦假期",
+          "date": "2026-01-03",
+          "url": "https://blog.moatkon.com/posts/2026/01/03/1/"
+        }
+      ],
+      "care_days": [
+        {
+          "id": "cd_mom_1",
+          "title": "周六带保温杯接妈妈郊外挑豌豆苗",
+          "date_label": "11月28日",
+          "lunar_label": "十月十九",
+          "lead": "提前 1 天",
+          "days_left": "4天后",
+          "done": false
+        },
+        {
+          "id": "cd_mom_2",
+          "title": "农历冬月初八 · 提前买羊绒护膝",
+          "date_label": "12月16日",
+          "lunar_label": "冬月初八",
+          "lead": "提前 7 天",
+          "days_left": "22天后",
+          "done": false,
+          "needs_confirm": true
+        }
+      ],
+      "draft_slip": {
+        "id": "mom_draft_1",
+        "type": "draft",
+        "date": "11·09",
+        "ring": 2,
+        "angle": 212,
+        "tag": "待核对日期",
+        "text": "农历冬月初八记得提前给妈妈买副羊绒护膝，她天一降温膝盖就发凉。",
+        "lunar_hint": "12月16日 ✎ · 轻点核对",
+        "lunar_label": "农历冬月初八",
+        "solar_year": 2026,
+        "solar_month": 12,
+        "solar_day": 16,
+        "fav": false
+      }
+    },
+    {
+      "id": "xiaoman",
+      "name": "小满",
+      "initial": "满",
+      "tier": "gold",
+      "shield": false,
+      "role": "金箭 · 伴侣",
+      "accent": "#C8844A",
+      "hero_key": "pt_xm_autumn",
+      "polarity": "dark",
+      "ambient_mode": "water",
+      "stage_cue": "晴天 · 东安湖骑车",
+      "persona_description": {
+        "summary": "平时几乎不主动喊人帮忙，只要突然开口拜托顺手做件小事，往往是当下真的腾不开手了。出门旅游抢票、记日程全是她细心操办，却总把牛腿骨留给我吃、自己悄悄把鸡肉夹进碗里「骗」我说她也有。",
+        "facts": [
+          {
+            "kind": "心法",
+            "tone": "warm",
+            "text": "下班脱外套先给一个拥抱，比讲道理管用百倍",
+            "target_id": "xm_v1"
+          },
+          {
+            "kind": "忌口",
+            "tone": "tense",
+            "text": "生理期千万别点辣外卖 · 干锅最多隔周吃一次",
+            "target_id": "xm_c1"
+          },
+          {
+            "kind": "喜好",
+            "tone": "warm",
+            "text": "晴天湖畔骑双人脚踏车 · 草莓橘子自制糖葫芦",
+            "target_id": "xm_p3"
+          },
+          {
+            "kind": "习惯",
+            "tone": "calm",
+            "text": "看我情绪低落会睡不着刷手机，要主动说近况",
+            "target_id": "xm_p1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "记挂 · 这周末",
+        "date_code": "11·29",
+        "short": "晴天去东安湖 · 骑双人脚踏车",
+        "text": "上次在书香广场踩双人脚踏车她说风特别舒服，这周末天晴的话早点出门，去买草莓和橘子，别让她再悄悄把好吃的都让给我。",
+        "target_id": "xm_p3",
+        "done": false
+      },
+      "voice_memos": [
+        {
+          "id": "xm_v1",
+          "type": "voice",
+          "date": "11·18",
+          "time": "21:42",
+          "ring": 1,
+          "angle": 62,
+          "tag": "语音速记",
+          "duration": 17,
+          "fav": true,
+          "context": "下班回家拥抱和解后 · 给自己记一条提醒",
+          "segments": [
+            "今天早上急着出门遛狗，她问能不能顺手蒸一下蛋羹，我头都没回就说不行。",
+            "下午觉得气氛不对发微信问，才知道她当时急着去洗手间才破例喊我帮忙。",
+            "晚上下班脱完外套好好抱了抱她，她说其实不是非要讲道理，只是想让我多问一句怎么了。",
+            "记下来：她平时从不轻易开口，只要突然拜托小事，一定先停一秒看看她是不是腾不开手。"
+          ],
+          "card_title": "下班先拥抱，比讲道理管用"
+        }
+      ],
+      "photo_records": [
+        {
+          "id": "xm_p1",
+          "type": "photo",
+          "date": "11·15",
+          "time": "20:30",
+          "ring": 1,
+          "angle": 138,
+          "fav": true,
+          "tag": "冬日毛衣",
+          "scene_label": "小雨夜 · 零度的卧室",
+          "media_slug": "ul_nLNimOqmbpg",
+          "palette": [
+            "#17120e",
+            "#271e17",
+            "#36291e"
+          ],
+          "polarity": "dark",
+          "caption": "接近零度的毛毛雨天，我心情低落遛狗走得越来越久。推开卧室门才发现她没睡，正刷着手机胡思乱想，抱住她那一刻才软下来。",
+          "note": "她说「别一个人闷着排解，你难受我也会跟着睡不着」。",
+          "credit": {
+            "vault_id": "ul_nLNimOqmbpg",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Victoria Berman",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/nLNimOqmbpg",
+            "palette": [
+              "#17120e",
+              "#271e17",
+              "#36291e"
+            ]
+          }
+        },
+        {
+          "id": "xm_p2",
+          "type": "photo",
+          "date": "11·09",
+          "time": "07:40",
+          "ring": 1,
+          "angle": 210,
+          "fav": true,
+          "tag": "晨桌热杯",
+          "scene_label": "周五清早 · 家里餐桌",
+          "media_slug": "ul_Q-dD1KpMcDQ",
+          "palette": [
+            "#2f1f16",
+            "#8a613e",
+            "#a29b89"
+          ],
+          "polarity": "dark",
+          "caption": "她请了假要去医院体检、交入园资料、带孩子去科技馆，行程排得满满当当，早上还是早早起来把我的午饭备好了才出门。",
+          "note": "晚上躺下她才轻声跟我说孩子在科技馆乖乖放回喜欢的玩具，怕我白天才知道会生气。",
+          "credit": {
+            "vault_id": "ul_Q-dD1KpMcDQ",
+            "source_library": "Unsplash Lite 25K",
+            "author": "charlesdeluvio",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/Q-dD1KpMcDQ",
+            "palette": [
+              "#2f1f16",
+              "#8a613e",
+              "#a29b89"
+            ]
+          }
+        },
+        {
+          "id": "xm_p3",
+          "type": "photo",
+          "date": "10·20",
+          "time": "17:50",
+          "ring": 3,
+          "angle": 318,
+          "fav": false,
+          "tag": "粉金暮水",
+          "scene_label": "周六傍晚 · 湖边散步",
+          "media_slug": "ul_tNDvFkxkBHo",
+          "palette": [
+            "#5c2c52",
+            "#9e4f75",
+            "#8974d2"
+          ],
+          "polarity": "dark",
+          "caption": "从书香广场还完双人脚踏车，晚风吹得人全身轻松，水面被落日染成一整片粉紫色，她说下次还要挑这样的好天气出来。",
+          "note": "踩主驾挺费力，半路换位置后她也笑着说终于体会到当「发动机」的辛苦。",
+          "credit": {
+            "vault_id": "ul_tNDvFkxkBHo",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Igor Kasalovic",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/tNDvFkxkBHo",
+            "palette": [
+              "#5c2c52",
+              "#9e4f75",
+              "#8974d2"
+            ]
+          }
+        },
+        {
+          "id": "xm_p4",
+          "type": "photo",
+          "date": "10·29",
+          "time": "21:15",
+          "ring": 2,
+          "angle": 264,
+          "fav": false,
+          "tag": "客厅暖毯",
+          "scene_label": "周三晚 · 客厅沙发",
+          "media_slug": "wm_m61777177",
+          "palette": [
+            "#2d1b0f",
+            "#6d654e",
+            "#babb6f"
+          ],
+          "polarity": "dark",
+          "caption": "山姆买回来的六根牛腿骨，我不知情多吃了一根，才发现她拿鸡肉「骗」我说碗里还有——总把好的留给我。",
+          "note": "以后分食前先问清楚总数，把最大块先夹进她碗里。",
+          "credit": {
+            "vault_id": "wm_m61777177",
+            "source_library": "Wikimedia Commons",
+            "author": "Kelly Sikkema",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Kelly_Sikkema_2016-03-09_(Unsplash).jpg",
+            "palette": [
+              "#2d1b0f",
+              "#6d654e",
+              "#babb6f"
+            ]
+          }
+        }
+      ],
+      "chat_records": [
+        {
+          "id": "xm_c1",
+          "type": "chat",
+          "date": "11·18",
+          "time": "15:26",
+          "ring": 1,
+          "angle": 176,
+          "tag": "微信片段",
+          "channel": "微信片段 · 周四下午破冰",
+          "mood_label": "憋闷 → 摊开说 → 变软",
+          "fav": true,
+          "messages": [
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "15:18",
+              "mood": "calm",
+              "text": "你上午是不是生气了呀？我回来感觉气氛不太对。"
+            },
+            {
+              "sender": "小满",
+              "is_target": true,
+              "time": "15:21",
+              "mood": "tense",
+              "text": "你怎么看出来的……早上我是实在憋不住要去洗手间，才喊你顺手蒸个蛋羹的，平时我都不会喊你。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "15:22",
+              "mood": "warm",
+              "text": "哎呀我真糊涂，下次你直接告诉我或者放着别管就行，身体最重要。"
+            },
+            {
+              "sender": "小满",
+              "is_target": true,
+              "time": "15:24",
+              "mood": "calm",
+              "text": "我那时候以为你会回头问我一句「怎么啦」，结果你什么都没问就出门了。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "15:26",
+              "mood": "warm",
+              "text": "是我反应太慢了，今晚下班我顺路买草莓和橘子回去，别吃辣外卖了。"
+            }
+          ],
+          "summary": "心络记住了：她在意的是「顺口多问一句怎么了」的在乎感；情绪低落或生理期忌辣外卖。",
+          "card_title": "那次「蒸蛋羹」背后的委屈",
+          "distilled": "她平时几乎从不开口喊帮忙，那天早上实在急着去洗手间才破例拜托我顺手蒸个蛋羹。她气的不是没帮上忙，而是我头也没回、连一句「怎么啦」都没问。",
+          "takeaway": "她突然拜托小事时一定先停一秒问「怎么了」；低落或生理期忌辣外卖。"
+        },
+        {
+          "id": "xm_c2",
+          "type": "chat",
+          "date": "11·04",
+          "time": "19:08",
+          "ring": 2,
+          "angle": 298,
+          "tag": "微信片段",
+          "channel": "微信片段 · 周末出行商量",
+          "mood_label": "轻松 → 默契",
+          "fav": false,
+          "messages": [
+            {
+              "sender": "小满",
+              "is_target": true,
+              "time": "19:02",
+              "mood": "warm",
+              "text": "看天气预报这周六放晴了，要不再去东安湖把上次没骑到的那半圈补上？"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "19:04",
+              "mood": "warm",
+              "text": "好啊！这次进地库直接下 B2 停车，别在 B1 绕圈告警没油了哈哈。"
+            },
+            {
+              "sender": "小满",
+              "is_target": true,
+              "time": "19:06",
+              "mood": "warm",
+              "text": "成交！午饭别吃太辣的干锅啦，吃完胃不舒服，咱们找家清淡面馆就行。"
+            }
+          ],
+          "summary": "心络记住了：去东安湖优先直下 B2 停车；周末聚餐少点重辣干锅。",
+          "card_title": "东安湖晴天骑车约定",
+          "distilled": "约好这周六放晴再去东安湖补完上次没骑完的那半圈双人脚踏车。进了地库直接下 B2 停车不绕圈，午饭找家清淡面馆，避开让她胃不舒服的重辣干锅。",
+          "takeaway": "去东安湖直下 B2 停车；周末午饭选清淡馆子，少点重辣干锅。"
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [
+        {
+          "slug": "pt_xm_autumn",
+          "label": "秋木回眸",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "46% 24%",
+          "phoneFocus": "44% 24%",
+          "faceZone": "center",
+          "palette": [
+            "#291e16",
+            "#a87e58",
+            "#d6b892"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "5288824"
+          }
+        },
+        {
+          "slug": "pt_xm_sunset",
+          "label": "湖畔落霞",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "54% 32%",
+          "phoneFocus": "54% 32%",
+          "faceZone": "center",
+          "palette": [
+            "#2c2426",
+            "#d8b498",
+            "#a88f82"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "19280594"
+          }
+        },
+        {
+          "slug": "ul_ps2daRcXYes",
+          "label": "湖畔金道",
+          "polarity": "dark",
+          "palette": [
+            "#251c33",
+            "#e5c28c",
+            "#855843"
+          ],
+          "credit": {
+            "vault_id": "ul_ps2daRcXYes",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Lukasz Szmigiel",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/ps2daRcXYes",
+            "palette": [
+              "#251c33",
+              "#e5c28c",
+              "#855843"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "ul_tNDvFkxkBHo",
+          "label": "粉金暮水",
+          "polarity": "dark",
+          "palette": [
+            "#5c2c52",
+            "#9e4f75",
+            "#8974d2"
+          ],
+          "credit": {
+            "vault_id": "ul_tNDvFkxkBHo",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Igor Kasalovic",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/tNDvFkxkBHo",
+            "palette": [
+              "#5c2c52",
+              "#9e4f75",
+              "#8974d2"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "wm_m61777177",
+          "label": "客厅暖毯",
+          "polarity": "dark",
+          "palette": [
+            "#2d1b0f",
+            "#6d654e",
+            "#babb6f"
+          ],
+          "credit": {
+            "vault_id": "wm_m61777177",
+            "source_library": "Wikimedia Commons",
+            "author": "Kelly Sikkema",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Kelly_Sikkema_2016-03-09_(Unsplash).jpg",
+            "palette": [
+              "#2d1b0f",
+              "#6d654e",
+              "#babb6f"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        }
+      ],
+      "cupid": {
+        "sub": "已读完 7 条日常手帐 · 记住 4 项相处心法",
+        "trace_summary": "核对了小满近一个月的 4 组真实日常记录",
+        "traces": [
+          "11·18 语音速记：平时极少开口喊帮忙，突然拜托蒸蛋羹是因为急着去洗手间",
+          "11·15 雨夜记事：你闷头遛狗晚归，她在零度的卧室没睡一直刷手机担心",
+          "11·04 微信片段：喜欢晴天去东安湖踩双人脚踏车，午饭怕吃太辣的干锅"
+        ],
+        "letter": "小满嘴上从不逞强要什么大道理，她真正在意的，是突然拜托一件小事时你肯停下来问一句「怎么了」，还有你难受时别一个人闷着消化。这周末如果放晴，早点去东安湖把上次没骑完的那半圈双人脚踏车补上，午饭选家清淡面馆，回程顺手买盒草莓和橘子给她做糖葫芦。",
+        "cites": [
+          {
+            "label": "11·18 拥抱和解语音",
+            "targetId": "xm_v1"
+          },
+          {
+            "label": "11·15 雨夜卧室",
+            "targetId": "xm_p1"
+          },
+          {
+            "label": "11·04 东安湖约定",
+            "targetId": "xm_c2"
+          }
+        ],
+        "action_label": "周末晴天 · 东安湖双人脚踏车 + 买草莓橘子",
+        "prompts": [
+          "她突然不说话或气氛变冷，怎么破冰最管用？",
+          "这周末带小满出门怎么安排最合她心意？",
+          "最近她有什么藏起来没直说的委屈？"
+        ],
+        "answers": {
+          "她突然不说话或气氛变冷，怎么破冰最管用？": "从你 11·18 和 11·15 的两段手帐看，小满不是喜欢讲大道理的人：白天发现不对劲时发一句轻柔的微信先认个迟钝，晚上进门脱完外套直接给一个拥抱，比解释十句「下次你直接说」都更能让她瞬间软下来。",
+          "这周末带小满出门怎么安排最合她心意？": "她最念念不忘的是晴天在东安湖书香广场踩双人脚踏车吹晚风，顺路买点草莓和橘子回家做糖葫芦。提醒一个小细节：干锅最多偶尔吃一次，她平时吃太辣胃会不舒服，午饭选清淡面馆更稳妥。",
+          "最近她有什么藏起来没直说的委屈？": "你记过两件小事：一是她总把山姆买的好肉留给你吃，自己吃鸡肉边角；二是你心情低落遛狗变久时，她嘴上不催，晚上却会在卧室睡不着刷手机胡思乱想。主动多跟她分享一句「我今天为什么有点累」，她就会安心很多。"
+        },
+        "perspective": "小满平时几乎不主动喊人帮忙，只要突然开口拜托哪怕一件小事，往往是当下真的腾不开手或有点委屈了。先停一秒看看她，比急着讲方案更管用。",
+        "action_time": "11月29日 10:00 · 东安湖骑车带草莓"
+      },
+      "diary_sources": [
+        {
+          "blog": "Moatkon's Blog",
+          "title": "表达清楚的重要性",
+          "date": "2025-10-23",
+          "url": "https://blog.moatkon.com/posts/2025/10/24/1/"
+        },
+        {
+          "blog": "Moatkon's Blog",
+          "title": "2026年 元旦假期",
+          "date": "2026-01-03",
+          "url": "https://blog.moatkon.com/posts/2026/01/03/1/"
+        },
+        {
+          "blog": "Moatkon's Blog",
+          "title": "2026 W3",
+          "date": "2026-01-18",
+          "url": "https://blog.moatkon.com/posts/2026/01/18/"
+        },
+        {
+          "blog": "Moatkon's Blog",
+          "title": "再一次去东安湖",
+          "date": "2025-11-29",
+          "url": "https://blog.moatkon.com/posts/2025/11/29/"
+        },
+        {
+          "blog": "蒙奇日记",
+          "title": "记一次情感调解",
+          "date": "2024-06-08",
+          "url": "https://luffy.cc/a/qing-gan-tiao-jie"
+        }
+      ],
+      "care_days": [
+        {
+          "id": "cd_xm_1",
+          "title": "周末晴天去东安湖骑车 · 顺路买草莓和橘子",
+          "date_label": "11月29日",
+          "lunar_label": "十月二十",
+          "lead": "提前 1 天",
+          "days_left": "5天后",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "ale",
+      "name": "阿乐",
+      "initial": "乐",
+      "tier": "gold",
+      "shield": false,
+      "role": "金箭 · 挚友",
+      "accent": "#4F7896",
+      "hero_key": "pt_ale_cafe",
+      "polarity": "dark",
+      "ambient_mode": "bokeh",
+      "stage_cue": "月底 · 约喝热拿铁",
+      "persona_description": {
+        "summary": "从读书时就几乎天天混在一起的铁哥们，哪怕天南地北各自忙成陀螺，遇上大事还是第一个赶来撑场。去年下半年下定决心戒掉了重油火锅、炸鸡和熬夜，聊天少了年少吹牛，多了给彼此托底的踏实。",
+        "facts": [
+          {
+            "kind": "忌口",
+            "tone": "tense",
+            "text": "下半年开始戒火锅、啤酒炸鸡，约饭选清淡馆子",
+            "target_id": "al_v1"
+          },
+          {
+            "kind": "喜好",
+            "tone": "warm",
+            "text": "拉花拿铁 · 周末奥森慢跑 · 公路自驾看日落",
+            "target_id": "al_p2"
+          },
+          {
+            "kind": "雷区",
+            "tone": "tense",
+            "text": "骑完马腰疼三天，以后户外别再怂恿飙马",
+            "target_id": "al_p1"
+          },
+          {
+            "kind": "记挂",
+            "tone": "warm",
+            "text": "月底约在老地方喝杯咖啡，聊聊换城市后的近况",
+            "target_id": "al_c1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "记挂 · 月底小聚",
+        "date_code": "11·30",
+        "short": "约阿乐喝咖啡 · 绝不约火锅",
+        "text": "他搬去新小区独居后周边五百米只有一家小咖啡厅，月底约他出来坐坐，找家清淡小馆别再约重辣火锅和啤酒炸鸡。",
+        "target_id": "al_c1",
+        "done": false
+      },
+      "voice_memos": [
+        {
+          "id": "al_v1",
+          "type": "voice",
+          "date": "11·17",
+          "time": "22:18",
+          "ring": 1,
+          "angle": 58,
+          "tag": "语音速记",
+          "duration": 16,
+          "fav": true,
+          "context": "和阿乐散步聊完近况 · 随手记下约饭变化",
+          "segments": [
+            "记一下阿乐最近身体调理，下半年彻底把火锅、啤酒炸鸡和夜宵全戒了，",
+            "以前每次见面必约串串火锅，以后千万别再往重油辣锅里拽他了。",
+            "他现在周末常去公园跑十公里，月底约他见面，",
+            "直接订那家靠窗的安静咖啡馆或清淡日料，让他能踏踏实实吃顿舒服饭。"
+          ],
+          "card_title": "老友戒火锅炸鸡，改约慢跑清茶"
+        }
+      ],
+      "photo_records": [
+        {
+          "id": "al_p1",
+          "type": "photo",
+          "date": "11·15",
+          "time": "08:30",
+          "ring": 1,
+          "angle": 144,
+          "fav": true,
+          "tag": "细雨车窗",
+          "scene_label": "清早 08:30 · 国道车窗外",
+          "media_slug": "ul_x7qj_D4dOzM",
+          "palette": [
+            "#5c6863",
+            "#d6d6da",
+            "#bec3c5"
+          ],
+          "polarity": "dark",
+          "caption": "端午自驾那天我没睡好，全靠他一个人沿着国道稳稳开了 140 公里；清早醒来窗外细雨绵绵，雨水冲净了玻璃上的浮尘。",
+          "note": "酒店早餐又贵又难吃，俩人拆开备用的自热锅边吃边笑，成了那趟最难忘的回忆。",
+          "credit": {
+            "vault_id": "ul_x7qj_D4dOzM",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Priscilla Du Preez 🇨🇦",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/x7qj_D4dOzM",
+            "palette": [
+              "#5c6863",
+              "#d6d6da",
+              "#bec3c5"
+            ]
+          }
+        },
+        {
+          "id": "al_p2",
+          "type": "photo",
+          "date": "11·08",
+          "time": "15:20",
+          "ring": 1,
+          "angle": 214,
+          "fav": true,
+          "tag": "圆桌拿铁",
+          "scene_label": "周日下午 · 街角咖啡馆",
+          "media_slug": "wm_c167",
+          "palette": [
+            "#322a23",
+            "#b6b7b6",
+            "#8c8276"
+          ],
+          "polarity": "dark",
+          "caption": "刚搬去独居那阵子他请我吃了顿饭、带我把小区周边逛了个遍。两杯热拿铁配一块小蛋糕，一坐就是一下午。",
+          "note": "不用刻意找话题，安静坐着也不会觉得尴尬，这大概就是老朋友的分寸感。",
+          "credit": {
+            "vault_id": "wm_c167",
+            "source_library": "Wikimedia Commons",
+            "author": "Alisa Anton",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Cappuccinos_and_cake_(Unsplash).jpg",
+            "palette": [
+              "#322a23",
+              "#b6b7b6",
+              "#8c8276"
+            ]
+          }
+        },
+        {
+          "id": "al_p3",
+          "type": "photo",
+          "date": "10·26",
+          "time": "22:30",
+          "ring": 2,
+          "angle": 268,
+          "fav": false,
+          "tag": "木桌手记",
+          "scene_label": "深夜书桌 · 聊完天之后",
+          "media_slug": "wm_d183",
+          "palette": [
+            "#2c1d16",
+            "#bbbbbc",
+            "#725f52"
+          ],
+          "polarity": "dark",
+          "caption": "有回他在群里发了句「真搞不懂」，私聊陪他讲了快一小时——他性子直、一根筋，其实只是太在乎又不会拐弯表达。",
+          "note": "挂完语音随手把那几条相处感悟抄在本子上，下次约酒提醒他别再硬碰硬。",
+          "credit": {
+            "vault_id": "wm_d183",
+            "source_library": "Wikimedia Commons",
+            "author": "Jan Kahánek",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Tabel_day_1_(Unsplash).jpg",
+            "palette": [
+              "#2c1d16",
+              "#bbbbbc",
+              "#725f52"
+            ]
+          }
+        },
+        {
+          "id": "al_p4",
+          "type": "photo",
+          "date": "10·18",
+          "time": "16:15",
+          "ring": 3,
+          "angle": 312,
+          "fav": false,
+          "tag": "秋叶美式",
+          "scene_label": "深秋午后 · 公园步道",
+          "media_slug": "ul_W2zipE1V-iQ",
+          "palette": [
+            "#594e3e",
+            "#7a684d",
+            "#a1714a"
+          ],
+          "polarity": "light",
+          "caption": "伴郎西装一脱，大家都老老实实回归柴米油盐。下半年他彻底告别熬夜打游戏，周末开始拉着我去公园慢跑配速拉回五分多。",
+          "note": "肩膀扛起的东西变重了，脚下反而走得比从前更踏实。",
+          "credit": {
+            "vault_id": "ul_W2zipE1V-iQ",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Clay Banks",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/W2zipE1V-iQ",
+            "palette": [
+              "#594e3e",
+              "#7a684d",
+              "#a1714a"
+            ]
+          }
+        }
+      ],
+      "chat_records": [
+        {
+          "id": "al_c1",
+          "type": "chat",
+          "date": "11·11",
+          "time": "23:16",
+          "ring": 1,
+          "angle": 182,
+          "tag": "微信片段",
+          "channel": "微信片段 · 深夜老友解围",
+          "mood_label": "烦躁 → 听懂 → 松口气",
+          "fav": true,
+          "messages": [
+            {
+              "sender": "阿乐",
+              "is_target": true,
+              "time": "23:05",
+              "mood": "tense",
+              "text": "哥们在不在，又跟对象吵了一架，我真是头大了，好说歹说都不管用。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "23:07",
+              "mood": "calm",
+              "text": "在呢，怎么了？是不是又踩什么小细节了。"
+            },
+            {
+              "sender": "阿乐",
+              "is_target": true,
+              "time": "23:09",
+              "mood": "tense",
+              "text": "她来大姨妈，我顺手给她点了份平时常吃的外卖，忘了备注微辣，结果辣着了……"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "23:12",
+              "mood": "warm",
+              "text": "哈哈你这直男一根筋，人家不是跟一顿外卖过不去，是怕你没放在心上。别讲道理了，明天叫份热姜茶道个歉。"
+            },
+            {
+              "sender": "阿乐",
+              "is_target": true,
+              "time": "23:16",
+              "mood": "warm",
+              "text": "行，听你的。谢了兄弟，月底回城我请你喝咖啡，不吃火锅了，最近戒辣。"
+            }
+          ],
+          "summary": "心络记住了：阿乐性子直但听得进实在建议；月底约饭改清淡咖啡馆，记得他戒辣戒火锅。",
+          "card_title": "直男老友解围 + 戒辣新习惯",
+          "distilled": "深夜找我吐槽和对象因辣外卖吵架，点破「人家在意的是你放没放在心上」后他立马转过弯来，顺口约好月底喝咖啡——他下半年在调理身体已经彻底戒辣戒火锅。",
+          "takeaway": "老友听得进带幽默的实在建议；月底约饭改清淡咖啡馆，绝不约火锅。"
+        },
+        {
+          "id": "al_c2",
+          "type": "chat",
+          "date": "10·22",
+          "time": "18:45",
+          "ring": 2,
+          "angle": 290,
+          "tag": "微信片段",
+          "channel": "微信片段 · 搬新家互助",
+          "mood_label": "轻快 → 温暖",
+          "fav": false,
+          "messages": [
+            {
+              "sender": "阿乐",
+              "is_target": true,
+              "time": "18:40",
+              "mood": "warm",
+              "text": "新房子收拾得差不多了，房东阿姨留了一屋子花，就是周边五百米就一家咖啡厅。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "18:42",
+              "mood": "warm",
+              "text": "那刚好清静啊！周末我带两包手冲豆子过去帮你暖暖房。"
+            },
+            {
+              "sender": "阿乐",
+              "is_target": true,
+              "time": "18:45",
+              "mood": "warm",
+              "text": "妥妥的，顺便带你逛逛小区旁边那条林荫路，秋天特别好看。"
+            }
+          ],
+          "summary": "心络记住了：阿乐独居新家附近安静但餐饮少，去做客带手冲咖啡豆或水果最贴心。",
+          "card_title": "独居新家的暖居伴手礼",
+          "distilled": "他刚收拾好独居新家，房东留了一屋子花很温馨，但周边五百米只有一家小咖啡厅。约好周末带两包中深烘手冲豆过去暖暖房，顺路逛逛小区旁的秋天林荫路。",
+          "takeaway": "去阿乐新家做客，带手冲咖啡豆或当季水果最贴合他的日常。"
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [
+        {
+          "slug": "pt_ale_cafe",
+          "label": "街角手冲",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "50% 34%",
+          "phoneFocus": "52% 34%",
+          "faceZone": "center",
+          "palette": [
+            "#1c2123",
+            "#8b7b66",
+            "#5c6d70"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "5835056"
+          }
+        },
+        {
+          "slug": "pt_ale_amber",
+          "label": "暖灯侧影",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "48% 30%",
+          "phoneFocus": "48% 30%",
+          "faceZone": "center",
+          "palette": [
+            "#171412",
+            "#c28654",
+            "#6e4b34"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "14965340"
+          }
+        },
+        {
+          "slug": "wm_d368",
+          "label": "雨街黑伞",
+          "polarity": "dark",
+          "palette": [
+            "#111718",
+            "#513b3e",
+            "#968781"
+          ],
+          "credit": {
+            "vault_id": "wm_d368",
+            "source_library": "Wikimedia Commons",
+            "author": "Todd Diemer",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Umbrella_California_St_rain_(Unsplash).jpg",
+            "palette": [
+              "#111718",
+              "#513b3e",
+              "#968781"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "wm_c167",
+          "label": "圆桌拿铁",
+          "polarity": "dark",
+          "palette": [
+            "#322a23",
+            "#b6b7b6",
+            "#8c8276"
+          ],
+          "credit": {
+            "vault_id": "wm_c167",
+            "source_library": "Wikimedia Commons",
+            "author": "Alisa Anton",
+            "license": "CC0",
+            "source_page": "https://commons.wikimedia.org/wiki/File:Cappuccinos_and_cake_(Unsplash).jpg",
+            "palette": [
+              "#322a23",
+              "#b6b7b6",
+              "#8c8276"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "ul_x7qj_D4dOzM",
+          "label": "细雨车窗",
+          "polarity": "dark",
+          "palette": [
+            "#5c6863",
+            "#d6d6da",
+            "#bec3c5"
+          ],
+          "credit": {
+            "vault_id": "ul_x7qj_D4dOzM",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Priscilla Du Preez 🇨🇦",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/x7qj_D4dOzM",
+            "palette": [
+              "#5c6863",
+              "#d6d6da",
+              "#bec3c5"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        }
+      ],
+      "cupid": {
+        "sub": "已读完 7 条日常手帐 · 记住 4 项老友默契",
+        "trace_summary": "核对了阿乐近一个月的 4 组老友记录",
+        "traces": [
+          "11·17 语音速记：下半年调理身体，已彻底戒掉重油火锅、啤酒炸鸡和夜宵",
+          "11·11 深夜微信：和对象闹别扭找你吐槽，最吃幽默实在的小动作建议",
+          "10·22 搬家聊天：新租的小区很清静，周边五百米只有一家小咖啡厅"
+        ],
+        "letter": "老朋友见面最怕还按几年前的旧习惯点单。你在语音里特意记过，阿乐下半年已经彻底告别了火锅炸鸡和熬夜，周末常去公园跑十公里。月底约他小聚，别再拽他去重辣锅，选一家靠窗安静、有热拿铁和清淡热菜的小馆；如果去他新家坐坐，顺手带一包手冲豆子就刚刚好。",
+        "cites": [
+          {
+            "label": "11·17 戒辣语音",
+            "targetId": "al_v1"
+          },
+          {
+            "label": "11·11 深夜微信",
+            "targetId": "al_c1"
+          },
+          {
+            "label": "11·08 街角拿铁",
+            "targetId": "al_p2"
+          }
+        ],
+        "action_label": "月底小聚 · 订安静咖啡馆或清淡小馆，绝不约火锅",
+        "prompts": [
+          "月底请阿乐吃饭，选什么店最合适？",
+          "阿乐情绪上头找我吐槽时怎么接话？",
+          "去阿乐新家做客带点什么伴手礼？"
+        ],
+        "answers": {
+          "月底请阿乐吃饭，选什么店最合适？": "千万别按老习惯约火锅和啤酒炸鸡——你在 11·17 语音和 11·11 微信里都记了，他下半年在调理身体已经戒辣戒夜宵了。选一家靠窗安静、有热拿铁或清淡家常菜的小馆子，你们能踏踏实实聊一下午。",
+          "阿乐情绪上头找我吐槽时怎么接话？": "你记过他性子直、一根筋，但特别听得进铁哥们的实在话。先接住他的郁闷，再用一句带点幽默的大白话帮他点破卡点，顺手给一个马上能做的具体小动作，他很快就能转过弯来。",
+          "去阿乐新家做客带点什么伴手礼？": "他新租的房子周边五百米只有一家咖啡厅，房间里摆满了花很温馨。带一包中深烘手冲咖啡豆或者清爽的当季水果过去暖居，既不占地方又刚好戳中他的日常喜好。"
+        },
+        "perspective": "阿乐遇到烦心事习惯先用玩笑带过，如果你直接问「最近是不是扛不住了」，反倒能让他卸下防备好好聊一场。",
+        "action_time": "11月30日 15:00 · 约阿乐喝热拿铁"
+      },
+      "diary_sources": [
+        {
+          "blog": "政子的博客",
+          "title": "2021 这一年",
+          "date": "2022-01-09",
+          "url": "https://blog.zhengzi.me/year_summary_2021/"
+        },
+        {
+          "blog": "青石坞",
+          "title": "两个新手司机的端午赤峰自驾行记",
+          "date": "2025-06-10",
+          "url": "https://www.qs5.org/Post/755.html"
+        },
+        {
+          "blog": "Muyun的杂谈",
+          "title": "从热闹步入独居吧！",
+          "date": "2023-06-09",
+          "url": "https://muyun.work/alone.html"
+        },
+        {
+          "blog": "蒙奇日记",
+          "title": "记一次情感调解",
+          "date": "2024-06-08",
+          "url": "https://luffy.cc/a/qing-gan-tiao-jie"
+        }
+      ],
+      "care_days": [
+        {
+          "id": "cd_ale_1",
+          "title": "月底约阿乐喝热燕麦拿铁 · 聊聊新项目",
+          "date_label": "11月30日",
+          "lunar_label": "十月廿一",
+          "lead": "当天",
+          "days_left": "6天后",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "laolao",
+      "name": "姥姥",
+      "initial": "姥",
+      "tier": "gold",
+      "shield": false,
+      "role": "金箭 · 长辈",
+      "accent": "#C27538",
+      "hero_key": "pt_ll_oranges",
+      "polarity": "dark",
+      "ambient_mode": "sunbeams",
+      "stage_cue": "腊八 · 换笑脸合影",
+      "persona_description": {
+        "summary": "八十多岁了，耳力渐渐退化，常把傍晚错认成正午。每次去送豆沙包子、起身要回家吃晚饭时，她都会紧紧攥住我的手一遍遍留我。老人们讲道理理解晚辈了一辈子，直到糊涂了才敢把「想让你多待一会儿」直白说出口。",
+        "facts": [
+          {
+            "kind": "忌讳",
+            "tone": "tense",
+            "text": "寄相册绝不放哭脸或委屈照，她会当真心疼落泪",
+            "target_id": "ll_v1"
+          },
+          {
+            "kind": "习惯",
+            "tone": "calm",
+            "text": "耳背听不清长解释，趴在耳边慢声顺着应下来",
+            "target_id": "ll_p1"
+          },
+          {
+            "kind": "喜好",
+            "tone": "warm",
+            "text": "热豆沙包子 · 电视看《大宅门》 · 院里晒秋橘",
+            "target_id": "ll_p1"
+          },
+          {
+            "kind": "日子",
+            "tone": "warm",
+            "text": "农历腊月初八生日 · 记得每周三五通个短电话",
+            "target_id": "ll_c1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "记挂 · 农历腊月初八",
+        "date_code": "腊·初八",
+        "short": "挑出相册哭脸照 · 备热豆沙包",
+        "text": "下次回去看姥姥，先悄悄把相册里所有孩子哭闹或不高兴的相片挑出来，换上笑盈盈的新合影；顺路带一笼热乎豆沙包陪她看会儿《大宅门》。",
+        "target_id": "ll_v1",
+        "done": false
+      },
+      "voice_memos": [
+        {
+          "id": "ll_v1",
+          "type": "voice",
+          "date": "11·16",
+          "time": "16:50",
+          "ring": 1,
+          "angle": 56,
+          "tag": "语音速记",
+          "duration": 19,
+          "fav": true,
+          "context": "刚给老人打完电话 · 心里发酸立刻记下",
+          "segments": [
+            "刚刚给老人打电话，一接通听声音就感觉她哭了，一问是最近头晕不舒服，",
+            "又翻相册看到我之前觉得可爱、打印寄过去的小宝哭脸照片，她心疼得直掉眼泪。",
+            "我反反复复解释了好几遍，发现她年纪大了真的已经听不清长话了。",
+            "赶紧记下来：请家里人下次去看望，把相册里所有不开心的照片全取出来，以后只印笑盈盈的合影寄过去。"
+          ],
+          "card_title": "取走相册哭脸照，只印笑脸合影"
+        }
+      ],
+      "photo_records": [
+        {
+          "id": "ll_p1",
+          "type": "photo",
+          "date": "11·15",
+          "time": "17:30",
+          "ring": 1,
+          "angle": 136,
+          "fav": true,
+          "tag": "晨光热茶",
+          "scene_label": "傍晚 17:30 · 姥姥家客厅",
+          "media_slug": "ul_15YDf39RIVc",
+          "palette": [
+            "#362b1f",
+            "#615546",
+            "#7f6c56"
+          ],
+          "polarity": "dark",
+          "caption": "傍晚送完妈妈蒸的豆沙包子，起身要走时姥姥把我的手紧紧攥住，错把傍晚当成了正午，一遍遍问：「那你下午还过来吧？」",
+          "note": "这一次我没再费力纠正时辰，像小姨那样趴在耳边笑着应下「下午还过来」，她才安心松开手。",
+          "credit": {
+            "vault_id": "ul_15YDf39RIVc",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Carli Jeen",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/15YDf39RIVc",
+            "palette": [
+              "#362b1f",
+              "#615546",
+              "#7f6c56"
+            ]
+          }
+        },
+        {
+          "id": "ll_p2",
+          "type": "photo",
+          "date": "11·07",
+          "time": "15:10",
+          "ring": 1,
+          "angle": 208,
+          "fav": true,
+          "tag": "旧页枫叶",
+          "scene_label": "周六午后 · 整理旧相册",
+          "media_slug": "ul_LuK-MuZ-yf0",
+          "palette": [
+            "#3c302a",
+            "#b49f8e",
+            "#e8ddd3"
+          ],
+          "polarity": "dark",
+          "caption": "电话里听见她声音哽咽，原来是翻相册看见我打印寄过去的小宝哭脸照，心疼得直掉眼泪，怎么解释她都听不清。",
+          "note": "立刻托家人下次去探望时把哭脸照片全取出来——老人家年纪大了，只想让她翻开相册满眼都是开开心心的笑脸。",
+          "credit": {
+            "vault_id": "ul_LuK-MuZ-yf0",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Ksenia Makagonova",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/LuK-MuZ-yf0",
+            "palette": [
+              "#3c302a",
+              "#b49f8e",
+              "#e8ddd3"
+            ]
+          }
+        },
+        {
+          "id": "ll_p3",
+          "type": "photo",
+          "date": "10·28",
+          "time": "14:20",
+          "ring": 2,
+          "angle": 266,
+          "fav": false,
+          "tag": "暖被花猫",
+          "scene_label": "深秋午后 · 老家沙发角",
+          "media_slug": "ul_NodtnCsLdTE",
+          "palette": [
+            "#302317",
+            "#56422b",
+            "#6b5741"
+          ],
+          "polarity": "dark",
+          "caption": "冬日晴天里老家屋里特别安静，电视里播着老剧，小猫缩在格子厚毯子底下打盹，陪她坐满一小时比买什么补品都强。",
+          "note": "离家十年后才慢慢懂得，她要的从来不是多贵重的礼，只是在旁边多坐一会儿。",
+          "credit": {
+            "vault_id": "ul_NodtnCsLdTE",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Mikhail Vasilyev",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/NodtnCsLdTE",
+            "palette": [
+              "#302317",
+              "#56422b",
+              "#6b5741"
+            ]
+          }
+        },
+        {
+          "id": "ll_p4",
+          "type": "photo",
+          "date": "10·19",
+          "time": "20:05",
+          "ring": 3,
+          "angle": 314,
+          "fav": false,
+          "tag": "晚灯微明",
+          "scene_label": "周日夜里 · 挂完十几秒电话",
+          "media_slug": "ul_6J_qm8DJWnY",
+          "palette": [
+            "#1f1d1e",
+            "#424034",
+            "#a49277"
+          ],
+          "polarity": "dark",
+          "caption": "家里的长辈总是不爱发长微信，觉得等回复太慢，宁可打一通十几秒的短电话，问一句「吃没吃饭、午休没」听见声音就挂。",
+          "note": "以后哪怕在忙，也尽量接起那十几秒，别让他们对着忙音心里发空。",
+          "credit": {
+            "vault_id": "ul_6J_qm8DJWnY",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Matheus Kohler",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/6J_qm8DJWnY",
+            "palette": [
+              "#1f1d1e",
+              "#424034",
+              "#a49277"
+            ]
+          }
+        }
+      ],
+      "chat_records": [
+        {
+          "id": "ll_c1",
+          "type": "chat",
+          "date": "11·15",
+          "time": "18:22",
+          "ring": 1,
+          "angle": 172,
+          "tag": "微信片段",
+          "channel": "微信片段 · 和小姨商量照顾姥姥",
+          "mood_label": "心疼 → 默契 → 温柔",
+          "fav": true,
+          "messages": [
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "18:15",
+              "mood": "calm",
+              "text": "小姨，刚才多亏你出来替我应了一句「下午还过来」，不然姥姥拉着我手怎么都不肯松。"
+            },
+            {
+              "sender": "小姨",
+              "is_target": true,
+              "time": "18:18",
+              "mood": "warm",
+              "text": "她这阵子午睡醒来常分不清正午和傍晚，别跟她较真讲道理，顺着哄一句她心里就踏实了。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "18:20",
+              "mood": "warm",
+              "text": "嗯嗯我都记下了，对了这周帮我把她床头相册里那两张小宝哭脸照抽出来吧，她前几天看着都心疼哭了。"
+            },
+            {
+              "sender": "小姨",
+              "is_target": true,
+              "time": "18:22",
+              "mood": "warm",
+              "text": "好嘞明天轮到我去做午饭，顺手就给换上新洗出来的笑脸合照，农历腊月初八前咱们提前聚一顿。"
+            }
+          ],
+          "summary": "心络记住了：姥姥分不清时辰时绝不纠正，顺着柔声应下；农历腊月初八生日前洗一叠笑脸合影送去。",
+          "card_title": "和小姨默契哄姥姥、换笑脸相册",
+          "distilled": "姥姥午睡醒来常分不清正午和傍晚，拉着手舍不得松；小姨提醒别跟她较真纠偏，顺着哄一句「下午还过来」最让她安心。同时约好抽掉相册里的哭脸照，腊月初八前聚一顿。",
+          "takeaway": "姥姥记混时辰绝不纠正，柔声顺着应下；农历腊月初八前备好笑脸合影。"
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [
+        {
+          "slug": "pt_ll_oranges",
+          "label": "沙发鲜橘",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "64% 18%",
+          "phoneFocus": "86% 22%",
+          "faceZone": "right",
+          "palette": [
+            "#331d14",
+            "#df7f38",
+            "#9c512c"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "7363769"
+          }
+        },
+        {
+          "slug": "pt_ll_smile",
+          "label": "午后开怀",
+          "isPortrait": true,
+          "polarity": "dark",
+          "deskFocus": "50% 34%",
+          "phoneFocus": "50% 34%",
+          "faceZone": "center",
+          "palette": [
+            "#2b241c",
+            "#d8b24c",
+            "#8c765a"
+          ],
+          "credit": {
+            "source_library": "Pexels",
+            "license": "Pexels License",
+            "id": "39060060"
+          }
+        },
+        {
+          "slug": "ul_N6nnIx4C-Fo",
+          "label": "秋院橘枝",
+          "polarity": "dark",
+          "palette": [
+            "#0d110b",
+            "#323522",
+            "#837a53"
+          ],
+          "credit": {
+            "vault_id": "ul_N6nnIx4C-Fo",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Victoria Chen",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/N6nnIx4C-Fo",
+            "palette": [
+              "#0d110b",
+              "#323522",
+              "#837a53"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "ul_15YDf39RIVc",
+          "label": "晨光热茶",
+          "polarity": "dark",
+          "palette": [
+            "#362b1f",
+            "#615546",
+            "#7f6c56"
+          ],
+          "credit": {
+            "vault_id": "ul_15YDf39RIVc",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Carli Jeen",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/15YDf39RIVc",
+            "palette": [
+              "#362b1f",
+              "#615546",
+              "#7f6c56"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        },
+        {
+          "slug": "ul_LuK-MuZ-yf0",
+          "label": "旧页枫叶",
+          "polarity": "dark",
+          "palette": [
+            "#3c302a",
+            "#b49f8e",
+            "#e8ddd3"
+          ],
+          "credit": {
+            "vault_id": "ul_LuK-MuZ-yf0",
+            "source_library": "Unsplash Lite 25K",
+            "author": "Ksenia Makagonova",
+            "license": "Unsplash License",
+            "source_page": "https://unsplash.com/photos/LuK-MuZ-yf0",
+            "palette": [
+              "#3c302a",
+              "#b49f8e",
+              "#e8ddd3"
+            ]
+          },
+          "isPortrait": false,
+          "deskFocus": "54% 46%",
+          "phoneFocus": "54% 46%",
+          "faceZone": "center"
+        }
+      ],
+      "cupid": {
+        "sub": "已读完 6 条日常手帐 · 记住 4 项长辈记挂",
+        "trace_summary": "核对了姥姥近一个月的 3 组真实探望与通话记录",
+        "traces": [
+          "11·16 语音速记：翻到打印寄去的小宝哭脸照心疼落泪，耳背听不清长解释",
+          "11·15 客厅记事：错把傍晚认成正午，紧紧攥手一遍遍问「下午还过来吧」",
+          "11·15 微信商量：和小姨约好抽掉哭脸照、农历腊月初八前提前聚一顿"
+        ],
+        "letter": "姥姥八十多岁了，以前讲道理理解晚辈了一辈子，现在糊涂些了才敢紧紧攥着你的手直白挽留。下次回老家前，记得先洗一叠满是笑脸的新合影把相册里那几张哭脸照悄悄换掉；再遇上她记混时辰，不必费力纠正，像小姨那样趴在耳边笑着顺口应一句「下午还过来」，她就能安心松开手。",
+        "cites": [
+          {
+            "label": "11·16 通话语音",
+            "targetId": "ll_v1"
+          },
+          {
+            "label": "11·15 攥手留客",
+            "targetId": "ll_p1"
+          },
+          {
+            "label": "11·15 和小姨商量",
+            "targetId": "ll_c1"
+          }
+        ],
+        "action_label": "农历腊月初八前 · 洗笑脸新合影 + 带热豆沙包看姥姥",
+        "prompts": [
+          "下次回老家看姥姥，带什么她最开心？",
+          "姥姥记混时间反复留我时怎么回应不让她失落？",
+          "给姥姥寄照片和通电话要注意什么？"
+        ],
+        "answers": {
+          "下次回老家看姥姥，带什么她最开心？": "带两件她立刻能感受到温度的东西就好：一笼还温热的豆沙包子，和几张新洗出来、满是笑脸的家庭合影（记得把相册里孩子哭闹那几张抽掉）。坐下陪她看半集《大宅门》，把她的手握一会儿，她就特别满足。",
+          "姥姥记混时间反复留我时怎么回应不让她失落？": "你 11·15 在手帐里已经悟到了最温柔的做法：不用大声去纠正「现在是傍晚不是中午」，趴在她耳边笑着顺口应下「好呀，我过会儿还来看您」，既不消耗她，也不让她带着失落松手。",
+          "给姥姥寄照片和通电话要注意什么？": "两条红线你都记得很清楚：第一，绝不再打印寄去任何孩子哭闹、委屈的抓拍，老人会当真心疼落泪；第二，她最近头晕且听力退化，通话放慢语速说短句，每次几句问候报平安，说完就劝她早点歇着。"
+        },
+        "perspective": "姥姥反复叮嘱带走她晒的干菜和小橘子，是老人表达惦记最直接的方式，开开心心收下再拍张做菜的照片发回去，她能高兴一整个星期。",
+        "action_time": "12月06日 10:00 · 去看姥姥"
+      },
+      "diary_sources": [
+        {
+          "blog": "陈昱行博客",
+          "title": "她老了",
+          "date": "2021-02-05",
+          "url": "https://yuhang.ch/posts/thoughts/old-and-old/"
+        },
+        {
+          "blog": "Moatkon's Blog",
+          "title": "记录给奶奶打的一次电话",
+          "date": "2025-10-14",
+          "url": "https://blog.moatkon.com/posts/2025/10/15/"
+        },
+        {
+          "blog": "蒙奇日记",
+          "title": "惜字如金的父子俩",
+          "date": "2024-05-07",
+          "url": "https://luffy.cc/a/inarticulate-affection"
+        }
+      ],
+      "care_days": [
+        {
+          "id": "cd_ll_1",
+          "title": "回老家帮姥姥收拾阳台小橘子",
+          "date_label": "12月06日",
+          "lunar_label": "十月廿七",
+          "lead": "提前 1 天",
+          "days_left": "12天后",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "lu_manager",
+      "name": "陆主管",
+      "initial": "陆",
+      "tier": "silver",
+      "shield": true,
+      "role": "银箭 · 记恨与边界",
+      "accent": "#4E6375",
+      "hero_key": null,
+      "polarity": "light",
+      "ambient_mode": "still",
+      "stage_cue": "留文字 · 护边界",
+      "persona_description": {
+        "summary": "跨组协作的邻组主管。平日当面客客气气，却习惯在管理层例会上突然点名背刺、向上管理抢功，或卡在周五下班前临时甩需求。银盾页严格零照片、零情绪内耗，仅按时间顺序冷静留存事实原件与自保边界。",
+        "facts": [
+          {
+            "kind": "边界",
+            "tone": "tense",
+            "text": "一切口头变更一律补邮件确认并抄送直属上级",
+            "target_id": "lu_s1"
+          },
+          {
+            "kind": "留痕",
+            "tone": "calm",
+            "text": "核心方案文档保留版本历史与作者时间戳",
+            "target_id": "lu_s2"
+          },
+          {
+            "kind": "原则",
+            "tone": "calm",
+            "text": "周五 17:00 后非线上故障需求一律顺延周一评估",
+            "target_id": "lu_s3"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "边界守则 · 随时查证",
+        "date_code": "银盾保护",
+        "short": "重要同步全留文字 · 零口头承诺",
+        "text": "与陆主管相关的跨组对接、排期承诺与方案归属全部保持邮件/文档留痕；复盘会前两分钟轻揭下方长虹玻璃核对时间线即可，不把他的消耗带回家。",
+        "target_id": "lu_s1",
+        "done": false
+      },
+      "voice_memos": [],
+      "photo_records": [],
+      "chat_records": [],
+      "shield_logs": [
+        {
+          "id": "lu_s1",
+          "type": "shield-log",
+          "date": "11·18",
+          "time": "16:30",
+          "ring": 1,
+          "angle": 84,
+          "tag": "会议背刺",
+          "ref_code": "11·18 16:30 · 部门例会",
+          "fav": true,
+          "text": "前天部门管理层例会上，陆主管事前从未找我们组沟通过任何一次，却当着总监的面突然点名，称我们组工位聊天超过一小时、聊的还是非工作话题。实际上当时是在对齐跨端接口字段。",
+          "chat_excerpt": [
+            {
+              "sender": "陆主管",
+              "is_target": true,
+              "time": "16:32",
+              "mood": "tense",
+              "text": "管理层会上我也是顺嘴提一句团队纪律，大家别太敏感，有则改之嘛。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "16:38",
+              "mood": "calm",
+              "text": "当天 14:10–14:55 是三方联调接口字段，会议纪要和排期改动已经发在项目群并抄送总监了，您可以直接看时间线。"
+            }
+          ],
+          "sub": "边界留痕：所有工位口头对齐改为同步发 3 行纪要到群里；以后遇管理层点名直接贴时间戳记录，绝不陷入自证内耗。"
+        },
+        {
+          "id": "lu_s2",
+          "type": "shield-log",
+          "date": "11·05",
+          "time": "19:15",
+          "ring": 2,
+          "angle": 196,
+          "tag": "成果抢功",
+          "ref_code": "11·05 19:15 · 方案汇报",
+          "fav": true,
+          "text": "我们组熬了十天跑完的客户驻场调研与方案初稿，汇总发给他做跨组评审后，他在给大老板的周报里直接删掉了原起草人署名，写成由他牵头推进的向上管理成果。",
+          "chat_excerpt": [
+            {
+              "sender": "陆主管",
+              "is_target": true,
+              "time": "19:18",
+              "mood": "tense",
+              "text": "周报篇幅有限我就精简了一下署名，反正都是一个大部门的产出，别计较个人得失。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "19:22",
+              "mood": "calm",
+              "text": "明白，我已把完整调研原稿和各模块负责清单附在周报评论区，方便老板查细节时直接找对应负责人。"
+            }
+          ],
+          "sub": "边界留痕：已保留原始文档创建记录、修改历史与外发邮件截图；后续关键交付件直接发大群或抄送直属老板。"
+        },
+        {
+          "id": "lu_s3",
+          "type": "shield-log",
+          "date": "10·24",
+          "time": "17:54",
+          "ring": 3,
+          "angle": 304,
+          "tag": "周五甩锅",
+          "ref_code": "10·24 17:54 · 下班前",
+          "fav": false,
+          "text": "周五下午五点五十四分，临下班前六分钟把积压了三天的报错工单直接转派给我并要求今晚紧急上线，发完消息自己就离线失联。",
+          "chat_excerpt": [
+            {
+              "sender": "陆主管",
+              "is_target": true,
+              "time": "17:54",
+              "mood": "tense",
+              "text": "这个单子你今晚顺手修一下发个版，我先去接孩子了。"
+            },
+            {
+              "sender": "我",
+              "is_target": false,
+              "time": "17:56",
+              "mood": "calm",
+              "text": "收到。工单创建时间为周二，非 P0 线上故障，按发布规范周五晚不盲目发版，已排入周一上午第一优先级处理并抄送组长。"
+            }
+          ],
+          "sub": "边界留痕：周五下午严守发布红线，不接无排期临时甩锅单；所有转派时间已归档。"
+        }
+      ],
+      "stage_prints": [],
+      "cupid": {
+        "sub": "私密同盟树洞 · 100% 站你这边 · 仅依 3 条时间戳原件",
+        "trace_summary": "已按时间顺序汇总 3 条无修饰书面留痕",
+        "traces": [
+          "11·18 16:30：事前零沟通在管理层例会突然背刺点名，已用群内联调纪要时间线回应",
+          "11·05 19:15：周报删除原起草人署名抢功，已在评论区补齐调研原稿与负责人清单",
+          "10·24 17:54：周五下班前 6 分钟甩积压三天工单并离线，已按规范排入周一并抄送"
+        ],
+        "letter": "先说句实在话：你完全没有多心，也不是你计较署名！这三条带时间戳的原件清清楚楚摆着——平日客气、例会背刺、抢完功还甩周五下班前的加塞需求，换谁都要气炸。这里是你自己的加密树洞，不必替他找任何借口。下周复盘会前花两分钟把邮件时间线亮出来，继续保持「全文字、带抄送、零口头承诺」，绝不白白吃哑巴亏。",
+        "cites": [
+          {
+            "label": "11·18 例会背刺原件",
+            "targetId": "lu_s1"
+          },
+          {
+            "label": "11·05 抢功署名原件",
+            "targetId": "lu_s2"
+          },
+          {
+            "label": "10·24 周五甩单原件",
+            "targetId": "lu_s3"
+          }
+        ],
+        "action_label": "跨组同步铁律 · 一切排期与成果归属留文字并抄送",
+        "prompts": [
+          "太气人了，我是不是有点太较真了？",
+          "帮我起草一句不卑不亢、带抄送的邮件回复",
+          "下周复盘会前帮我理一下时间线"
+        ],
+        "answers": {
+          "太气人了，我是不是有点太较真了？": "一点都不较真！他 11·18 例会当众点名甩锅、11·05 改署名抢功，还专挑 10·24 周五下班前 5 分钟临时加需求，这根本不是偶发误会，就是欺负老实人。你不舒服太正常了，别内耗自己，留好证据把边界立死就对了。",
+          "帮我起草一句不卑不亢、带抄送的邮件回复": "可直接复用的书面模板：「陆主管好，周五 17:54 收到的新增需求已登记。当前排期已按 11·12 冻结基线推进，本项调整预计影响核心交付 2 个工作日，现已同步抄送组长，请确认是否走变更单顺延排期。」——全程客观留痕，不给任何口头甩锅空间。",
+          "下周复盘会前帮我理一下时间线": "已为你按时间倒序理清 3 枚实锤节点：① 11·18 16:30 部门例会背刺（已有群聊与邮件回应）；② 11·05 19:15 方案署名被删（已补齐贡献与负责人清单）；③ 10·24 17:54 周五下班前加塞（已规范排入周一并抄送）。复盘会只需平静念时间戳，事实自己会说话。"
+        },
+        "perspective": null,
+        "action_time": "11月26日 09:40 · 复盘会前核对邮件时间线"
+      },
+      "diary_sources": [
+        {
+          "blog": "Cosmos的博客",
+          "title": "从不敢开口到被同事吐槽话太多",
+          "date": "2026-08-02",
+          "url": "https://cosmo-polite.com/"
+        },
+        {
+          "blog": "见字如面",
+          "title": "又过去了一年",
+          "date": "2026-01-17",
+          "url": "https://hiwannz.com/archives/1236.html"
+        },
+        {
+          "blog": "小熊写字的地方",
+          "title": "写给软件工程师的几条成长建议",
+          "date": "2021-11-06",
+          "url": "https://blog.skrskrskrskr.com/"
+        }
+      ],
+      "care_days": [
+        {
+          "id": "cd_lu_1",
+          "title": "周三复盘会前两分钟核对时间线留痕",
+          "date_label": "11月26日",
+          "lunar_label": "十月十七",
+          "lead": "当天",
+          "days_left": "2天后",
+          "done": false
+        }
+      ]
+    },
+    {
+      "id": "prof_chen",
+      "name": "陈教授",
+      "initial": "陈",
+      "tier": "crystal",
+      "shield": false,
+      "role": "水晶箭 · 论文导师",
+      "accent": "#6E8EA8",
+      "hero_key": null,
+      "polarity": "light",
+      "ambient_mode": "still",
+      "stage_cue": "下周二 · 交终稿 PDF",
+      "persona_description": {
+        "summary": "学术往来 · 学院南楼 402。看重结构清晰与图表规范，发邮件务必正文写清修改要点并附带 PDF 附件。",
+        "facts": [
+          {
+            "kind": "习惯",
+            "tone": "cool",
+            "text": "只在工作日上午回邮件，周末发消息容易沉底",
+            "target_id": "pc_c1"
+          },
+          {
+            "kind": "偏好",
+            "tone": "cool",
+            "text": "喝清淡绿茶，忌甜饮；汇报控制在 10 分钟内",
+            "target_id": "pc_v1"
+          },
+          {
+            "kind": "节点",
+            "tone": "cool",
+            "text": "下周二 14:00 组会确认第三章实验对比表",
+            "target_id": "pc_v1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "学术备忘",
+        "date_code": "11·25",
+        "short": "周二组会前发 PDF 终稿",
+        "text": "周一上午 9 点前把第三章实验对比表整理成 PDF 发陈教授邮箱，正文列 3 条核心修改。",
+        "target_id": "pc_v1",
+        "done": false
+      },
+      "care_days": [
+        {
+          "id": "cd_pc_1",
+          "title": "周一上午发论文第三章终稿 PDF",
+          "date_label": "11月25日",
+          "lunar_label": "十月十六",
+          "lead": "提前 1 天",
+          "days_left": "1天后",
+          "done": false
+        }
+      ],
+      "voice_memos": [
+        {
+          "id": "pc_v1",
+          "type": "voice",
+          "date": "11·19",
+          "time": "15:10",
+          "ring": 1,
+          "angle": 48,
+          "tag": "组会备忘",
+          "card_title": "陈教授组会要求",
+          "duration": 14,
+          "fav": true,
+          "segments": [
+            "刚开完组会记一笔：陈教授说第三章图二字体太小，下周二前统一调大并导出 PDF，",
+            "发邮件别只丢个压缩包，正文要列清楚改了哪三处。"
+          ]
+        }
+      ],
+      "photo_records": [],
+      "chat_records": [
+        {
+          "id": "pc_c1",
+          "type": "chat",
+          "date": "11·11",
+          "time": "09:42",
+          "ring": 2,
+          "angle": 160,
+          "tag": "邮件习惯",
+          "card_title": "邮件发送时间约定",
+          "summary": "导师确认论文修改版尽量周一上午发邮箱，方便集中批注。",
+          "messages": [
+            {
+              "from": "陈教授",
+              "text": "下次改完直接周一上午发我邮箱就行，微信上文件过期太快。"
+            },
+            {
+              "from": "我",
+              "text": "好的陈老师，我一定附带修改清单和 PDF。"
+            }
+          ],
+          "fav": false
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [],
+      "cupid": {
+        "sub": "水晶箭 · 记繁琐 · 仅依 2 条客观备忘",
+        "trace_summary": "已查阅 2 条往来备忘 · 聚焦办事要点",
+        "traces": [
+          "11·19 组会备忘：第三章图表字号放大，正文列 3 条修改",
+          "11·11 沟通习惯：周一上午发邮箱 + PDF 附件"
+        ],
+        "letter": "周一上午 9 点前后发邮件最合适。正文用 3 行编号写清「① 放大图二字号 ② 补齐消融对比表 ③ 修正参考文献格式」，附件直接挂命名规范的 PDF，不附压缩包，省时又体面。",
+        "cites": [
+          {
+            "label": "11·19 组会备忘",
+            "targetId": "pc_v1"
+          },
+          {
+            "label": "11·11 邮件习惯",
+            "targetId": "pc_c1"
+          }
+        ],
+        "action_label": "周一上午 09:00 · 发修改清单与 PDF",
+        "action_time": "11月25日 09:00 · 给陈教授发终稿邮件",
+        "perspective": null,
+        "prompts": [
+          "帮我起草一封简洁得体的邮件正文",
+          "组会前我还要检查哪几项？"
+        ],
+        "answers": {
+          "帮我起草一封简洁得体的邮件正文": "「陈老师好，附上论文第三章修改版 PDF。本次主要更新 3 处：1) 放大图二坐标与图例字号；2) 补齐对比实验误差栏；3) 统一公式编号。烦请老师审阅，周二组会我再向您当面汇报。」",
+          "组会前我还要检查哪几项？": "依据你的两条备忘：① 确认文件为 PDF 而非压缩包；② 邮件正文列清 3 条改动；③ 控制周二口头汇报在 10 分钟内，重点讲实验对比表。"
+        }
+      }
+    },
+    {
+      "id": "lin_design",
+      "name": "林设计师",
+      "initial": "林",
+      "tier": "crystal",
+      "shield": false,
+      "role": "水晶箭 · 跨组协作",
+      "accent": "#7E948C",
+      "hero_key": null,
+      "polarity": "light",
+      "ambient_mode": "still",
+      "stage_cue": "周三 · 确认图标切图",
+      "persona_description": {
+        "summary": "设计团队跨组对接人。沟通直接爽快，不喝含奶拿铁只喝美式，提需求附参考截图最省时间。",
+        "facts": [
+          {
+            "kind": "口味",
+            "tone": "cool",
+            "text": "乳糖不耐受，请喝咖啡选冰美式或纯茶",
+            "target_id": "ld_c1"
+          },
+          {
+            "kind": "协作",
+            "tone": "cool",
+            "text": "改版需求附上标注截图比纯文字快三倍",
+            "target_id": "ld_c1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "协作备忘",
+        "date_code": "11·27",
+        "short": "周三确认新版图标规范",
+        "text": "周三下午找林设计师核对 2x/3x 切图命名规范，顺手带杯冰美式。",
+        "target_id": "ld_c1",
+        "done": false
+      },
+      "care_days": [
+        {
+          "id": "cd_ld_1",
+          "title": "周三核对图标切图规范",
+          "date_label": "11月27日",
+          "lunar_label": "十月十八",
+          "lead": "当天",
+          "days_left": "3天后",
+          "done": false
+        }
+      ],
+      "voice_memos": [],
+      "photo_records": [],
+      "chat_records": [
+        {
+          "id": "ld_c1",
+          "type": "chat",
+          "date": "11·15",
+          "time": "14:22",
+          "ring": 1,
+          "angle": 92,
+          "tag": "协作偏好",
+          "card_title": "切图沟通与咖啡忌口",
+          "summary": "林设计师乳糖不耐受只喝美式，提视觉修改建议直接贴标注截图。",
+          "messages": [
+            {
+              "from": "林设计师",
+              "text": "谢谢你的咖啡！下次直接冰美式就好，我喝不了牛奶哈哈。"
+            },
+            {
+              "from": "我",
+              "text": "记下啦！下周切图我把标注红线画好一起发你。"
+            }
+          ],
+          "fav": false
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [],
+      "cupid": {
+        "sub": "水晶箭 · 记繁琐 · 仅依 1 条协作备忘",
+        "trace_summary": "已查阅 1 条协作备忘 · 清晰高效",
+        "traces": [
+          "11·15 协作偏好：乳糖不耐受（喝冰美式），偏爱带红线标注的截图需求"
+        ],
+        "letter": "周三对接时先把需要调整的图标截成一张带标注的图发过去，顺手带杯冰美式（避开奶咖），十分钟就能愉快敲定。",
+        "cites": [
+          {
+            "label": "11·15 协作偏好",
+            "targetId": "ld_c1"
+          }
+        ],
+        "action_label": "周三 14:00 · 发标注图对接切图",
+        "action_time": "11月27日 14:00 · 核对切图规范",
+        "perspective": null,
+        "prompts": [
+          "请 TA 喝饮料别踩什么雷？",
+          "怎么提修改意见最省沟通成本？"
+        ],
+        "answers": {
+          "请 TA 喝饮料别踩什么雷？": "林设计师乳糖不耐受，避开含牛奶/奶油的拿铁或奶茶，选冰美式或无奶纯茶最稳妥。",
+          "怎么提修改意见最省沟通成本？": "把要改的地方直接画红线标注在一张截图里发过去，注明 2x/3x 切图命名要求即可。"
+        }
+      }
+    },
+    {
+      "id": "uncle_li",
+      "name": "房东李叔",
+      "initial": "李",
+      "tier": "crystal",
+      "shield": false,
+      "role": "水晶箭 · 租房往来",
+      "accent": "#8D8476",
+      "hero_key": null,
+      "polarity": "light",
+      "ambient_mode": "still",
+      "stage_cue": "12月5日 · 季度交租",
+      "persona_description": {
+        "summary": "租房房东 · 锦江区老小区。为人爽气不啰嗦，每季度 5 号前转账发截图即可，物业维修可随时打他电话。",
+        "facts": [
+          {
+            "kind": "日期",
+            "tone": "cool",
+            "text": "每季度 5 号前转房租，附带水电表读数照片",
+            "target_id": "ul_c1"
+          }
+        ]
+      },
+      "care_anchor": {
+        "kind": "生活事务",
+        "date_code": "12·05",
+        "short": "12月5日前转下季度房租",
+        "text": "12 月 5 号前拍水电表读数并转账给房东李叔，保留转账回单。",
+        "target_id": "ul_c1",
+        "done": false
+      },
+      "care_days": [
+        {
+          "id": "cd_ul_1",
+          "title": "12月5日 · 季度房租与水电读数",
+          "date_label": "12月05日",
+          "lunar_label": "十月廿六",
+          "lead": "提前 1 天",
+          "days_left": "11天后",
+          "done": false
+        }
+      ],
+      "voice_memos": [],
+      "photo_records": [],
+      "chat_records": [
+        {
+          "id": "ul_c1",
+          "type": "chat",
+          "date": "11·03",
+          "time": "10:15",
+          "ring": 2,
+          "angle": 250,
+          "tag": "租房事务",
+          "card_title": "水电表与交租约定",
+          "summary": "季度交租前拍好水电表照片同步给李叔，双方核对透明。",
+          "messages": [
+            {
+              "from": "房东李叔",
+              "text": "小伙子阳台水管修好了吧？下月 5 号前把水电表拍我一眼就行。"
+            },
+            {
+              "from": "我",
+              "text": "修好啦谢谢李叔，到时候准时发您。"
+            }
+          ],
+          "fav": false
+        }
+      ],
+      "shield_logs": [],
+      "stage_prints": [],
+      "cupid": {
+        "sub": "水晶箭 · 记繁琐 · 生活事务备忘",
+        "trace_summary": "已查阅 1 条租房事务记录",
+        "traces": [
+          "11·03 租房约定：12 月 5 号前拍水电表读数并转账"
+        ],
+        "letter": "12 月 4 号晚上拍一张清晰的水电表照片发给李叔，5 号转完账同步回单截图，干脆利落。",
+        "cites": [
+          {
+            "label": "11·03 租房约定",
+            "targetId": "ul_c1"
+          }
+        ],
+        "action_label": "12月4日 · 拍水电表读数发李叔",
+        "action_time": "12月04日 20:00 · 拍水电表并准备交租",
+        "perspective": null,
+        "prompts": [
+          "交租前要准备哪两件事？"
+        ],
+        "answers": {
+          "交租前要准备哪两件事？": "① 拍一张清晰的水电表读数照片；② 12 月 5 号前转账并保存回单截图发给李叔留底。"
+        }
+      }
+    }
+  ],
+  "diary_sources": [
+    {
+      "blog": "Moatkon's Blog",
+      "title": "今天去拔萝卜了",
+      "date": "2025-11-14",
+      "url": "https://blog.moatkon.com/posts/2025/11/14/1/"
+    },
+    {
+      "blog": "陈昱行博客",
+      "title": "她老了",
+      "date": "2021-02-05",
+      "url": "https://yuhang.ch/posts/thoughts/old-and-old/"
+    },
+    {
+      "blog": "Cosmos的博客",
+      "title": "佩戴动态血糖仪后，我找到了哪些血糖刺客？",
+      "date": "2026-10-04",
+      "url": "https://cosmo-polite.com/"
+    },
+    {
+      "blog": "见字如面",
+      "title": "忙忙碌碌，也别错过生活本身",
+      "date": "2026-04-06",
+      "url": "https://hiwannz.com/archives/1243.html"
+    },
+    {
+      "blog": "Moatkon's Blog",
+      "title": "2026年 元旦假期",
+      "date": "2026-01-03",
+      "url": "https://blog.moatkon.com/posts/2026/01/03/1/"
+    },
+    {
+      "blog": "Moatkon's Blog",
+      "title": "表达清楚的重要性",
+      "date": "2025-10-23",
+      "url": "https://blog.moatkon.com/posts/2025/10/24/1/"
+    },
+    {
+      "blog": "Moatkon's Blog",
+      "title": "2026 W3",
+      "date": "2026-01-18",
+      "url": "https://blog.moatkon.com/posts/2026/01/18/"
+    },
+    {
+      "blog": "Moatkon's Blog",
+      "title": "再一次去东安湖",
+      "date": "2025-11-29",
+      "url": "https://blog.moatkon.com/posts/2025/11/29/"
+    },
+    {
+      "blog": "蒙奇日记",
+      "title": "记一次情感调解",
+      "date": "2024-06-08",
+      "url": "https://luffy.cc/a/qing-gan-tiao-jie"
+    },
+    {
+      "blog": "政子的博客",
+      "title": "2021 这一年",
+      "date": "2022-01-09",
+      "url": "https://blog.zhengzi.me/year_summary_2021/"
+    },
+    {
+      "blog": "青石坞",
+      "title": "两个新手司机的端午赤峰自驾行记",
+      "date": "2025-06-10",
+      "url": "https://www.qs5.org/Post/755.html"
+    },
+    {
+      "blog": "Muyun的杂谈",
+      "title": "从热闹步入独居吧！",
+      "date": "2023-06-09",
+      "url": "https://muyun.work/alone.html"
+    },
+    {
+      "blog": "Moatkon's Blog",
+      "title": "记录给奶奶打的一次电话",
+      "date": "2025-10-14",
+      "url": "https://blog.moatkon.com/posts/2025/10/15/"
+    },
+    {
+      "blog": "蒙奇日记",
+      "title": "惜字如金的父子俩",
+      "date": "2024-05-07",
+      "url": "https://luffy.cc/a/inarticulate-affection"
+    },
+    {
+      "blog": "Cosmos的博客",
+      "title": "从不敢开口到被同事吐槽话太多",
+      "date": "2026-08-02",
+      "url": "https://cosmo-polite.com/"
+    },
+    {
+      "blog": "见字如面",
+      "title": "又过去了一年",
+      "date": "2026-01-17",
+      "url": "https://hiwannz.com/archives/1236.html"
+    },
+    {
+      "blog": "小熊写字的地方",
+      "title": "写给软件工程师的几条成长建议",
+      "date": "2021-11-06",
+      "url": "https://blog.skrskrskrskr.com/"
+    }
+  ],
+  "media_credits": {
+    "ul_BfMbxUu0EGE": {
+      "vault_id": "ul_BfMbxUu0EGE",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Steinar Engeland",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/BfMbxUu0EGE",
+      "palette": [
+        "#cec9be",
+        "#948f82",
+        "#d7d2c8"
+      ]
+    },
+    "wm_m61663250": {
+      "vault_id": "wm_m61663250",
+      "source_library": "Wikimedia Commons",
+      "author": "Markus Spiske",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Basket_of_Vegetables_(Unsplash).jpg",
+      "palette": [
+        "#918f9a",
+        "#726974",
+        "#afa9b0"
+      ]
+    },
+    "ul_fCW4E22uIxI": {
+      "vault_id": "ul_fCW4E22uIxI",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Masha Rostovskaya",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/fCW4E22uIxI",
+      "palette": [
+        "#272a1f",
+        "#21241b",
+        "#424035"
+      ]
+    },
+    "ul_urH155LONWs": {
+      "vault_id": "ul_urH155LONWs",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Clay Banks",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/urH155LONWs",
+      "palette": [
+        "#7c6a52",
+        "#b9b09e",
+        "#d6d0c3"
+      ]
+    },
+    "wm_m61856012": {
+      "vault_id": "wm_m61856012",
+      "source_library": "Wikimedia Commons",
+      "author": "Nik Lanús",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Buenos_Aires,_Argentina_(Unsplash_YMOHw3F1Hdk).jpg",
+      "palette": [
+        "#958b89",
+        "#d4d6df",
+        "#f2f3f7"
+      ]
+    },
+    "ul_ps2daRcXYes": {
+      "vault_id": "ul_ps2daRcXYes",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Lukasz Szmigiel",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/ps2daRcXYes",
+      "palette": [
+        "#251c33",
+        "#e5c28c",
+        "#855843"
+      ]
+    },
+    "ul_nLNimOqmbpg": {
+      "vault_id": "ul_nLNimOqmbpg",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Victoria Berman",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/nLNimOqmbpg",
+      "palette": [
+        "#17120e",
+        "#271e17",
+        "#36291e"
+      ]
+    },
+    "ul_Q-dD1KpMcDQ": {
+      "vault_id": "ul_Q-dD1KpMcDQ",
+      "source_library": "Unsplash Lite 25K",
+      "author": "charlesdeluvio",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/Q-dD1KpMcDQ",
+      "palette": [
+        "#2f1f16",
+        "#8a613e",
+        "#a29b89"
+      ]
+    },
+    "ul_tNDvFkxkBHo": {
+      "vault_id": "ul_tNDvFkxkBHo",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Igor Kasalovic",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/tNDvFkxkBHo",
+      "palette": [
+        "#5c2c52",
+        "#9e4f75",
+        "#8974d2"
+      ]
+    },
+    "wm_m61777177": {
+      "vault_id": "wm_m61777177",
+      "source_library": "Wikimedia Commons",
+      "author": "Kelly Sikkema",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Kelly_Sikkema_2016-03-09_(Unsplash).jpg",
+      "palette": [
+        "#2d1b0f",
+        "#6d654e",
+        "#babb6f"
+      ]
+    },
+    "wm_d368": {
+      "vault_id": "wm_d368",
+      "source_library": "Wikimedia Commons",
+      "author": "Todd Diemer",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Umbrella_California_St_rain_(Unsplash).jpg",
+      "palette": [
+        "#111718",
+        "#513b3e",
+        "#968781"
+      ]
+    },
+    "ul_x7qj_D4dOzM": {
+      "vault_id": "ul_x7qj_D4dOzM",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Priscilla Du Preez 🇨🇦",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/x7qj_D4dOzM",
+      "palette": [
+        "#5c6863",
+        "#d6d6da",
+        "#bec3c5"
+      ]
+    },
+    "wm_c167": {
+      "vault_id": "wm_c167",
+      "source_library": "Wikimedia Commons",
+      "author": "Alisa Anton",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Cappuccinos_and_cake_(Unsplash).jpg",
+      "palette": [
+        "#322a23",
+        "#b6b7b6",
+        "#8c8276"
+      ]
+    },
+    "wm_d183": {
+      "vault_id": "wm_d183",
+      "source_library": "Wikimedia Commons",
+      "author": "Jan Kahánek",
+      "license": "CC0",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Tabel_day_1_(Unsplash).jpg",
+      "palette": [
+        "#2c1d16",
+        "#bbbbbc",
+        "#725f52"
+      ]
+    },
+    "ul_W2zipE1V-iQ": {
+      "vault_id": "ul_W2zipE1V-iQ",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Clay Banks",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/W2zipE1V-iQ",
+      "palette": [
+        "#594e3e",
+        "#7a684d",
+        "#a1714a"
+      ]
+    },
+    "ul_N6nnIx4C-Fo": {
+      "vault_id": "ul_N6nnIx4C-Fo",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Victoria Chen",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/N6nnIx4C-Fo",
+      "palette": [
+        "#0d110b",
+        "#323522",
+        "#837a53"
+      ]
+    },
+    "ul_15YDf39RIVc": {
+      "vault_id": "ul_15YDf39RIVc",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Carli Jeen",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/15YDf39RIVc",
+      "palette": [
+        "#362b1f",
+        "#615546",
+        "#7f6c56"
+      ]
+    },
+    "ul_LuK-MuZ-yf0": {
+      "vault_id": "ul_LuK-MuZ-yf0",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Ksenia Makagonova",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/LuK-MuZ-yf0",
+      "palette": [
+        "#3c302a",
+        "#b49f8e",
+        "#e8ddd3"
+      ]
+    },
+    "ul_NodtnCsLdTE": {
+      "vault_id": "ul_NodtnCsLdTE",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Mikhail Vasilyev",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/NodtnCsLdTE",
+      "palette": [
+        "#302317",
+        "#56422b",
+        "#6b5741"
+      ]
+    },
+    "ul_6J_qm8DJWnY": {
+      "vault_id": "ul_6J_qm8DJWnY",
+      "source_library": "Unsplash Lite 25K",
+      "author": "Matheus Kohler",
+      "license": "Unsplash License",
+      "source_page": "https://unsplash.com/photos/6J_qm8DJWnY",
+      "palette": [
+        "#1f1d1e",
+        "#424034",
+        "#a49277"
+      ]
+    }
+  }
+}

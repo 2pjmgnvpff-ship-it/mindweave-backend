@@ -755,6 +755,11 @@ class PeopleService:
             )
 
             now = self._container.clock.now()
+            token_updates = (
+                processed.chroma.to_visual_token_dict()
+                if slot is PhotoSlot.MAIN and processed.chroma is not None
+                else None
+            )
             row, old_object_key = await self._repo.set_photo_object_key(
                 session,
                 scope,
@@ -762,6 +767,130 @@ class PeopleService:
                 slot=slot,
                 object_key=new_object_key,
                 now=now,
+                visual_token_updates=token_updates,
+            )
+            profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
+            body: dict[str, Any] = serialize_profile(profile)
+            await self._container.idempotency.complete(
+                session, idem_row, status_code=200, response_body=body
+            )
+
+        if old_object_key and old_object_key != new_object_key:
+            await self._container.storage.delete_object(object_key=old_object_key)
+
+        return body, 200
+
+    async def set_background_from_material(
+        self,
+        scope: UserScope,
+        person_id: UUID,
+        *,
+        material_id: UUID,
+        face_zone: str | None,
+        desk_focus: str | None,
+        phone_focus: str | None,
+        idem_key: str,
+        serialize_profile: Any,
+    ) -> tuple[dict[str, Any], int]:
+        """Promote an existing photo material on this person's journal to their background portrait."""
+        path = f"/v1/persons/{person_id}/background:from-material"
+        req_hash = hash_request_payload(
+            {
+                "personId": str(person_id),
+                "materialId": str(material_id),
+                "faceZone": face_zone,
+                "deskFocus": desk_focus,
+                "phoneFocus": phone_focus,
+            }
+        )
+
+        old_object_key: str | None = None
+        new_object_key: str | None = None
+
+        async with self._container.db.user_session(scope) as session:
+            idem_row, hit = await self._container.idempotency.claim_or_replay(
+                session,
+                scope=scope,
+                idem_key=idem_key,
+                method="POST",
+                path=path,
+                request_hash=req_hash,
+            )
+            if hit is not None:
+                return hit.response_body, hit.status_code
+            assert idem_row is not None
+
+            person_row = await self._repo.get_person_row(session, scope, person_id, for_update=True)
+            if Tier.from_any(person_row.tier) is Tier.SILVER:
+                raise ValidationFailedError(
+                    "银箭人物遵循零照片隐私护盾，不可设置背景摄影。",
+                    extensions={"field": "tier"},
+                )
+
+            mat_row = await self._repo.get_person_photo_material_row(
+                session, scope, person_id=person_id, material_id=material_id
+            )
+            if mat_row is None:
+                raise NotFoundError("Material not found for this person.")
+            if not mat_row.media_object_key:
+                raise ValidationFailedError(
+                    "Target material does not contain a photo.",
+                    extensions={"field": "materialId"},
+                )
+
+            dek = await self._container.load_user_dek(session, scope)
+            raw_bytes, _ctype = await self._container.storage.get_decrypted(
+                user_id=scope.user_id,
+                dek=dek,
+                object_key=mat_row.media_object_key,
+            )
+            processed = await verify_and_strip_exif(
+                raw_bytes, max_bytes=self._container.settings.max_image_bytes
+            )
+            new_object_key = (
+                f"{scope.user_id}/persons/{person_id}/main_{new_id()}.{processed.extension}"
+            )
+            await self._container.storage.put_encrypted(
+                user_id=scope.user_id,
+                dek=dek,
+                object_key=new_object_key,
+                plaintext=processed.data,
+                content_type=processed.content_type,
+            )
+
+            token_updates: dict[str, Any] = (
+                dict(processed.chroma.to_visual_token_dict())
+                if processed.chroma is not None
+                else {}
+            )
+            token_updates["activeHeroMaterialId"] = str(material_id)
+            if face_zone is not None:
+                token_updates["faceZone"] = face_zone
+            try:
+                if desk_focus is not None:
+                    if "\x00" in desk_focus:
+                        raise ValidationFailedError("Null bytes are not permitted in deskFocus.")
+                    token_updates["deskFocus"] = validate_optional_copy_field(
+                        desk_focus, field_name="deskFocus", max_length=32
+                    )
+                if phone_focus is not None:
+                    if "\x00" in phone_focus:
+                        raise ValidationFailedError("Null bytes are not permitted in phoneFocus.")
+                    token_updates["phoneFocus"] = validate_optional_copy_field(
+                        phone_focus, field_name="phoneFocus", max_length=32
+                    )
+            except CopyPolicyViolationError as exc:
+                raise _translate_domain_error(exc) from exc
+
+            now = self._container.clock.now()
+            row, old_object_key = await self._repo.set_photo_object_key(
+                session,
+                scope,
+                person_id=person_id,
+                slot=PhotoSlot.MAIN,
+                object_key=new_object_key,
+                now=now,
+                visual_token_updates=token_updates,
             )
             profile = self._repo.decrypt_person_row(row, scope=scope, dek=dek)
             body: dict[str, Any] = serialize_profile(profile)

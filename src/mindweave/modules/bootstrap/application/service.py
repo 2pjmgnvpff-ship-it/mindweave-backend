@@ -7,7 +7,11 @@ from datetime import datetime
 from uuid import UUID
 
 from mindweave.core.dependencies import AppContainer
-from mindweave.modules.bootstrap.domain.formatting import MaterialPreview
+from mindweave.modules.bootstrap.domain.formatting import (
+    FactPreview,
+    MaterialPreview,
+    ReminderPreview,
+)
 from mindweave.modules.bootstrap.infra.query_repo import BootstrapQueryRepository
 from mindweave.modules.people.domain.entities import PersonProfile, PhotoSlot
 from mindweave.modules.people.domain.tier_transition import partition_person_ids
@@ -38,6 +42,9 @@ class BootstrapPersonAggregate:
     main_photo_url: str | None
     sub_photo_url: str | None
     materials: list[tuple[MaterialPreview, str | None]]
+    facts: list[FactPreview]
+    upcoming_reminders: list[ReminderPreview]
+    cooling_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +156,15 @@ class BootstrapService:
             materials_by_pid = await self._query_repo.load_top_materials_by_person(
                 session, scope, dek, ordered_ids
             )
+            facts_by_pid = await self._query_repo.load_facts_by_person(
+                session, scope, dek, ordered_ids
+            )
+            reminders_by_pid = await self._query_repo.load_upcoming_reminders_by_person(
+                session, scope, dek, ordered_ids
+            )
+            cooling_by_pid = await self._query_repo.count_cooling_items_by_person(
+                session, scope, ordered_ids
+            )
 
             people_dict: dict[str, BootstrapPersonAggregate] = {}
             for pid in ordered_ids:
@@ -175,6 +191,9 @@ class BootstrapService:
                         scope, pid, PhotoSlot.SUB, profile.sub_photo_object_key, now=now
                     ),
                     materials=mat_items,
+                    facts=facts_by_pid.get(pid, []),
+                    upcoming_reminders=reminders_by_pid.get(pid, []),
+                    cooling_count=cooling_by_pid.get(pid, 0),
                 )
 
             return WorkspaceBootstrapSnapshot(

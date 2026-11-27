@@ -67,11 +67,13 @@ from mindweave.modules.memory.infra.repository import (
     decrypt_inbox_payload,
     decrypt_person_display_name,
     decrypt_person_role_tag,
+    decrypt_record_card_meta,
     decrypt_record_fields,
     get_user_timezone,
     merge_provisional_person_into_target,
     next_rank_for_tier,
     require_person_row,
+    sanitize_card_meta,
     sync_capture_status_after_inbox_resolution,
 )
 from mindweave.shared.enums import (
@@ -105,6 +107,7 @@ def record_row_to_dto(
     mask_person_id: bool = False,
 ) -> MaterialDto:
     title, body, snippet = decrypt_record_fields(cipher, dek, row)
+    card_meta = decrypt_record_card_meta(cipher, dek, row)
     has_media = bool(row.media_object_key)
     kind_enum = RecordKind(row.kind)
     media_url: str | None = None
@@ -133,6 +136,8 @@ def record_row_to_dto(
         stamp_code=row.stamp_code,
         happened_on=row.happened_on,
         pinned=row.pinned,
+        is_favorite=row.is_favorite,
+        card_meta=card_meta,
         review_state=RecordReviewState(row.review_state),
         version=row.version,
         created_at=row.created_at,
@@ -418,6 +423,24 @@ class MemoryService:
             clean_body = strip_forbidden_dev_jargon(req.body)
             clean_snippet = strip_forbidden_dev_jargon(req.snippet or clean_body[:60])
 
+            merged_meta: dict[str, Any] = {}
+            if sanitized is not None and sanitized.chroma is not None:
+                merged_meta.update(sanitized.chroma.to_card_meta_dict())
+            if req.card_meta:
+                merged_meta.update(sanitize_card_meta(req.card_meta))
+            card_meta_enc = (
+                self.container.cipher.encrypt_json(
+                    dek,
+                    merged_meta,
+                    user_id=scope.user_id,
+                    table="records",
+                    column="card_meta_enc",
+                    row_id=rec_id,
+                )
+                if merged_meta
+                else None
+            )
+
             row = RecordRow(
                 id=rec_id,
                 user_id=scope.user_id,
@@ -448,10 +471,12 @@ class MemoryService:
                     column="snippet_enc",
                     row_id=rec_id,
                 ),
+                card_meta_enc=card_meta_enc,
                 media_object_key=object_key,
                 stamp_code=req.stamp_code,
                 happened_on=req.happened_on or now.date(),
                 pinned=req.pinned,
+                is_favorite=req.is_favorite,
                 review_state=RecordReviewState.NORMAL.value,
                 version=1,
                 created_at=now,
@@ -597,6 +622,23 @@ class MemoryService:
                 row.happened_on = req.happened_on
             if req.pinned is not None:
                 row.pinned = req.pinned
+            if req.is_favorite is not None:
+                row.is_favorite = req.is_favorite
+            if req.card_meta is not None:
+                existing_meta = decrypt_record_card_meta(self.container.cipher, dek, row)
+                updated_meta = {**existing_meta, **sanitize_card_meta(req.card_meta)}
+                row.card_meta_enc = (
+                    self.container.cipher.encrypt_json(
+                        dek,
+                        updated_meta,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="card_meta_enc",
+                        row_id=row.id,
+                    )
+                    if updated_meta
+                    else None
+                )
             if req.review_state is not None:
                 row.review_state = req.review_state.value
 

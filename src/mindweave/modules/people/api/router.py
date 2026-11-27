@@ -28,6 +28,7 @@ from mindweave.modules.people.api.schemas import (
     PersonMoveRequest,
     PersonMoveResponse,
     PersonPatchRequest,
+    SetBackgroundFromMaterialRequest,
     TierTransitionRequest,
     TierTransitionResponse,
 )
@@ -437,6 +438,38 @@ async def upload_person_photo(
         person_id,
         slot,
         raw_bytes=raw_bytes,
+        idem_key=idem_key,
+        serialize_profile=_serialize,
+    )
+    response.status_code = code
+    return _person_dto_from_body(body, container=container, scope=scope)
+
+
+@router.post(
+    "/persons/{person_id}/background:from-material",
+    response_model=PersonDTO,
+    response_model_by_alias=True,
+)
+async def set_person_background_from_material(
+    person_id: UUID,
+    payload: SetBackgroundFromMaterialRequest,
+    response: Response,
+    scope: UserScope = Depends(get_current_user_scope),
+    idem_key: str = Depends(require_idempotency_key),
+    container: AppContainer = Depends(get_container),
+) -> PersonDTO:
+    service = PeopleService(container)
+
+    def _serialize(profile: PersonProfile) -> dict[str, Any]:
+        return _profile_to_dto(service, scope, profile).model_dump(mode="json", by_alias=True)
+
+    body, code = await service.set_background_from_material(
+        scope,
+        person_id,
+        material_id=payload.material_id,
+        face_zone=payload.face_zone,
+        desk_focus=payload.desk_focus,
+        phone_focus=payload.phone_focus,
         idem_key=idem_key,
         serialize_profile=_serialize,
     )

@@ -68,8 +68,10 @@ from mindweave.modules.capture.domain.routing import (
     resolve_mention_for_fact,
 )
 from mindweave.modules.capture.domain.screenshot_rules import (
+    extract_chat_card_messages,
     filter_screenshot_facts,
     format_screenshot_bubbles,
+    split_voice_segments,
 )
 from mindweave.modules.capture.infra.image_sanitizer import (
     SanitizedImage,
@@ -867,7 +869,16 @@ class CapturePipelineService:
                     cand_tuple = tuple(p.person_id for p in (hit_known or known_profiles))
                     ambiguous_groups[("", cand_tuple)] = []
 
-            record_kind = self._determine_record_kind(source, capture)
+            parsed_chat_messages = (
+                extract_chat_card_messages(effective_text)
+                if source in (CaptureSource.CHAT, CaptureSource.IMAGE)
+                else []
+            )
+            record_kind = self._determine_record_kind(
+                source,
+                capture,
+                has_chat_messages=bool(parsed_chat_messages),
+            )
             media_key = capture.audio_object_key or capture.image_object_key
 
             splits: list[CaptureSplitDto] = []
@@ -984,6 +995,41 @@ class CapturePipelineService:
                 slip_tag = build_natural_slip_tag(first_title, slip_body)
 
                 rec_id = new_id()
+                person_card_meta: dict[str, Any] = {}
+                if record_kind is RecordKind.CHAT:
+                    person_msgs = extract_chat_card_messages(
+                        effective_text,
+                        default_target_label=p_prof.display_name,
+                    )
+                    person_card_meta = {
+                        "sourceApp": "wechat",
+                        "summary": slip_body[:160],
+                        "messages": person_msgs or parsed_chat_messages,
+                    }
+                elif record_kind is RecordKind.VOICE:
+                    segs = split_voice_segments(slip_body)
+                    if segs:
+                        person_card_meta = {"segments": segs}
+                elif record_kind is RecordKind.PHOTO and parsed_chat_messages:
+                    person_card_meta = {
+                        "sourceApp": "wechat",
+                        "summary": slip_body[:160],
+                        "messages": parsed_chat_messages,
+                    }
+
+                card_meta_enc = (
+                    self.container.cipher.encrypt_json(
+                        dek,
+                        person_card_meta,
+                        user_id=scope.user_id,
+                        table="records",
+                        column="card_meta_enc",
+                        row_id=rec_id,
+                    )
+                    if person_card_meta
+                    else None
+                )
+
                 record_row = RecordRow(
                     id=rec_id,
                     user_id=scope.user_id,
@@ -1014,6 +1060,7 @@ class CapturePipelineService:
                         column="snippet_enc",
                         row_id=rec_id,
                     ),
+                    card_meta_enc=card_meta_enc,
                     media_object_key=media_key,
                     audio_duration_ms=duration_ms if record_kind is RecordKind.VOICE else None,
                     happened_on=now.astimezone(ZoneInfo(tz_name)).date(),
@@ -1034,6 +1081,7 @@ class CapturePipelineService:
                             tier=p_prof.tier,
                             is_new_person=pid in newly_created_person_ids,
                             material_id=rec_id,
+                            kind=record_kind,
                             tag=slip_tag,
                             dur=format_duration_mmss(duration_ms),
                             body=slip_body,
@@ -1895,11 +1943,20 @@ class CapturePipelineService:
     # =========================================================================
 
     @staticmethod
-    def _determine_record_kind(source: CaptureSource, capture: CaptureRow) -> RecordKind:
+    def _determine_record_kind(
+        source: CaptureSource,
+        capture: CaptureRow,
+        *,
+        has_chat_messages: bool = False,
+    ) -> RecordKind:
         if source is CaptureSource.VOICE:
             return RecordKind.VOICE
+        if source is CaptureSource.CHAT:
+            return RecordKind.CHAT
         if source is CaptureSource.IMAGE and capture.image_object_key:
             return RecordKind.PHOTO
+        if source is CaptureSource.IMAGE and has_chat_messages:
+            return RecordKind.CHAT
         return RecordKind.NOTE
 
     def _capture_row_to_response(self, dek: bytes, row: CaptureRow) -> CaptureResponse:

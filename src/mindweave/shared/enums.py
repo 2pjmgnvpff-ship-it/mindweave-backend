@@ -37,7 +37,7 @@ class Tier(StrEnum):
 
 
 class Edition(StrEnum):
-    """Journal visual editions aligned with V10 frontend."""
+    """Journal visual editions aligned with MindWeave frontend."""
 
     COTTON = "cotton"
     DOTGRID = "dotgrid"
@@ -45,6 +45,7 @@ class Edition(StrEnum):
     TRAVELER = "traveler"
     HOBONICHI = "hobonichi"
     MUSEGLASS = "museglass"
+    LUMINA = "lumina"
 
 
 class CupidLayout(StrEnum):
@@ -97,6 +98,8 @@ class RecordKind(StrEnum):
     PHOTO = "photo"
     NOTE = "note"
     VOICE = "voice"
+    CHAT = "chat"
+    DRAFT = "draft"
 
 
 class RecordReviewState(StrEnum):

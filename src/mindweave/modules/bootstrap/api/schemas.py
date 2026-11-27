@@ -2,14 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from pydantic import Field
 
 from mindweave.core.dto import CamelModel
-from mindweave.shared.enums import CupidLayout, Edition, PersonState, RecordKind, Tier
+from mindweave.shared.enums import (
+    CupidLayout,
+    Edition,
+    FactStatus,
+    FactType,
+    PersonState,
+    Polarity,
+    RecordKind,
+    RecordReviewState,
+    ReminderRule,
+    ReminderStatus,
+    Tier,
+)
 
 
 class BootstrapPreferencesDTO(CamelModel):
@@ -42,10 +54,49 @@ class BootstrapMaterialPreviewDTO(CamelModel):
     happened_on: date | None = None
     media_url: str | None = None
     thumb: str | None = None
+    is_favorite: bool = False
+    card_meta: dict[str, Any] = Field(default_factory=dict)
+    review_state: RecordReviewState = RecordReviewState.NORMAL
+    version: int = 1
+
+
+class BootstrapFactPreviewDTO(CamelModel):
+    """Confirmed fact / pending date draft preview for Jade Fact Pills & Dossier."""
+
+    id: UUID
+    record_id: UUID | None = None
+    type: FactType
+    polarity: Polarity = Polarity.NEUTRAL
+    content: str
+    status: FactStatus
+    trigger_date: date | None = None
+    is_lunar: bool = False
+    lunar_month: int | None = None
+    lunar_day: int | None = None
+    lunar_is_leap_month: bool = False
+    version: int = 1
+
+
+class BootstrapReminderPreviewDTO(CamelModel):
+    """Upcoming care reminder preview for the Luminous Care Ribbon & Dossier."""
+
+    id: UUID
+    fact_id: UUID | None = None
+    title: str
+    rule: ReminderRule
+    is_lunar: bool = False
+    target_month: int | None = None
+    target_day: int | None = None
+    is_leap_month: bool = False
+    once_date: date | None = None
+    lead_days: list[int] = Field(default_factory=list)
+    next_fire_at: datetime | None = None
+    status: ReminderStatus
+    version: int = 1
 
 
 class BootstrapPersonDTO(CamelModel):
-    """V10 `PEOPLE_DB[id]` entry hydrated with encrypted profile & top-10 materials."""
+    """`PEOPLE_DB[id]` entry hydrated with encrypted profile, materials, facts & care reminders."""
 
     id: str
     name_cn: str
@@ -70,11 +121,14 @@ class BootstrapPersonDTO(CamelModel):
     main_photo_url: str | None = None
     sub_photo_url: str | None = None
     materials: list[BootstrapMaterialPreviewDTO] = Field(default_factory=list)
+    facts: list[BootstrapFactPreviewDTO] = Field(default_factory=list)
+    upcoming_reminders: list[BootstrapReminderPreviewDTO] = Field(default_factory=list)
+    cooling_count: int = 0
     version: int
 
 
 class BootstrapResponse(CamelModel):
-    """Single round-trip workspace bootstrap payload for Web V10 & iOS."""
+    """Single round-trip workspace bootstrap payload for MindWeave Web & iOS."""
 
     preferences: BootstrapPreferencesDTO
     core_ids: list[str]

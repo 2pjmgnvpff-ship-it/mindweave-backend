@@ -460,6 +460,17 @@ class DataRightsRepository:
                     "stampCode": rec.stamp_code,
                     "happenedOn": rec.happened_on.isoformat() if rec.happened_on else None,
                     "pinned": rec.pinned,
+                    "isFavorite": rec.is_favorite,
+                    "cardMeta": _decrypt_opt_json(
+                        cipher,
+                        dek,
+                        rec.card_meta_enc,
+                        user_id=uid,
+                        table="records",
+                        column="card_meta_enc",
+                        row_id=rec.id,
+                    )
+                    or {},
                     "reviewState": rec.review_state,
                     "version": rec.version,
                     "createdAt": rec.created_at.isoformat(),

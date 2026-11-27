@@ -9,7 +9,14 @@ from pydantic import Field
 
 from mindweave.ai.schemas.contracts import CrisisCardPayload
 from mindweave.core.dto import CamelModel
-from mindweave.shared.enums import CaptureSource, CaptureStatus, RouteMode, SafetyCategory, Tier
+from mindweave.shared.enums import (
+    CaptureSource,
+    CaptureStatus,
+    RecordKind,
+    RouteMode,
+    SafetyCategory,
+    Tier,
+)
 
 
 class CrisisCardDto(CamelModel):
@@ -36,6 +43,7 @@ class CaptureSplitDto(CamelModel):
     tier: Tier
     is_new_person: bool = False
     material_id: UUID
+    kind: RecordKind = RecordKind.NOTE
     tag: str
     dur: str
     body: str

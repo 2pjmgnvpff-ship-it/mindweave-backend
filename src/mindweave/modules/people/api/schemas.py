@@ -159,3 +159,12 @@ class PersonAliasCreateRequest(CamelModel):
 
     alias: str
     kind: AliasKind = AliasKind.NICKNAME
+
+
+class SetBackgroundFromMaterialRequest(CamelModel):
+    """Request body for `POST /persons/{person_id}/background:from-material` (`✦ 映作背景`)."""
+
+    material_id: UUID
+    face_zone: str | None = Field(default=None, pattern=r"^(left|center|right)$")
+    desk_focus: str | None = Field(default=None, max_length=32)
+    phone_focus: str | None = Field(default=None, max_length=32)

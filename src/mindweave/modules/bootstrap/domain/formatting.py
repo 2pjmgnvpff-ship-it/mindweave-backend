@@ -6,18 +6,27 @@ Zero framework, database, HTTP, or vendor SDK imports (enforced by `.importlinte
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
 from mindweave.modules.people.domain.copy_policy import FORBIDDEN_UI_DEV_PHRASES
-from mindweave.shared.enums import RecordKind, Tier
+from mindweave.shared.enums import (
+    FactStatus,
+    FactType,
+    Polarity,
+    RecordKind,
+    RecordReviewState,
+    ReminderRule,
+    ReminderStatus,
+    Tier,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class MaterialPreview:
-    """Decrypted, UI-ready scrapbook material preview aligned with V10 `PEOPLE_DB.materials`."""
+    """Decrypted, UI-ready scrapbook material preview aligned with MindWeave v16."""
 
     id: UUID
     kind: RecordKind
@@ -28,6 +37,47 @@ class MaterialPreview:
     stamp_code: str | None
     happened_on: date | None
     media_object_key: str | None
+    is_favorite: bool = False
+    card_meta: dict[str, Any] = field(default_factory=dict)
+    review_state: RecordReviewState = RecordReviewState.NORMAL
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
+class FactPreview:
+    """Decrypted, UI-ready Jade Fact Pill / Lunar Draft preview for `/bootstrap`."""
+
+    id: UUID
+    record_id: UUID | None
+    type: FactType
+    polarity: Polarity
+    content: str
+    status: FactStatus
+    trigger_date: date | None
+    is_lunar: bool
+    lunar_month: int | None
+    lunar_day: int | None
+    lunar_is_leap_month: bool
+    version: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReminderPreview:
+    """Decrypted upcoming care reminder preview for the Luminous Care Ribbon & Dossier."""
+
+    id: UUID
+    fact_id: UUID | None
+    title: str
+    rule: ReminderRule
+    is_lunar: bool
+    target_month: int | None
+    target_day: int | None
+    is_leap_month: bool
+    once_date: date | None
+    lead_days: list[int]
+    next_fire_at: datetime | None
+    status: ReminderStatus
+    version: int
 
 
 @dataclass(frozen=True, slots=True)

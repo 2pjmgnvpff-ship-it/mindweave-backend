@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import Field, model_validator
@@ -42,6 +43,8 @@ class MaterialDto(CamelModel):
     stamp_code: str | None = None
     happened_on: date | None = None
     pinned: bool = True
+    is_favorite: bool = False
+    card_meta: dict[str, Any] = Field(default_factory=dict)
     review_state: RecordReviewState = RecordReviewState.NORMAL
     version: int = 1
     created_at: datetime
@@ -57,6 +60,8 @@ class MaterialCreateRequest(CamelModel):
     stamp_code: str | None = Field(default=None, max_length=64)
     happened_on: date | None = None
     pinned: bool = True
+    is_favorite: bool = False
+    card_meta: dict[str, Any] | None = None
     photo_base64: str | None = None
 
 
@@ -67,6 +72,8 @@ class MaterialPatchRequest(CamelModel):
     stamp_code: str | None = Field(default=None, max_length=64)
     happened_on: date | None = None
     pinned: bool | None = None
+    is_favorite: bool | None = None
+    card_meta: dict[str, Any] | None = None
     review_state: RecordReviewState | None = None
 
 

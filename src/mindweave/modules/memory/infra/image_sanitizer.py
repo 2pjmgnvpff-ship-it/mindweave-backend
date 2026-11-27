@@ -8,6 +8,7 @@ from io import BytesIO
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from mindweave.core.errors import PayloadTooLargeError, ValidationFailedError
+from mindweave.core.photo_chroma import PhotoChromaProfile, extract_photo_chroma_and_framing
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,7 @@ class SanitizedImage:
     extension: str
     width: int
     height: int
+    chroma: PhotoChromaProfile | None = None
 
 
 _ALLOWED_FORMATS: dict[str, tuple[str, str, str]] = {
@@ -55,6 +57,8 @@ def validate_and_strip_image_exif(data: bytes, *, max_bytes: int) -> SanitizedIm
             if width <= 0 or height <= 0 or width > 12000 or height > 12000:
                 raise ValidationFailedError("Image dimensions are out of bounds.")
 
+            chroma = extract_photo_chroma_and_framing(transposed)
+
             target_mode = transposed.mode
             if save_fmt == "JPEG" and target_mode not in ("RGB", "L"):
                 transposed = transposed.convert("RGB")
@@ -84,4 +88,5 @@ def validate_and_strip_image_exif(data: bytes, *, max_bytes: int) -> SanitizedIm
         extension=ext,
         width=width,
         height=height,
+        chroma=chroma,
     )

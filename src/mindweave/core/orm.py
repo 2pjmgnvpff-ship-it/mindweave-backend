@@ -349,16 +349,22 @@ class RecordRow(Base):
     capture_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("captures.id", ondelete="SET NULL"), nullable=True
     )
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # photo | note | voice
+    kind: Mapped[str] = mapped_column(
+        String(16), nullable=False
+    )  # photo | note | voice | chat | draft
     title_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     body_enc: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     snippet_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    card_meta_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     media_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_offset_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     audio_duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     stamp_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     happened_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     pinned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_favorite: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     review_state: Mapped[str] = mapped_column(String(24), nullable=False, default="normal")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

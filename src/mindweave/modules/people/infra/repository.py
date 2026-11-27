@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -672,6 +672,7 @@ class PeopleRepository:
         slot: PhotoSlot,
         object_key: str,
         now: datetime,
+        visual_token_updates: Mapping[str, Any] | None = None,
     ) -> tuple[PersonRow, str | None]:
         row = await self.get_person_row(session, scope, person_id, for_update=True)
         old_key: str | None
@@ -685,11 +686,34 @@ class PeopleRepository:
             old_key = row.sub_photo_object_key
             row.sub_photo_object_key = object_key
 
+        if visual_token_updates:
+            merged_tokens = dict(row.visual_tokens or {})
+            merged_tokens.update(visual_token_updates)
+            row.visual_tokens = merged_tokens
+
         row.has_photo = True
         row.version += 1
         row.updated_at = now
         await session.flush()
         return row, old_key
+
+    async def get_person_photo_material_row(
+        self,
+        session: AsyncSession,
+        scope: UserScope,
+        *,
+        person_id: UUID,
+        material_id: UUID,
+    ) -> RecordRow | None:
+        return await session.scalar(
+            select(RecordRow).where(
+                RecordRow.id == material_id,
+                RecordRow.user_id == scope.user_id,
+                RecordRow.person_id == person_id,
+                RecordRow.deleted_at.is_(None),
+                RecordRow.review_state != "held",
+            )
+        )
 
     async def pause_active_reminders_for_person(
         self,

@@ -148,6 +148,100 @@
         "title": "Body_upload_person_photo_v1_persons__person_id__photos__slot__post",
         "type": "object"
       },
+      "BootstrapFactPreviewDTO": {
+        "additionalProperties": false,
+        "description": "Confirmed fact / pending date draft preview for Jade Fact Pills & Dossier.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isLunar": {
+            "default": false,
+            "title": "Islunar",
+            "type": "boolean"
+          },
+          "lunarDay": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lunarday"
+          },
+          "lunarIsLeapMonth": {
+            "default": false,
+            "title": "Lunarisleapmonth",
+            "type": "boolean"
+          },
+          "lunarMonth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lunarmonth"
+          },
+          "polarity": {
+            "$ref": "#/components/schemas/Polarity",
+            "default": "neutral"
+          },
+          "recordId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recordid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/FactStatus"
+          },
+          "triggerDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggerdate"
+          },
+          "type": {
+            "$ref": "#/components/schemas/FactType"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "content",
+          "status"
+        ],
+        "title": "BootstrapFactPreviewDTO",
+        "type": "object"
+      },
       "BootstrapMaterialPreviewDTO": {
         "additionalProperties": false,
         "description": "Scrapbook material preview inside `people[personId].materials[]`.",
@@ -155,6 +249,11 @@
           "body": {
             "title": "Body",
             "type": "string"
+          },
+          "cardMeta": {
+            "additionalProperties": true,
+            "title": "Cardmeta",
+            "type": "object"
           },
           "dur": {
             "anyOf": [
@@ -184,6 +283,11 @@
             "title": "Id",
             "type": "string"
           },
+          "isFavorite": {
+            "default": false,
+            "title": "Isfavorite",
+            "type": "boolean"
+          },
           "mediaUrl": {
             "anyOf": [
               {
@@ -194,6 +298,10 @@
               }
             ],
             "title": "Mediaurl"
+          },
+          "reviewState": {
+            "$ref": "#/components/schemas/RecordReviewState",
+            "default": "normal"
           },
           "snippet": {
             "title": "Snippet",
@@ -227,6 +335,11 @@
           },
           "type": {
             "$ref": "#/components/schemas/RecordKind"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
@@ -241,7 +354,7 @@
       },
       "BootstrapPersonDTO": {
         "additionalProperties": false,
-        "description": "V10 `PEOPLE_DB[id]` entry hydrated with encrypted profile & top-10 materials.",
+        "description": "`PEOPLE_DB[id]` entry hydrated with encrypted profile, materials, facts & care reminders.",
         "properties": {
           "avatar": {
             "anyOf": [
@@ -269,9 +382,21 @@
             "title": "Contextsub",
             "type": "string"
           },
+          "coolingCount": {
+            "default": 0,
+            "title": "Coolingcount",
+            "type": "integer"
+          },
           "cupidTitle": {
             "title": "Cupidtitle",
             "type": "string"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/BootstrapFactPreviewDTO"
+            },
+            "title": "Facts",
+            "type": "array"
           },
           "hasPhoto": {
             "title": "Hasphoto",
@@ -377,6 +502,13 @@
             "title": "Traits",
             "type": "array"
           },
+          "upcomingReminders": {
+            "items": {
+              "$ref": "#/components/schemas/BootstrapReminderPreviewDTO"
+            },
+            "title": "Upcomingreminders",
+            "type": "array"
+          },
           "version": {
             "title": "Version",
             "type": "integer"
@@ -480,9 +612,118 @@
         "title": "BootstrapPreferencesDTO",
         "type": "object"
       },
+      "BootstrapReminderPreviewDTO": {
+        "additionalProperties": false,
+        "description": "Upcoming care reminder preview for the Luminous Care Ribbon & Dossier.",
+        "properties": {
+          "factId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Factid"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "isLeapMonth": {
+            "default": false,
+            "title": "Isleapmonth",
+            "type": "boolean"
+          },
+          "isLunar": {
+            "default": false,
+            "title": "Islunar",
+            "type": "boolean"
+          },
+          "leadDays": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Leaddays",
+            "type": "array"
+          },
+          "nextFireAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextfireat"
+          },
+          "onceDate": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oncedate"
+          },
+          "rule": {
+            "$ref": "#/components/schemas/ReminderRule"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReminderStatus"
+          },
+          "targetDay": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetday"
+          },
+          "targetMonth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Targetmonth"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "rule",
+          "status"
+        ],
+        "title": "BootstrapReminderPreviewDTO",
+        "type": "object"
+      },
       "BootstrapResponse": {
         "additionalProperties": false,
-        "description": "Single round-trip workspace bootstrap payload for Web V10 & iOS.",
+        "description": "Single round-trip workspace bootstrap payload for MindWeave Web & iOS.",
         "properties": {
           "casualIds": {
             "items": {
@@ -661,6 +902,10 @@
             "default": false,
             "title": "Isnewperson",
             "type": "boolean"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RecordKind",
+            "default": "note"
           },
           "materialId": {
             "format": "uuid",
@@ -1544,14 +1789,15 @@
         "type": "object"
       },
       "Edition": {
-        "description": "Journal visual editions aligned with V10 frontend.",
+        "description": "Journal visual editions aligned with MindWeave frontend.",
         "enum": [
           "cotton",
           "dotgrid",
           "parchment",
           "traveler",
           "hobonichi",
-          "museglass"
+          "museglass",
+          "lumina"
         ],
         "title": "Edition",
         "type": "string"
@@ -2614,6 +2860,11 @@
             ],
             "title": "Captureid"
           },
+          "cardMeta": {
+            "additionalProperties": true,
+            "title": "Cardmeta",
+            "type": "object"
+          },
           "createdAt": {
             "format": "date-time",
             "title": "Createdat",
@@ -2651,6 +2902,11 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "isFavorite": {
+            "default": false,
+            "title": "Isfavorite",
+            "type": "boolean"
           },
           "kind": {
             "$ref": "#/components/schemas/RecordKind"
@@ -2749,6 +3005,18 @@
             ],
             "title": "Body"
           },
+          "cardMeta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cardmeta"
+          },
           "happenedOn": {
             "anyOf": [
               {
@@ -2760,6 +3028,17 @@
               }
             ],
             "title": "Happenedon"
+          },
+          "isFavorite": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isfavorite"
           },
           "pinned": {
             "anyOf": [
@@ -3599,7 +3878,9 @@
         "enum": [
           "photo",
           "note",
-          "voice"
+          "voice",
+          "chat",
+          "draft"
         ],
         "title": "RecordKind",
         "type": "string"
@@ -3953,6 +4234,58 @@
           "message"
         ],
         "title": "SendChatMessageRequest",
+        "type": "object"
+      },
+      "SetBackgroundFromMaterialRequest": {
+        "additionalProperties": false,
+        "description": "Request body for `POST /persons/{person_id}/background:from-material` (`✦ 映作背景`).",
+        "properties": {
+          "deskFocus": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deskfocus"
+          },
+          "faceZone": {
+            "anyOf": [
+              {
+                "pattern": "^(left|center|right)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Facezone"
+          },
+          "materialId": {
+            "format": "uuid",
+            "title": "Materialid",
+            "type": "string"
+          },
+          "phoneFocus": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phonefocus"
+          }
+        },
+        "required": [
+          "materialId"
+        ],
+        "title": "SetBackgroundFromMaterialRequest",
         "type": "object"
       },
       "SourceSpeaker": {
@@ -7132,6 +7465,80 @@
           }
         ],
         "summary": "Delete Person Alias",
+        "tags": [
+          "people"
+        ]
+      }
+    },
+    "/v1/persons/{person_id}/background:from-material": {
+      "post": {
+        "operationId": "set_person_background_from_material_v1_persons__person_id__background_from_material_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "person_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Person Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBackgroundFromMaterialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonDTO"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Person Background From Material",
         "tags": [
           "people"
         ]

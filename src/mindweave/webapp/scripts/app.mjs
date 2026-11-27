@@ -1,464 +1,85 @@
 /**
- * MindWeave (心络) — Production Web Application
- * Real FastAPI + PostgreSQL 15 + Gemini 2.5 Flash Integration
+ * MindWeave (心络) v16 Lumina — Production Full-Stack Web Application
+ * Wired 100% live to FastAPI + PostgreSQL 16 + Per-User AES-256-GCM Encryption
  */
 
-const VALID_EDITIONS = ['cotton', 'dotgrid', 'parchment', 'traveler', 'hobonichi', 'museglass'];
-const VALID_CUPID_LAYOUTS = ['a', 'b', 'c', 'd'];
-const VALID_TIERS = ['gold', 'silver', 'crystal'];
-
-const MUSE_CUPID_PORTRAITS = {
-  a: './assets/cupid/muse_cupid_a_listen.webp?v=200',
-  b: './assets/cupid/muse_cupid_b_notebook.webp?v=200',
-  c: './assets/cupid/muse_cupid_c_heartarrow.webp?v=200',
-  d: './assets/cupid/muse_cupid_d_plush.webp?v=200',
-};
-
-const ARROW_PIN_IMAGES = {
-  gold: './assets/cupid/arrow_pin_gold.webp?v=200',
-  silver: './assets/cupid/arrow_pin_silver.webp?v=200',
-  crystal: './assets/cupid/arrow_pin_crystal.webp?v=200',
-};
-
-const CUPID_COMPANION_IMAGES = Object.values(MUSE_CUPID_PORTRAITS);
-
-const ARROW_SVGS = {
-  gold: `
-    <svg viewBox="0 0 36 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="goldArrowGrad" x1="0" y1="0" x2="36" y2="22" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#FCE49C"/>
-          <stop offset="48%" stop-color="#D99B38"/>
-          <stop offset="100%" stop-color="#9E6816"/>
-        </linearGradient>
-      </defs>
-      <line x1="4" y1="11" x2="27" y2="11" stroke="url(#goldArrowGrad)" stroke-width="2.1" stroke-linecap="round"/>
-      <path d="M4 11L1.5 6.8L6.8 9.2M4 11L1.5 15.2L6.8 12.8M8.2 11L5.8 7.2M8.2 11L5.8 14.8" stroke="url(#goldArrowGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M33.5 11C30.6 7.4 26.2 6.2 24.8 8.7C24.2 9.8 25.1 11 25.1 11C25.1 11 24.2 12.2 24.8 13.3C26.2 15.8 30.6 14.6 33.5 11Z" fill="url(#goldArrowGrad)"/>
-    </svg>
-  `,
-  silver: `
-    <svg viewBox="0 0 36 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="silverArrowGrad" x1="0" y1="0" x2="36" y2="22" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#EEF5FC"/>
-          <stop offset="50%" stop-color="#8FA6BD"/>
-          <stop offset="100%" stop-color="#51687E"/>
-        </linearGradient>
-      </defs>
-      <line x1="4" y1="11" x2="27" y2="11" stroke="url(#silverArrowGrad)" stroke-width="2.1" stroke-linecap="round"/>
-      <path d="M4.5 11L1.8 7L7.5 11L1.8 15L4.5 11ZM8.5 11L6.2 7.5M8.5 11L6.2 14.5" stroke="url(#silverArrowGrad)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      <polygon points="34,11 24.5,6.3 26.8,11 24.5,15.7" fill="url(#silverArrowGrad)"/>
-    </svg>
-  `,
-  crystal: `
-    <svg viewBox="0 0 36 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="crystalPrismTop" x1="18" y1="3" x2="35" y2="12" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#B8FAFF"/>
-          <stop offset="52%" stop-color="#58B8FF"/>
-          <stop offset="100%" stop-color="#A67CFF"/>
-        </linearGradient>
-        <linearGradient id="crystalPrismBot" x1="18" y1="11" x2="35" y2="19" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#76D8FF"/>
-          <stop offset="52%" stop-color="#B589FF"/>
-          <stop offset="100%" stop-color="#FF96D5"/>
-        </linearGradient>
-        <linearGradient id="crystalShaftGrad" x1="2" y1="6" x2="26" y2="16" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stop-color="#7AE8FF"/>
-          <stop offset="55%" stop-color="#6EA8FF"/>
-          <stop offset="100%" stop-color="#C28EFF"/>
-        </linearGradient>
-      </defs>
-      <line x1="3.8" y1="11" x2="22.5" y2="11" stroke="url(#crystalShaftGrad)" stroke-width="2.2" stroke-linecap="round"/>
-      <polygon points="2.2,11 6.2,6.2 9.4,11 6.2,15.8" fill="url(#crystalPrismTop)" opacity="0.92"/>
-      <polygon points="6.6,11 9.8,7.2 12.4,11 9.8,14.8" fill="url(#crystalPrismBot)" opacity="0.88"/>
-      <polygon points="34.8,11 25.8,4.6 21.4,11" fill="url(#crystalPrismTop)"/>
-      <polygon points="34.8,11 25.8,17.4 21.4,11" fill="url(#crystalPrismBot)"/>
-      <polygon points="34.8,11 25.8,4.6 21.4,11 25.8,17.4" stroke="#5B8CE8" stroke-width="0.75" stroke-linejoin="round"/>
-      <line x1="21.8" y1="11" x2="34.2" y2="11" stroke="#FFFFFF" stroke-width="1.05"/>
-      <circle cx="27.2" cy="8.2" r="1.05" fill="#FFFFFF"/>
-    </svg>
-  `,
-};
-
-const CASUAL_DIRECTORY_SVG = `
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M4 6.5h11.5a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4z"/>
-    <path d="M17.5 8.5H20a1 1 0 0 1 1 1v2h-3.5"/>
-    <path d="M17.5 13.5H20a1 1 0 0 1 1 1v2h-3.5"/>
-    <circle cx="9.8" cy="11.2" r="2.1"/>
-    <path d="M6.8 16.4c.6-1.5 1.7-2.2 3-2.2s2.4.7 3 2.2"/>
-  </svg>
-`;
-
-const STONE_STATES = [
-  { index: 0, sliderPos: 12, frameIndex: 1, word: 'Bad', dotIndex: 1 },
-  { index: 1, sliderPos: 38, frameIndex: 11, word: 'Tired', dotIndex: 4 },
-  { index: 2, sliderPos: 64, frameIndex: 16, word: 'Okay', dotIndex: 8 },
-  { index: 3, sliderPos: 89, frameIndex: 30, word: 'Great', dotIndex: 11 },
-];
-
+const API_BASE = '/v1';
+const STORAGE_SESSION_KEY = 'mw_v16_session';
+const STORAGE_GUEST_EMAIL_KEY = 'mw_v16_guest_email';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/* ==========================================================================
-   Curated First-Open Seed Templates (Persisted into PostgreSQL for new users)
-   ========================================================================== */
-const INITIAL_SEED_PROFILES = [
-  {
-    slug: 'chloe',
-    nameCn: '沈清秋',
-    monogram: '沈',
-    roleTag: '心动伴侣',
-    contextSub: '四月海风 · 镰仓木栈道',
-    tier: 'gold',
-    shortMemo: '偏爱温热桂花燕麦拿铁，生理期前三天忌冰美式。',
-    traits: [
-      '每年四月都想看一次海，偏爱安静不打卡的街巷步道',
-      '生理期前三天忌冰美式，必点半糖温热桂花燕麦拿铁',
-      '拍照喜欢自然抓拍与拍立得实相纸质感',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #fcf4e6 0%, #efd9b8 100%)',
-      sealColor: '#694418',
-      tapeColor: 'rgba(226, 182, 118, 0.76)',
-      tabColor: '#D49A45',
-      folioDate: 'APR 17',
-      hoboDay: '17',
-      hoboMonthWk: 'APR · THU',
-      ticketNo: 'NO. 0417-A',
-      captionCotton: 'Kamakura Coast · 海风与木栈道',
-      captionFilm: 'KODAK PORTRA 400 · 17A',
-      noteSign: '— 四月十七 · 午后手札',
-      voiceDur: '0:18',
-      stampCode: 'KAMAKURA · 04.17',
-      fallbackAvatar: './assets/cupid/avatar_chloe.webp',
-      fallbackMainPhoto: './assets/photos/photo_9.jpg',
-      fallbackSubPhoto: './assets/photos/photo_12.jpg',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '温热桂花燕麦拿铁手札',
-        body: '她说每年四月都想来吹一次海风；生理期前三天忌冰美式，要记得点街角那杯温热的桂花燕麦拿铁。',
-        snippet: '生理期前三天忌冰美式，半糖温热燕麦奶',
-        stampCode: 'KAMAKURA · 04.17',
-      },
-      {
-        kind: 'note',
-        title: '镰仓海岸木栈道约定',
-        body: '周五午后她想穿米白色针织开衫去海边看海鸥，随身备好拍立得相纸与薄羊绒围巾。',
-        snippet: '海边看海鸥 · 备拍立得相纸与薄羊绒围巾',
-        stampCode: 'COAST · 04.17',
-      },
-    ],
-  },
-  {
-    slug: 'xubai',
-    nameCn: '周叙白',
-    monogram: '周',
-    roleTag: '十年挚友',
-    contextSub: '老友默契 · 街角黑胶店',
-    tier: 'gold',
-    shortMemo: '常喝深烘曼特宁手冲，5月12日生日偏爱泥煤威士忌。',
-    traits: [
-      '黑胶咖啡馆常坐靠窗第二桌，固定点深烘曼特宁',
-      '上月搬家全程帮忙，首版《Blue》黑胶周末当面送他',
-      '5月12日生日前提前订好藏酒阁泥煤威士忌座位',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #f8f1e5 0%, #e7d4b8 100%)',
-      sealColor: '#5c3f1c',
-      tapeColor: 'rgba(208, 168, 114, 0.75)',
-      tabColor: '#C48A3F',
-      folioDate: 'MAY 12',
-      hoboDay: '12',
-      hoboMonthWk: 'MAY · TUE',
-      ticketNo: 'NO. 0512-B',
-      captionCotton: 'Vinyl & Pour-Over · 十年挚友',
-      captionFilm: 'ILFORD HP5 PLUS · 24A',
-      noteSign: '— 老友记 · 黑胶咖啡馆',
-      voiceDur: '0:14',
-      stampCode: 'VINYL CLUB · 05.12',
-      fallbackAvatar: './assets/cupid/avatar_xubai.webp',
-      fallbackMainPhoto: './assets/photos/cinema_cafe_film.jpg',
-      fallbackSubPhoto: './assets/photos/photo_20.jpg',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '首版《Blue》黑胶与生辰笺',
-        body: '上月搬家叙白忙前忙后，周末碰面把淘到的首版黑胶《Blue》顺手带给他，五月十二日生日前订好威士忌吧。',
-        snippet: '5月12日生日前订好藏酒阁泥煤威士忌座位',
-        stampCode: 'VINYL CLUB · 05.12',
-      },
-    ],
-  },
-  {
-    slug: 'zhixia',
-    nameCn: '林知夏',
-    monogram: '林',
-    roleTag: '跨组同事',
-    contextSub: '职场护界 · 留痕对接',
-    tier: 'silver',
-    shortMemo: '周五临下班惯用夸赞话术推活，只发标准母版留档不兜底。',
-    traits: [
-      '惯在周五傍晚先夸“你审美最好”再顺势转嫁加班活',
-      '所有对接一律走大群公开文档留痕，绝不私聊口头答应',
-      '周五 18:00 前发空白母版并@各自负责人即止',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #eef3f8 0%, #d5e0ec 100%)',
-      sealColor: '#374d63',
-      tapeColor: 'rgba(148, 172, 196, 0.76)',
-      tabColor: '#6F88A2',
-      folioDate: 'APR 19',
-      hoboDay: '19',
-      hoboMonthWk: 'APR · SAT',
-      ticketNo: 'NO. 0419-S',
-      captionCotton: 'Rainy Window · 边界备忘留档',
-      captionFilm: 'CINESTILL 800T · 09B',
-      noteSign: '— 银箭护界 · 冷静留档',
-      voiceDur: '0:11',
-      stampCode: 'BOUNDARY · 04.19',
-      fallbackAvatar: './assets/cupid/avatar_zhixia.webp',
-      fallbackMainPhoto: './assets/photos/cinema_rain_glass.jpg',
-      fallbackSubPhoto: './assets/photos/cinema_forest_mist.jpg',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '周五临下班推活话术留档',
-        body: '周五临下班前习惯用高赞美话术临时推活。往后只同步标准模板留档，周末绝不替他人越界兜底。',
-        snippet: '只同步公开母版留档，周末不替他人越界兜底',
-        stampCode: 'BOUNDARY · 04.19',
-      },
-    ],
-  },
-  {
-    slug: 'prof',
-    nameCn: '陈教授',
-    monogram: '陈',
-    roleTag: '论文导师',
-    contextSub: '学术长辈 · 学院南楼 402',
-    tier: 'crystal',
-    shortMemo: '偏爱武夷岩茶，邮件忌寒暄，组会汇报先给三行结论。',
-    traits: [
-      '每周二上午 10 点前查收邮件最快，忌发长语音',
-      '汇报偏好开门见山：正文前三行直接列出核心结论',
-      '日常品茗偏爱武夷岩茶（大红袍 / 肉桂）',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #f9f2e7 0%, #ead8be 100%)',
-      sealColor: '#5c4224',
-      tapeColor: 'rgba(206, 178, 138, 0.76)',
-      tabColor: '#C59B6D',
-      folioDate: 'APR 11',
-      hoboDay: '11',
-      hoboMonthWk: 'APR · FRI',
-      ticketNo: 'NO. 0411-C',
-      noteSign: '— 水晶箭手札 · 学术分寸',
-      voiceDur: '0:12',
-      stampCode: 'ACADEMY · 04.11',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '陈教授 · 邮件与汇报偏好卡',
-        body: '上周去南楼 402 找陈老师签字，顺手带了一小罐武夷岩茶；他笑说以后中期材料直接发三行摘要加 PDF 附件最省心。',
-        snippet: '周二早十点前回信最快，正文前三行先列核心结论',
-        stampCode: 'ACADEMY · 04.11',
-      },
-    ],
-  },
-  {
-    slug: 'sumin',
-    nameCn: '苏敏姐',
-    monogram: '苏',
-    roleTag: '合作制片',
-    contextSub: '项目搭档 · 城西调色棚',
-    tier: 'crystal',
-    shortMemo: '审美利落守时，报价单需拆细项，晚十点后不发工作语音。',
-    traits: [
-      '对接档期习惯提前三天拉飞书表格，极重守时',
-      '报价单需拆清器材与人工细项，忌笼统打包价',
-      '偏爱浅烘手冲瑰夏，晚 22:00 后不打扰私人休息',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #eef5ef 0%, #d4e4d7 100%)',
-      sealColor: '#2f5238',
-      tapeColor: 'rgba(168, 196, 174, 0.78)',
-      tabColor: '#7E9A86',
-      folioDate: 'APR 14',
-      hoboDay: '14',
-      hoboMonthWk: 'APR · MON',
-      ticketNo: 'NO. 0414-C',
-      noteSign: '— 水晶箭手札 · 外部搭档',
-      voiceDur: '0:10',
-      stampCode: 'STUDIO · 04.14',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '苏敏姐 · 报价与作息边界卡',
-        body: '春季短片看片会散场聊了十分钟，她推荐了城西靠谱的调色棚；下次审片记得带两杯浅烘瑰夏过去道谢。',
-        snippet: '报价拆细项、提前三天定档期、晚十点后免打扰',
-        stampCode: 'STUDIO · 04.14',
-      },
-    ],
-  },
-  {
-    slug: 'laogu',
-    nameCn: '老顾',
-    monogram: '顾',
-    roleTag: '公寓房东',
-    contextSub: '街坊日常 · 梧桐公寓 502',
-    tier: 'crystal',
-    shortMemo: '退休木匠脾气温和，爱惜实木窗框，报修附清晰照片最省心。',
-    traits: [
-      '退休老木匠手艺讲究，沟通时站在爱惜房屋木作角度最顺畅',
-      '月底水电抄表附清晰读数图，十月中旬提前聊续租',
-      '血糖偏高忌甜腻，逢节送少糖绿豆糕最合心意',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #fbf0e6 0%, #ecd4be 100%)',
-      sealColor: '#663c1f',
-      tapeColor: 'rgba(222, 184, 156, 0.78)',
-      tabColor: '#C9845B',
-      folioDate: 'APR 06',
-      hoboDay: '06',
-      hoboMonthWk: 'APR · SUN',
-      ticketNo: 'NO. 0406-C',
-      noteSign: '— 水晶箭手札 · 屋檐日常',
-      voiceDur: '0:09',
-      stampCode: 'HOME · 04.06',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '老顾 · 房屋维护与少糖偏好',
-        body: '老顾拎着木工箱过来调好了阳台纱窗滑轨，临走送了他两盒老字号少糖绿豆糕，老爷子乐呵呵说明年房租照旧。',
-        snippet: '退休木匠爱惜木窗框，偏爱老字号少糖绿豆糕',
-        stampCode: 'HOME · 04.06',
-      },
-    ],
-  },
-  {
-    slug: 'xiaotang',
-    nameCn: '小唐',
-    monogram: '唐',
-    roleTag: '摄影同好',
-    contextSub: '银盐集市 · 胶片冲扫圈',
-    tier: 'crystal',
-    shortMemo: '熟知中古禄来行情，借了我一枚 49mm 柔焦镜下周擦净归还。',
-    traits: [
-      '熟知中古双反与银盐冲扫，纯粹聊摄影扫街最投缘',
-      '4月13日借用他一枚 49mm 柔焦滤镜，归还前需蔡司纸擦净',
-      '同好往来宜轻礼互赠（分装电影卷），不掺合彼此工作圈',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #ecf4f9 0%, #d0e2ee 100%)',
-      sealColor: '#2b5069',
-      tapeColor: 'rgba(166, 196, 218, 0.78)',
-      tabColor: '#6E8CA8',
-      folioDate: 'APR 13',
-      hoboDay: '13',
-      hoboMonthWk: 'APR · SUN',
-      ticketNo: 'NO. 0413-C',
-      noteSign: '— 水晶箭手札 · 兴趣同好',
-      voiceDur: '0:08',
-      stampCode: 'SILVER · 04.13',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '小唐 · 49mm 柔焦镜借还记录',
-        body: '在银盐集市一起拼单了五卷 Portra 400，他顺手借了我一枚 49mm 柔焦滤镜试拍；下周归还时带一卷电影分装卷回礼。',
-        snippet: '银盐集市拼单胶卷，借物准时擦净归还',
-        stampCode: 'SILVER · 04.13',
-      },
-    ],
-  },
-  {
-    slug: 'kevin',
-    nameCn: 'Kevin',
-    monogram: 'K',
-    roleTag: '常驻发型师',
-    contextSub: '生活常驻 · 周四午后清静档',
-    tier: 'crystal',
-    shortMemo: '固定“两侧留厚、刘海过眉半指”，周四下午三点人少零推销。',
-    traits: [
-      '固定修剪口令：两侧留厚不推白、刘海过眉半指微修层次',
-      '每周四下午 15:00 店里最清静，提前两天微信预约即可',
-      '家里养了一只刚绝育的橘猫，话少专注从不推销办卡',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #f3eef8 0%, #dfd4ec 100%)',
-      sealColor: '#4c3863',
-      tapeColor: 'rgba(196, 178, 214, 0.78)',
-      tabColor: '#8E78A0',
-      folioDate: 'MAR 29',
-      hoboDay: '29',
-      hoboMonthWk: 'MAR · SAT',
-      ticketNo: 'NO. 0329-C',
-      noteSign: '— 水晶箭手札 · 日常打理',
-      voiceDur: '0:07',
-      stampCode: 'SALON · 03.29',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: 'Kevin · 专属修剪比例参数卡',
-        body: '提前两天约周四下午三点店里最清静；坐下直接报“两侧留厚、刘海过眉半指”，四十分钟清爽剪完零废话。',
-        snippet: '两侧留厚、刘海过眉半指 · 周四15:00最清静',
-        stampCode: 'SALON · 03.29',
-      },
-    ],
-  },
-  {
-    slug: 'aunt',
-    nameCn: '林表姑',
-    monogram: '姑',
-    roleTag: '家族长辈',
-    contextSub: '远房亲戚 · 逢节问候礼数',
-    tier: 'crystal',
-    shortMemo: '对海鲜严重过敏！逢节寄无蔗糖铁棍山药糕礼盒最稳妥。',
-    traits: [
-      '重要忌口：对海鲜严重过敏，节礼严禁含干贝/虾仁/海鲜粽',
-      '热心爱聊养生茶与丝巾配色，顺着夸两句就开怀',
-      '端午与中秋固定寄老字号无蔗糖铁棍山药糕即可',
-    ],
-    visualTokens: {
-      sealBg: 'linear-gradient(145deg, #fbf0ee 0%, #edd5d1 100%)',
-      sealColor: '#6e3834',
-      tapeColor: 'rgba(228, 184, 176, 0.78)',
-      tabColor: '#B86E68',
-      folioDate: 'APR 04',
-      hoboDay: '04',
-      hoboMonthWk: 'APR · FRI',
-      ticketNo: 'NO. 0404-C',
-      noteSign: '— 水晶箭手札 · 家族礼数',
-      voiceDur: '0:09',
-      stampCode: 'FAMILY · 04.04',
-    },
-    materials: [
-      {
-        kind: 'note',
-        title: '林表姑 · 海鲜过敏忌口警示卡',
-        body: '清明家宴同桌表姑热心问起近况，夸她丝巾配色雅致就自然聊到了养生茶；切记她海鲜严重过敏，节礼选低糖山药糕。',
-        snippet: '严禁任何海鲜干货成分，宜选无蔗糖山药糕',
-        stampCode: 'FAMILY · 04.04',
-      },
-    ],
-  },
-];
+const ARROW_PINS = {
+  gold: '/assets/cupid/arrow_pin_gold.webp',
+  crystal: '/assets/cupid/arrow_pin_crystal.webp',
+  silver: '/assets/cupid/arrow_pin_silver.webp',
+};
 
-/* ==========================================================================
-   Session Storage & Authenticated Backend Client (`/v1/*`)
-   ========================================================================== */
-const STORAGE_SESSION_KEY = 'mw_prod_session_v1';
-const STORAGE_GUEST_EMAIL_KEY = 'mw_prod_guest_email_v1';
-const API_BASE = '/v1';
+const TIER_META = {
+  gold: { label: '金箭', full: '金箭 · 记爱' },
+  crystal: { label: '水晶箭', full: '水晶箭 · 记繁琐' },
+  silver: { label: '银箭', full: '银箭 · 记恨' },
+};
+
+const FACT_KIND_LABELS = {
+  preference: '喜好',
+  taboo: '忌口',
+  date: '日子',
+  wish: '心愿',
+  promise: '记挂',
+  event: '往事',
+  note: '小事',
+};
+
+const LABEL_TO_FACT_TYPE = {
+  '喜好': { type: 'preference', polarity: 'positive' },
+  '忌口': { type: 'taboo', polarity: 'negative' },
+  '习惯': { type: 'preference', polarity: 'neutral' },
+  '心法': { type: 'note', polarity: 'positive' },
+  '记挂': { type: 'promise', polarity: 'positive' },
+  '日期': { type: 'date', polarity: 'neutral' },
+  '规矩': { type: 'taboo', polarity: 'negative' },
+  '底线': { type: 'taboo', polarity: 'negative' },
+};
+
+/* ============================================================================
+   0. STATE & UTILITIES
+   ============================================================================ */
+const state = {
+  session: loadSavedSession(),
+  otpChallenge: null,
+  preferences: { preferredEdition: 'lumina', version: 1 },
+  people: [],
+  personId: null,
+  inboxItems: [],
+  inboxCount: 0,
+  scale: 'folio', // folio | season | rings
+  lighting: 'daylight', // daylight | evening
+  shieldGlobalOpen: false,
+  unveiledIds: new Set(),
+  playingVoiceId: null,
+  voiceTimer: null,
+  voiceProgress: 0,
+  selectedRingId: null,
+  dirFilter: 'all',
+  showNewPersonForm: false,
+  capMode: 'voice', // voice | wechat | photo | care
+  capWaveRaf: null,
+  spotFilter: 'all',
+  cupidMessages: {}, // personId -> array of chat message objects
+  cupidLoaded: new Set(),
+  cupidThinking: false,
+  cupidTraceOpen: false,
+  cupidAttachedIds: new Set(),
+  cupidPerspectiveOpen: false,
+  lbPhotos: [],
+  lbIndex: 0,
+  faceIdLock: true,
+  wheelYear: 2026,
+  wheelMonth: 12,
+  wheelDay: 16,
+  wheelDraftRecId: null,
+  seeding: false,
+};
 
 function makeUuid() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -466,21 +87,65 @@ function makeUuid() {
   }
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
 
-function getOrCreateGuestEmail() {
-  let email = localStorage.getItem(STORAGE_GUEST_EMAIL_KEY);
-  if (!email) {
-    const rand = Math.random().toString(16).slice(2, 10);
-    email = `journal.${rand}@mindweave.app`;
-    localStorage.setItem(STORAGE_GUEST_EMAIL_KEY, email);
-  }
-  return email;
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[c]));
 }
 
+function formatShortDate(iso) {
+  if (!iso) return '今日';
+  const s = String(iso);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return `${s.slice(5, 7)}·${s.slice(8, 10)}`;
+  return s.slice(0, 10);
+}
+
+function formatDaysLeft(isoDate) {
+  if (!isoDate) return '近期';
+  const target = new Date(`${String(isoDate).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(target.getTime())) return '近期';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((target - today) / 86400000);
+  if (diff < 0) return '已过';
+  if (diff === 0) return '今天';
+  if (diff === 1) return '明天';
+  return `${diff}天后`;
+}
+
+function leadDaysLabel(arr) {
+  if (!Array.isArray(arr) || !arr.length) return '当天';
+  const maxD = Math.max(...arr.map(Number));
+  if (maxD >= 7) return '提前 7 天';
+  if (maxD >= 1) return `提前 ${maxD} 天`;
+  return '当天';
+}
+
+function currentPerson() {
+  return state.people.find((p) => p.id === state.personId) || state.people[0] || null;
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toastPill');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('is-show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('is-show'), 2800);
+}
+
+/* ============================================================================
+   1. SESSION STORAGE & AUTHENTICATED FASTAPI CLIENT (`/v1/*`)
+   ============================================================================ */
 function loadSavedSession() {
   try {
     const raw = localStorage.getItem(STORAGE_SESSION_KEY);
@@ -493,16 +158,21 @@ function loadSavedSession() {
 
 function saveSession(sess) {
   state.session = sess;
-  if (sess) {
-    localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(sess));
-  } else {
-    localStorage.removeItem(STORAGE_SESSION_KEY);
+  if (sess) localStorage.setItem(STORAGE_SESSION_KEY, JSON.stringify(sess));
+  else localStorage.removeItem(STORAGE_SESSION_KEY);
+}
+
+function getOrCreateGuestEmail() {
+  let email = localStorage.getItem(STORAGE_GUEST_EMAIL_KEY);
+  if (!email) {
+    const rand = Math.random().toString(16).slice(2, 10);
+    email = `lumina.${rand}@mindweave.app`;
+    localStorage.setItem(STORAGE_GUEST_EMAIL_KEY, email);
   }
-  syncAccountLabel();
+  return email;
 }
 
 let refreshPromise = null;
-
 async function tryRefreshTokens() {
   if (!state.session || !state.session.refreshToken) return false;
   if (refreshPromise) return refreshPromise;
@@ -536,35 +206,33 @@ async function tryRefreshTokens() {
 async function apiFetch(path, options = {}, allowRetry = true) {
   const method = (options.method || 'GET').toUpperCase();
   const headers = new Headers(options.headers || {});
-  const isAuthEndpoint = path.startsWith('/auth/');
+  const isLoginAuth =
+    path === '/auth/email/otp:request' ||
+    path === '/auth/refresh' ||
+    (path === '/auth/email/otp:verify' && !options.attachBearer);
 
-  if (!isAuthEndpoint && state.session && state.session.accessToken) {
+  if (!isLoginAuth && state.session && state.session.accessToken) {
     headers.set('Authorization', `Bearer ${state.session.accessToken}`);
   }
-  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && !isAuthEndpoint && !headers.has('Idempotency-Key')) {
+  if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && !path.startsWith('/auth/') && !headers.has('Idempotency-Key')) {
     headers.set('Idempotency-Key', makeUuid());
   }
-  if (options.body && typeof options.body === 'object' && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
+  const isRawBody = options.body instanceof FormData || options.body instanceof Blob || typeof options.body === 'string';
+  if (options.body && typeof options.body === 'object' && !isRawBody) {
     headers.set('Content-Type', 'application/json');
   }
 
-  const fetchInit = {
+  const resp = await fetch(`${API_BASE}${path}`, {
     ...options,
     method,
     headers,
-    body:
-      options.body && typeof options.body === 'object' && !(options.body instanceof FormData) && !(options.body instanceof Blob)
-        ? JSON.stringify(options.body)
-        : options.body,
-  };
+    body: options.body && typeof options.body === 'object' && !isRawBody ? JSON.stringify(options.body) : options.body,
+  });
 
-  const resp = await fetch(`${API_BASE}${path}`, fetchInit);
-  if (resp.status === 401 && !isAuthEndpoint && allowRetry) {
-    const refreshed = await tryRefreshTokens();
-    if (refreshed) {
-      return apiFetch(path, options, false);
-    }
-    switchScene('splash');
+  if (resp.status === 401 && !isLoginAuth && allowRetry) {
+    const ok = await tryRefreshTokens();
+    if (ok) return apiFetch(path, options, false);
+    openAuthGate();
   }
   return resp;
 }
@@ -588,2287 +256,1358 @@ async function apiJson(path, options = {}) {
   return data;
 }
 
-/* ==========================================================================
-   Runtime State & Local People Dictionary
-   ========================================================================== */
-const PEOPLE_DB = {};
-
-const state = {
-  session: loadSavedSession(),
-  otpChallenge: null,
-  edition: 'cotton',
-  cupidLayout: 'a',
-  coreIds: [],
-  casualIds: [],
-  viewMode: 'person-journal',
-  activePersonId: null,
-  chatPersonId: null,
-  lastDemotedId: null,
-  activeScene: 'splash',
-  capsuleExpanded: false,
-  arrowPopoverOpen: false,
-  drawerOpen: false,
-  selectedMaterialIds: [],
-  voiceHolding: false,
-  voiceDragZone: 'current',
-  stoneStateIndex: 2,
-  newPersonTier: 'gold',
-  deleteConfirmArmed: false,
-  clearChatArmed: false,
-  chatStreaming: false,
-  lastDispatchSplits: [],
-  lastCaptureUndo: null,
-};
-
-function preloadAllAssets() {
-  [...Object.values(ARROW_PIN_IMAGES), ...CUPID_COMPANION_IMAGES].forEach((url) => {
-    const img = new Image();
-    img.src = url;
-    if (img.decode) img.decode().catch(() => {});
-  });
-}
-
-// Core DOM References
-const viewport = document.getElementById('glebViewport');
-const splashScreen = document.getElementById('splashScreen');
-const splashMorphActor = document.getElementById('splashMorphActor');
-const morphCapsuleGlass = document.getElementById('morphCapsuleGlass');
-
-const topRightArrowAnchor = document.getElementById('topRightArrowAnchor');
-const journalArrowPinBtn = document.getElementById('journalArrowPinBtn');
-const journalArrowPinImg = document.getElementById('journalArrowPinImg');
-const arrowSelectorPopover = document.getElementById('arrowSelectorPopover');
-const btnBackToCasualList = document.getElementById('btnBackToCasualList');
-
-const artifactPhotoMount = document.getElementById('artifactPhotoMount');
-const artifactDossierCard = document.getElementById('artifactDossierCard');
-const voiceExtractedMount = document.getElementById('voiceExtractedMount');
-const casualEntriesStage = document.getElementById('casualEntriesStage');
-const aiVoiceDispatchModal = document.getElementById('aiVoiceDispatchModal');
-const btnUndoVoiceCapture = document.getElementById('btnUndoVoiceCapture');
-
-const eventsFullScreen = document.getElementById('eventsFullScreen');
-const aiChatFullscreen = document.getElementById('aiChatFullscreen');
-const chatRightEdgeZone = document.getElementById('chatRightEdgeZone');
-const chatMaterialScrim = document.getElementById('chatMaterialScrim');
-const chatMaterialDrawer = document.getElementById('chatMaterialDrawer');
-const drawerMaterialsList = document.getElementById('drawerMaterialsList');
-const drawerSelectedCount = document.getElementById('drawerSelectedCount');
-const chatAttachedTray = document.getElementById('chatAttachedTray');
-const chatTextInput = document.getElementById('chatTextInput');
-
-const glebTriDock = document.getElementById('glebTriDock');
-const dockVoiceOrbBtn = document.getElementById('dockVoiceOrbBtn');
-const dockCenterCapsule = document.getElementById('dockCenterCapsule');
-const capsulePortraitCluster = document.getElementById('capsulePortraitCluster');
-const capsuleExpandedItems = document.getElementById('capsuleExpandedItems');
-
-const voiceHoldStage = document.getElementById('voiceHoldStage');
-const voiceHoldTimerEl = document.getElementById('voiceHoldTimer');
-const voiceSilkCanvas = document.getElementById('voiceSilkCanvas');
-const voiceSilkCtx = voiceSilkCanvas ? voiceSilkCanvas.getContext('2d') : null;
-const voiceDragPuck = document.getElementById('voiceDragPuck');
-
-const moodStonePopover = document.getElementById('moodStonePopover');
-const stoneCanvas = document.getElementById('stoneGrowthCanvas');
-const stoneCtx = stoneCanvas ? stoneCanvas.getContext('2d') : null;
-const stoneSliderWrap = document.getElementById('stoneSliderWrap');
-const stoneSliderKnob = document.getElementById('stoneSliderKnob');
-const sliderDots = Array.from(document.querySelectorAll('#stoneSliderDots .stone-slider-dot'));
-
-const personCreateModal = document.getElementById('personCreateModal');
-const noteEditModal = document.getElementById('noteEditModal');
-const quickCaptureSheet = document.getElementById('quickCaptureSheet');
-const photoUploadInput = document.getElementById('photoUploadInput');
-
-function clamp01(v) {
-  return Math.max(0, Math.min(1, v));
-}
-function easeOutCubic(t) {
-  return 1 - Math.pow(1 - t, 3);
-}
-function escapeHtml(str) {
-  return String(str ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function formatTodayTokens() {
-  const now = new Date();
-  const months = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-  const wks = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-  const m = months[now.getMonth()];
-  const d = String(now.getDate()).padStart(2, '0');
-  return {
-    folioDate: `${m} ${d}`,
-    hoboDay: d,
-    hoboMonthWk: `${m} · ${wks[now.getDay()]}`,
-    stampCode: `JOURNAL · ${String(now.getMonth() + 1).padStart(2, '0')}.${d}`,
-    ticketNo: `NO. ${String(now.getMonth() + 1).padStart(2, '0')}${d}`,
-  };
-}
-
-function syncAccountLabel() {
-  const el = document.getElementById('stoneAccountLabel');
-  if (!el) return;
-  if (!state.session || !state.session.email) {
-    el.textContent = '心络手帐';
-    return;
-  }
-  const mail = state.session.email;
-  el.textContent = mail.endsWith('@mindweave.app') ? '本机手帐' : mail;
-}
-
-/* ==========================================================================
-   Data Hydration from `GET /v1/bootstrap`
-   ========================================================================== */
-function hydratePersonFromDto(dto) {
+/* ============================================================================
+   2. HYDRATION FROM `/v1/bootstrap` + `/v1/inbox`
+   ============================================================================ */
+function mapBootstrapPerson(dto) {
   const vt = dto.visualTokens || {};
-  const today = formatTodayTokens();
-  const materials = Array.isArray(dto.materials) ? dto.materials : [];
+  const tier = dto.tier || 'gold';
+  const records = (dto.materials || []).map((m, idx) => {
+    const meta = m.cardMeta || {};
+    const kind = m.type || m.kind || 'note';
+    const rawBody = m.body || m.snippet || '';
+    const imgUrl = m.mediaUrl || m.thumb || null;
+    const dateLabel = meta.dateLabel || formatShortDate(m.happenedOn || m.createdAt);
+    const segments =
+      Array.isArray(meta.segments) && meta.segments.length
+        ? meta.segments
+        : rawBody
+            .split(/(?<=[。！？!?])\s*/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+    const messages = Array.isArray(meta.messages) ? meta.messages : [];
 
-  const mainPhoto = dto.mainPhotoUrl || dto.mainPhoto || vt.fallbackMainPhoto || '';
-  const subPhoto = dto.subPhotoUrl || dto.subPhoto || vt.fallbackSubPhoto || mainPhoto || './assets/photos/photo_12.jpg';
-  const avatar = dto.avatarUrl || dto.avatar || vt.fallbackAvatar || mainPhoto || '';
-  const hasPhoto = Boolean(dto.hasPhoto || mainPhoto);
+    return {
+      id: m.id,
+      type: tier === 'silver' && kind !== 'photo' ? 'shield-log' : kind,
+      rawKind: kind,
+      date: dateLabel,
+      time: meta.timeLabel || '',
+      ring: meta.ring || ((idx % 3) + 1),
+      angle: typeof meta.angle === 'number' ? meta.angle : ((idx * 58 + 38) % 340),
+      tag: meta.tag || (kind === 'voice' ? '语音声囊' : kind === 'chat' ? '微信归档' : kind === 'photo' ? (m.title || '相片') : kind === 'draft' ? '待核对日期' : '手帐'),
+      card_title: m.title || '',
+      scene_label: meta.sceneLabel || m.title || '',
+      caption: rawBody,
+      text: rawBody,
+      summary: meta.summary || m.snippet || '',
+      segments: segments.length ? segments : [rawBody],
+      duration: Number(meta.duration || Math.max(8, Math.min(45, Math.round(rawBody.length / 3)))),
+      messages,
+      palette: Array.isArray(meta.palette) && meta.palette.length >= 3 ? meta.palette : null,
+      img: imgUrl,
+      hasMedia: Boolean(imgUrl),
+      lunar_hint: meta.lunarHint || '',
+      lunar_label: meta.lunarLabel || '',
+      fav: Boolean(m.isFavorite),
+      version: m.version || 1,
+      cardMeta: meta,
+      happenedOn: m.happenedOn || null,
+      createdAt: m.createdAt || null,
+    };
+  });
 
-  const noteMats = materials.filter((m) => m.type === 'note' || m.kind === 'note');
-  const voiceMats = materials.filter((m) => m.type === 'voice' || m.kind === 'voice');
-  const primaryNote = noteMats[0] || materials[0] || null;
-
-  const voiceSlips = voiceMats.map((m) => ({
-    id: String(m.id),
-    tag: m.title || '原声手札',
-    dur: m.dur || '0:06',
-    body: m.body || m.snippet || '',
+  const facts = (dto.facts || []).map((f) => ({
+    id: f.id,
+    type: f.type,
+    kind: FACT_KIND_LABELS[f.type] || '小事',
+    polarity: f.polarity || 'neutral',
+    text: f.content,
+    status: f.status,
+    faded: f.status === 'rejected',
+    version: f.version || 1,
+    triggerDate: f.triggerDate || null,
+    isLunar: Boolean(f.isLunar),
+    lunarMonth: f.lunarMonth || null,
+    lunarDay: f.lunarDay || null,
   }));
 
-  const normalizedMats = materials.map((m) => {
-    const kind = m.type || m.kind || 'note';
+  const reminders = (dto.upcomingReminders || []).map((r) => {
+    const dateStr = r.onceDate || (r.nextFireAt ? String(r.nextFireAt).slice(0, 10) : null);
     return {
-      id: String(m.id),
-      type: kind,
-      thumb: m.thumb || m.mediaUrl || mainPhoto || './assets/photos/photo_9.jpg',
-      icon: kind === 'voice' ? '♪' : '✎',
-      title: m.title || '手帐便签',
-      body: m.body || m.snippet || '',
-      snippet: m.snippet || m.body || '',
+      id: r.id,
+      title: r.title,
+      date_label: dateStr ? `${Number(dateStr.slice(5, 7))}月${Number(dateStr.slice(8, 10))}日` : '近期',
+      lunar_label: r.isLunar && r.targetMonth && r.targetDay ? `农历${r.targetMonth}月${r.targetDay}日` : '公历提醒',
+      lead: leadDaysLabel(r.leadDays),
+      leadDays: r.leadDays || [1, 0],
+      days_left: formatDaysLeft(dateStr),
+      done: r.status === 'completed',
+      status: r.status,
+      version: r.version || 1,
+      onceDate: dateStr,
     };
   });
 
-  const noteBody =
-    (primaryNote && primaryNote.body) ||
-    dto.shortMemo ||
-    `关于${dto.nameCn}的点滴细节，都安静收在这一页里。`;
-
-  const traits =
-    Array.isArray(dto.traits) && dto.traits.length > 0
-      ? dto.traits
-      : dto.shortMemo
-      ? [dto.shortMemo]
-      : [noteBody];
-
   return {
-    id: String(dto.id),
-    nameCn: dto.nameCn,
-    monogram: dto.monogram || dto.nameCn.slice(0, 1),
-    roleTag: dto.roleTag || '日常往来',
-    contextSub: dto.contextSub || '心络手帐',
-    sealBg: dto.sealBg || vt.sealBg || 'linear-gradient(145deg, #fcf4e6 0%, #efd9b8 100%)',
-    sealColor: dto.sealColor || vt.sealColor || '#694418',
-    tapeColor: dto.tapeColor || vt.tapeColor || 'rgba(226, 182, 118, 0.76)',
-    tabColor: dto.tabColor || vt.tabColor || '#D49A45',
-    cupidTitle: dto.cupidTitle || `${dto.nameCn}的丘比特`,
-    tier: VALID_TIERS.includes(dto.tier) ? dto.tier : 'crystal',
-    hasPhoto,
-    avatar,
-    mainPhoto: mainPhoto || './assets/photos/photo_9.jpg',
-    subPhoto,
-    folioDate: vt.folioDate || today.folioDate,
-    hoboDay: vt.hoboDay || today.hoboDay,
-    hoboMonthWk: vt.hoboMonthWk || today.hoboMonthWk,
-    ticketNo: vt.ticketNo || today.ticketNo,
-    captionCotton: vt.captionCotton || `${dto.nameCn} · ${dto.contextSub || '日常留痕'}`,
-    captionFilm: vt.captionFilm || `FILM ARCHIVE · ${vt.folioDate || today.folioDate}`,
-    shortMemo: dto.shortMemo || (primaryNote ? primaryNote.snippet : '') || '轻触手札记录日常偏好与分寸。',
-    traits,
-    noteBody,
-    primaryNoteId: primaryNote ? String(primaryNote.id) : null,
-    noteSign: vt.noteSign || `— ${dto.nameCn} · 手札`,
-    voiceDur: (voiceMats[0] && voiceMats[0].dur) || vt.voiceDur || '0:12',
-    stampCode: vt.stampCode || today.stampCode,
-    visualTokens: vt,
-    voiceSlips,
-    materials: normalizedMats,
+    id: dto.id,
+    name: dto.nameCn || '未命名',
+    initial: dto.monogram || (dto.nameCn || '络').slice(0, 1),
+    tier,
+    shield: tier === 'silver',
+    role: `${TIER_META[tier]?.label || '金箭'} · ${dto.roleTag || '手帐人物'}`,
+    roleTag: dto.roleTag || '',
+    contextSub: dto.contextSub || '',
+    shortMemo: dto.shortMemo || '',
+    traits: dto.traits || [],
     version: dto.version || 1,
+    visualTokens: vt,
+    mainPhotoUrl: tier === 'silver' ? null : (dto.mainPhotoUrl || null),
+    activeHeroMaterialId: vt.activeHeroMaterialId || null,
+    coolingCount: dto.coolingCount || 0,
+    facts,
+    care_days: reminders,
+    records,
+    cupidPrompts: typeof vt.cupidPromptsCsv === 'string' && vt.cupidPromptsCsv.trim()
+      ? vt.cupidPromptsCsv.split('|').filter(Boolean)
+      : tier === 'silver'
+        ? [`怎么稳妥地和「${dto.nameCn}」书面留痕对接？`, `帮我把刚才的边界记录理顺一下`]
+        : tier === 'crystal'
+          ? [`和「${dto.nameCn}」对接时要注意哪些小规矩？`, `帮我拟一段干脆礼貌的沟通回复`]
+          : [`最近和「${dto.nameCn}」见面要注意哪些小细节？`, `结合手帐帮我准备一份贴心的小安排`],
   };
 }
 
-async function seedInitialJournalIfEmpty() {
-  if (!state.session || !state.session.userId) return;
-  const seedFlagKey = `mw_seeded_v1_${state.session.userId}`;
-  if (localStorage.getItem(seedFlagKey)) return;
+async function refreshBootstrap({ keepPersonId = true } = {}) {
+  const prevId = keepPersonId ? state.personId : null;
+  const [snap, inboxPage] = await Promise.all([
+    apiJson('/bootstrap'),
+    apiJson('/inbox?status=open&limit=30').catch(() => ({ items: [] })),
+  ]);
 
-  for (const tpl of INITIAL_SEED_PROFILES) {
-    const created = await apiJson('/persons', {
-      method: 'POST',
-      body: {
-        slug: tpl.slug,
-        nameCn: tpl.nameCn,
-        monogram: tpl.monogram,
-        roleTag: tpl.roleTag,
-        contextSub: tpl.contextSub,
-        shortMemo: tpl.shortMemo,
-        traits: tpl.traits,
-        tier: tpl.tier,
-        visualTokens: tpl.visualTokens,
-      },
-    });
-    if (created && created.id && Array.isArray(tpl.materials)) {
-      await Promise.all(
-        tpl.materials.map((mat) =>
-          apiJson(`/persons/${created.id}/materials`, {
-            method: 'POST',
-            body: {
-              kind: mat.kind,
-              title: mat.title,
-              body: mat.body,
-              snippet: mat.snippet,
-              stampCode: mat.stampCode,
-              pinned: true,
-            },
-          })
-        )
-      );
+  state.preferences = snap.preferences || { preferredEdition: 'lumina', version: 1 };
+  state.inboxCount = snap.inboxCount || 0;
+  state.inboxItems = (inboxPage && Array.isArray(inboxPage.items)) ? inboxPage.items : [];
+
+  const orderedIds = [...(snap.coreIds || []), ...(snap.casualIds || [])];
+  const seen = new Set();
+  const list = [];
+  for (const pid of orderedIds) {
+    if (snap.people && snap.people[pid] && !seen.has(pid)) {
+      seen.add(pid);
+      list.push(mapBootstrapPerson(snap.people[pid]));
     }
   }
-  localStorage.setItem(seedFlagKey, '1');
-}
+  Object.keys(snap.people || {}).forEach((pid) => {
+    if (!seen.has(pid)) {
+      seen.add(pid);
+      list.push(mapBootstrapPerson(snap.people[pid]));
+    }
+  });
+  state.people = list;
 
-async function refreshBootstrap({ allowSeed = false } = {}) {
-  let snap = await apiJson('/bootstrap');
-  if (
-    allowSeed &&
-    snap &&
-    (!snap.people || Object.keys(snap.people).length === 0)
-  ) {
-    await seedInitialJournalIfEmpty();
-    snap = await apiJson('/bootstrap');
+  // Prefer Lumina edition silently on first login if still default
+  if (state.preferences && state.preferences.preferredEdition !== 'lumina' && state.preferences.version === 1) {
+    apiJson('/me/preferences', {
+      method: 'PATCH',
+      headers: { 'If-Match': `"${state.preferences.version}"` },
+      body: { preferredEdition: 'lumina' },
+    })
+      .then((updated) => {
+        if (updated) state.preferences = updated;
+      })
+      .catch(() => {});
   }
 
-  Object.keys(PEOPLE_DB).forEach((k) => delete PEOPLE_DB[k]);
-  const rawPeople = (snap && snap.people) || {};
-  Object.entries(rawPeople).forEach(([id, dto]) => {
-    PEOPLE_DB[id] = hydratePersonFromDto(dto);
+  if (prevId && state.people.some((p) => p.id === prevId)) {
+    state.personId = prevId;
+  } else {
+    state.personId = state.people.length ? state.people[0].id : null;
+  }
+
+  renderApp();
+}
+
+/* ============================================================================
+   3. TRUE APPLE MUSIC MULTI-COPY RADIAL-TWIST ARTWORK ENGINE
+   ============================================================================ */
+const amTextureCache = new Map();
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return [h * 360, s * 100, l * 100];
+}
+
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360; s /= 100; l /= 100;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return '#' + [r, g, b].map((v) => Math.round((v + m) * 255).toString(16).padStart(2, '0')).join('');
+}
+
+function analyzeRealPhotoZones(img) {
+  const S = 48;
+  const cv = document.createElement('canvas');
+  cv.width = S; cv.height = S;
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, S, S);
+  const data = ctx.getImageData(0, 0, S, S).data;
+  const tiles = [];
+  const G = 4, step = S / G;
+  for (let gy = 0; gy < G; gy++) {
+    for (let gx = 0; gx < G; gx++) {
+      let rSum = 0, gSum = 0, bSum = 0, cnt = 0;
+      for (let y = Math.floor(gy * step); y < Math.floor((gy + 1) * step); y++) {
+        for (let x = Math.floor(gx * step); x < Math.floor((gx + 1) * step); x++) {
+          const idx = (y * S + x) * 4;
+          rSum += data[idx]; gSum += data[idx + 1]; bSum += data[idx + 2]; cnt++;
+        }
+      }
+      const r = Math.round(rSum / cnt), g = Math.round(gSum / cnt), b = Math.round(bSum / cnt);
+      const [h, s, l] = rgbToHsl(r, g, b);
+      const warmth = (r - b) / 255 + (g - b) * 0.25 / 255;
+      const vividness = s * (1 - Math.abs(l - 50) / 56);
+      tiles.push({ cx: (gx + 0.5) / G, cy: (gy + 0.5) / G, r, g, b, h, s, l, warmth, vividness });
+    }
+  }
+  const byWarm = [...tiles].sort((a, b) => (b.warmth * 0.7 + b.vividness / 140) - (a.warmth * 0.7 + a.vividness / 140));
+  const byDeep = [...tiles].sort((a, b) => (a.warmth * 0.6 + a.l / 120) - (b.warmth * 0.6 + b.l / 120));
+  const byAiry = [...tiles].sort((a, b) => (b.l - b.s * 0.15) - (a.l - a.s * 0.15));
+  const byVivid = [...tiles].sort((a, b) => b.vividness - a.vividness);
+
+  const warmTile = byWarm[0];
+  const deepTile = byDeep.find((t) => Math.hypot(t.cx - warmTile.cx, t.cy - warmTile.cy) > 0.28) || byDeep[0];
+  const airyTile = byAiry[0];
+  const vividTile = byVivid[0];
+  const liftRealHex = (tile, targetL, minS = 14) => hslToHex(tile.h, Math.min(72, Math.max(minS, tile.s * 1.05)), targetL);
+
+  return {
+    warmTile, deepTile, airyTile, vividTile,
+    realWarm: liftRealHex(warmTile, 72, 22),
+    realCool: liftRealHex(deepTile, 70, 14),
+    realLight: liftRealHex(airyTile, 84, 12),
+    realVivid: liftRealHex(vividTile, 68, 24),
+    deepHex: hslToHex(deepTile.h, Math.min(36, deepTile.s * 0.75), 11),
+  };
+}
+
+function renderTwistedArtworkLayer(srcCanvas, S, focusX, focusY, zoom, twistA, twistB, satVal, brightVal, blurPx) {
+  const cropCv = document.createElement('canvas');
+  cropCv.width = S; cropCv.height = S;
+  const cctx = cropCv.getContext('2d', { willReadFrequently: true });
+  const srcW = srcCanvas.width, srcH = srcCanvas.height;
+  const cropW = srcW / zoom, cropH = srcH / zoom;
+  const sx = Math.max(0, Math.min(srcW - cropW, focusX * srcW - cropW * 0.5));
+  const sy = Math.max(0, Math.min(srcH - cropH, focusY * srcH - cropH * 0.5));
+  cctx.drawImage(srcCanvas, sx, sy, cropW, cropH, 0, 0, S, S);
+
+  const srcImg = cctx.getImageData(0, 0, S, S);
+  const dstImg = cctx.createImageData(S, S);
+  const sd = srcImg.data, dd = dstImg.data;
+  const cx1 = S * 0.36, cy1 = S * 0.38, r1 = S * 0.72;
+  const cx2 = S * 0.68, cy2 = S * 0.66, r2 = S * 0.68;
+
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      let u = x, v = y;
+      let dx = u - cx1, dy = v - cy1, dist = Math.hypot(dx, dy);
+      if (dist < r1) {
+        const rat = (r1 - dist) / r1, th = rat * rat * twistA;
+        const co = Math.cos(th), si = Math.sin(th);
+        u = cx1 + dx * co - dy * si; v = cy1 + dx * si + dy * co;
+      }
+      dx = u - cx2; dy = v - cy2; dist = Math.hypot(dx, dy);
+      if (dist < r2) {
+        const rat = (r2 - dist) / r2, th = rat * rat * twistB;
+        const co = Math.cos(th), si = Math.sin(th);
+        u = cx2 + dx * co - dy * si; v = cy2 + dx * si + dy * co;
+      }
+      const ix = Math.max(0, Math.min(S - 1, Math.round(u)));
+      const iy = Math.max(0, Math.min(S - 1, Math.round(v)));
+      const si4 = (iy * S + ix) * 4, di4 = (y * S + x) * 4;
+      dd[di4] = sd[si4]; dd[di4 + 1] = sd[si4 + 1]; dd[di4 + 2] = sd[si4 + 2]; dd[di4 + 3] = 255;
+    }
+  }
+  cctx.putImageData(dstImg, 0, 0);
+
+  const out = document.createElement('canvas');
+  out.width = S; out.height = S;
+  const octx = out.getContext('2d');
+  octx.filter = `blur(${blurPx}px) saturate(${satVal}) brightness(${brightVal}) contrast(1.06)`;
+  octx.drawImage(cropCv, -S * 0.22, -S * 0.22, S * 1.44, S * 1.44);
+  octx.save(); octx.globalAlpha = 0.50; octx.translate(S * 0.52, S * 0.48); octx.rotate(1.95);
+  octx.drawImage(cropCv, -S * 0.78, -S * 0.78, S * 1.56, S * 1.56); octx.restore();
+  octx.save(); octx.globalAlpha = 0.34; octx.translate(S * 0.46, S * 0.54); octx.rotate(-1.18);
+  octx.drawImage(cropCv, -S * 0.76, -S * 0.76, S * 1.52, S * 1.52); octx.restore();
+  return out.toDataURL('image/jpeg', 0.84);
+}
+
+function bakeAppleMusicTextures(img, zones) {
+  const S = 128;
+  const srcCv = document.createElement('canvas');
+  srcCv.width = S; srcCv.height = S;
+  const sctx = srcCv.getContext('2d');
+  const minDim = Math.min(img.naturalWidth || img.width, img.naturalHeight || img.height);
+  const ox = ((img.naturalWidth || img.width) - minDim) * 0.5;
+  const oy = ((img.naturalHeight || img.height) - minDim) * 0.5;
+  sctx.drawImage(img, ox, oy, minDim, minDim, 0, 0, S, S);
+  const adaptiveSat = (tile, targetBoost) => +(targetBoost - Math.min(1, Math.max(0, (tile.s || 30) / 85)) * (targetBoost - 1.12)).toFixed(2);
+  const safeZoom = (tile, z) => (tile.s > 55 ? Math.min(z, 1.12) : z);
+  return {
+    full:  renderTwistedArtworkLayer(srcCv, S, 0.50, 0.50, 1.06,  2.2, -1.9, adaptiveSat(zones.vividTile, 1.50), 0.96, 13),
+    warm:  renderTwistedArtworkLayer(srcCv, S, zones.warmTile.cx,  zones.warmTile.cy,  safeZoom(zones.warmTile, 1.24),  2.5, -1.7, adaptiveSat(zones.warmTile, 1.54), 0.99, 12),
+    deep:  renderTwistedArtworkLayer(srcCv, S, zones.deepTile.cx,  zones.deepTile.cy,  safeZoom(zones.deepTile, 1.28), -2.3,  2.0, adaptiveSat(zones.deepTile, 1.38), 0.88, 12),
+    airy:  renderTwistedArtworkLayer(srcCv, S, zones.airyTile.cx,  zones.airyTile.cy,  safeZoom(zones.airyTile, 1.24),  1.9, -2.2, adaptiveSat(zones.airyTile, 1.36), 1.08, 13),
+    vivid: renderTwistedArtworkLayer(srcCv, S, zones.vividTile.cx, zones.vividTile.cy, safeZoom(zones.vividTile, 1.26), -2.6,  1.8, adaptiveSat(zones.vividTile, 1.56), 0.96, 12),
+  };
+}
+
+function applyChromaTokens(t) {
+  const r = document.documentElement.style;
+  r.setProperty('--photo-deep', t.deepHex || '#1E241C');
+  r.setProperty('--real-warm', t.realWarm || '#E5BC8B');
+  r.setProperty('--real-cool', t.realCool || '#88A89A');
+  r.setProperty('--real-light', t.realLight || '#F2E7D8');
+  r.setProperty('--real-vivid', t.realVivid || '#C97D5E');
+  if (t.textures) {
+    ['full', 'warm', 'deep', 'airy', 'vivid'].forEach((k) => r.setProperty(`--am-art-${k}`, `url("${t.textures[k]}")`));
+  } else {
+    ['full', 'warm', 'deep', 'airy', 'vivid'].forEach((k) => r.setProperty(`--am-art-${k}`, 'none'));
+  }
+}
+
+function syncChromaForPerson(p) {
+  if (!p) {
+    document.documentElement.setAttribute('data-tier', 'crystal');
+    document.documentElement.setAttribute('data-has-photo', 'false');
+    document.documentElement.setAttribute('data-face-zone', 'none');
+    applyChromaTokens({ deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null });
+    return;
+  }
+
+  const isSilver = p.tier === 'silver';
+  const photoUrl = !isSilver && p.mainPhotoUrl ? p.mainPhotoUrl : null;
+  const vt = p.visualTokens || {};
+  document.documentElement.setAttribute('data-tier', p.tier);
+  document.documentElement.setAttribute('data-has-photo', photoUrl ? 'true' : 'false');
+
+  const bgImg = document.getElementById('backdropImg');
+  if (photoUrl && bgImg) {
+    if (bgImg.getAttribute('data-loaded-url') !== photoUrl) {
+      bgImg.src = photoUrl;
+      bgImg.setAttribute('data-loaded-url', photoUrl);
+    }
+    const faceZone = vt.faceZone || 'center';
+    document.documentElement.setAttribute('data-face-zone', faceZone);
+    const isNarrow = document.documentElement.classList.contains('v15-iphone-sim') || window.innerWidth <= 768;
+    bgImg.style.objectPosition = isNarrow ? (vt.phoneFocus || '54% 24%') : (vt.deskFocus || '54% 24%');
+  } else {
+    document.documentElement.setAttribute('data-face-zone', 'none');
+    if (bgImg) {
+      bgImg.removeAttribute('src');
+      bgImg.removeAttribute('data-loaded-url');
+    }
+  }
+
+  if (!photoUrl) {
+    applyChromaTokens(
+      isSilver
+        ? { deepHex: '#1E2C3A', realWarm: '#56728C', realCool: '#476078', realLight: '#DCE7F2', realVivid: '#3E5A75', textures: null }
+        : { deepHex: '#243445', realWarm: '#6F9BC2', realCool: '#5B84A6', realLight: '#E6F1FA', realVivid: '#4E7EA6', textures: null },
+    );
+    return;
+  }
+
+  // Apply server-extracted real-photo tokens immediately for zero-flash paint
+  if (vt.realWarm) {
+    applyChromaTokens({
+      deepHex: vt.deepHex || '#1E241C',
+      realWarm: vt.realWarm,
+      realCool: vt.realCool || '#88A89A',
+      realLight: vt.realLight || '#F2E7D8',
+      realVivid: vt.realVivid || '#C97D5E',
+      textures: amTextureCache.get(photoUrl)?.textures || null,
+    });
+  }
+
+  if (amTextureCache.has(photoUrl)) {
+    applyChromaTokens(amTextureCache.get(photoUrl));
+    return;
+  }
+
+  const probe = new Image();
+  probe.crossOrigin = 'anonymous';
+  probe.onload = () => {
+    try {
+      const zones = analyzeRealPhotoZones(probe);
+      const textures = bakeAppleMusicTextures(probe, zones);
+      const res = { ...zones, textures };
+      amTextureCache.set(photoUrl, res);
+      if (currentPerson()?.id === p.id) applyChromaTokens(res);
+    } catch (_) {}
+  };
+  probe.src = photoUrl;
+}
+
+function amMeshHtml(phaseSec = 0) {
+  const p = currentPerson();
+  if (!p || p.tier === 'silver' || !p.mainPhotoUrl) return '';
+  return `<div class="am-card-canvas" style="--am-phase:${phaseSec}s" aria-hidden="true"><div class="am-art-layer am-art-base"></div><div class="am-art-layer am-art-eddy"></div><div class="am-art-veil"></div></div>`;
+}
+
+/* ============================================================================
+   4. ANIMATED PHOTO-REACTIVE FLUID CUPID ORB
+   ============================================================================ */
+let orbT = 0;
+let orbSpeed = 1.0;
+
+function renderFluidOrbToCanvas(canvas, size) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  if (canvas.width !== size * dpr) { canvas.width = size * dpr; canvas.height = size * dpr; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const p = currentPerson();
+  const isSilver = p && p.tier === 'silver';
+  const isCrystal = !p || (p.tier === 'crystal' && !p.mainPhotoUrl);
+  const css = getComputedStyle(document.documentElement);
+  const cLight = isSilver ? '#EBF3FA' : isCrystal ? '#EAF4FC' : (css.getPropertyValue('--real-light').trim() || '#F4E5CE');
+  const cWarm  = isSilver ? '#8BA5BD' : isCrystal ? '#79A9CF' : (css.getPropertyValue('--real-warm').trim()  || '#DFAA74');
+  const cVivid = isSilver ? '#496783' : isCrystal ? '#5A88B4' : (css.getPropertyValue('--real-vivid').trim() || '#C46E50');
+  const cDeep  = isSilver ? '#1D2C3C' : isCrystal ? '#243A50' : (css.getPropertyValue('--photo-deep').trim() || '#222A24');
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2); ctx.clip();
+
+  const baseG = ctx.createLinearGradient(0, 0, size, size);
+  baseG.addColorStop(0, cDeep); baseG.addColorStop(0.58, cVivid); baseG.addColorStop(1, cDeep);
+  ctx.fillStyle = baseG; ctx.fillRect(0, 0, size, size);
+
+  const blobs = [
+    { x: size * (0.5 + 0.25 * Math.cos(orbT * 1.1)), y: size * (0.5 + 0.23 * Math.sin(orbT * 0.9)), r: size * 0.44, c: cWarm },
+    { x: size * (0.5 + 0.27 * Math.sin(orbT * 0.8 + 2.1)), y: size * (0.5 + 0.25 * Math.cos(orbT * 1.3)), r: size * 0.36, c: cLight },
+    { x: size * (0.5 + 0.22 * Math.cos(-orbT * 1.2 + 4.0)), y: size * (0.5 + 0.26 * Math.sin(-orbT * 0.7)), r: size * 0.40, c: cVivid },
+  ];
+  blobs.forEach((b) => {
+    const g = ctx.createRadialGradient(b.x, b.y, 1, b.x, b.y, b.r);
+    g.addColorStop(0, b.c); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalCompositeOperation = 'screen';
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill();
   });
 
-  state.coreIds = (snap.coreIds || []).map(String).filter((id) => Boolean(PEOPLE_DB[id]));
-  state.casualIds = (snap.casualIds || []).map(String).filter((id) => Boolean(PEOPLE_DB[id]));
+  ctx.globalCompositeOperation = 'source-over';
+  const rim = ctx.createRadialGradient(size * 0.5, size * 0.5, size * 0.24, size * 0.5, size * 0.5, size * 0.52);
+  rim.addColorStop(0, 'rgba(0,0,0,0)'); rim.addColorStop(0.75, 'rgba(8,10,14,0.16)'); rim.addColorStop(1, 'rgba(4,6,10,0.52)');
+  ctx.fillStyle = rim; ctx.fillRect(0, 0, size, size);
 
-  if (snap.preferences) {
-    const ed = snap.preferences.preferredEdition || snap.preferences.edition;
-    if (VALID_EDITIONS.includes(ed)) {
-      setJournalEdition(ed, false);
-    }
-    const cl = snap.preferences.cupidLayout;
-    if (VALID_CUPID_LAYOUTS.includes(cl)) {
-      setCupidLayout(cl, false);
-    }
+  const spec = ctx.createRadialGradient(size * 0.30, size * 0.24, 1, size * 0.30, size * 0.24, size * 0.38);
+  spec.addColorStop(0, 'rgba(255,255,255,0.72)'); spec.addColorStop(0.45, 'rgba(255,255,255,0.16)'); spec.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = spec; ctx.fillRect(0, 0, size, size);
+  ctx.restore();
+}
+
+function animateOrbs() {
+  const target = state.cupidThinking ? 3.4 : 1.0;
+  orbSpeed += (target - orbSpeed) * 0.08;
+  orbT += 0.020 * orbSpeed;
+  renderFluidOrbToCanvas(document.getElementById('dockCupidCanvas'), 42);
+  if (document.getElementById('cupidFullscreen')?.classList.contains('is-open')) {
+    renderFluidOrbToCanvas(document.getElementById('cupidHeadCanvas'), 32);
+  }
+  requestAnimationFrame(animateOrbs);
+}
+
+/* ============================================================================
+   5. MAIN RENDER: EMPTY ONBOARDING vs. JOURNAL STAGE & 5-VESSEL FEED
+   ============================================================================ */
+function renderApp() {
+  const p = currentPerson();
+  const emptyStage = document.getElementById('emptyWelcomeStage');
+  const portraitWin = document.getElementById('portraitWindow');
+  const feedVp = document.getElementById('feedViewport');
+  const dock = document.getElementById('glebTriDock');
+  const pinWrap = document.getElementById('arrowPinWrap');
+
+  if (!p) {
+    emptyStage.classList.add('is-show');
+    portraitWin.style.display = 'none';
+    feedVp.innerHTML = '';
+    dock.style.display = 'none';
+    pinWrap.style.visibility = 'hidden';
+    syncChromaForPerson(null);
+    return;
   }
 
-  if (!state.activePersonId || !PEOPLE_DB[state.activePersonId]) {
-    state.activePersonId = state.coreIds[0] || state.casualIds[0] || null;
-  }
+  emptyStage.classList.remove('is-show');
+  portraitWin.style.display = '';
+  dock.style.display = '';
+  pinWrap.style.visibility = 'visible';
 
-  if (state.viewMode === 'casual-directory') {
-    openCasualDirectory();
-  } else if (state.activePersonId && PEOPLE_DB[state.activePersonId]) {
-    openPersonJournal(state.activePersonId);
+  syncChromaForPerson(p);
+  renderTriDockSeals();
+  renderFeed();
+}
+
+function renderTopAndMasthead() {
+  const p = currentPerson();
+  if (!p) return;
+  document.getElementById('personNameTitle').textContent = p.name;
+  document.getElementById('arrowPinImg').src = ARROW_PINS[p.tier] || ARROW_PINS.gold;
+  document.getElementById('arrowPinLabel').textContent = TIER_META[p.tier]?.label || '金箭';
+  document.querySelectorAll('[data-tier-pick]').forEach((b) => b.classList.toggle('is-active', b.dataset.tierPick === p.tier));
+  document.querySelectorAll('.scale-tab').forEach((t) => t.classList.toggle('is-active', t.dataset.scale === state.scale));
+
+  const rightBtn = document.getElementById('btnScaleRightAction');
+  if (p.tier === 'silver') {
+    rightBtn.textContent = state.shieldGlobalOpen ? '收起留痕' : '展开全部留痕';
   } else {
-    openCasualDirectory();
+    rightBtn.textContent = `2026 · ${p.records.length} 页`;
   }
-  return snap;
-}
 
-/* ==========================================================================
-   1. 31-Frame Botanical Mood Stone Mini-Engine
-   ========================================================================== */
-const STRIP_FRAME_COUNT = 31;
-const STRIP_FRAME_W = 220;
-const STRIP_FRAME_H = 200;
-const stoneStripImg = new Image();
-let stoneStripLoaded = false;
-let currentStoneFrame = 16;
-
-function drawStoneFrame(frameFloat) {
-  if (!stoneCtx || !stoneStripLoaded) return;
-  const f = Math.max(0, Math.min(STRIP_FRAME_COUNT - 1, Math.round(frameFloat)));
-  stoneCtx.clearRect(0, 0, STRIP_FRAME_W, STRIP_FRAME_H);
-  stoneCtx.drawImage(
-    stoneStripImg,
-    f * STRIP_FRAME_W,
-    0,
-    STRIP_FRAME_W,
-    STRIP_FRAME_H,
-    0,
-    0,
-    STRIP_FRAME_W,
-    STRIP_FRAME_H
-  );
-}
-stoneStripImg.onload = () => {
-  stoneStripLoaded = true;
-  drawStoneFrame(currentStoneFrame);
-};
-stoneStripImg.src = './assets/gleb/stone_growth_strip.webp';
-
-function setStoneByPercent(pct) {
-  const clamped = Math.max(8, Math.min(92, pct));
-  const idx = clamped < 26 ? 0 : clamped < 51 ? 1 : clamped < 77 ? 2 : 3;
-  state.stoneStateIndex = idx;
-  const spec = STONE_STATES[idx];
-  currentStoneFrame = spec.frameIndex;
-  drawStoneFrame(currentStoneFrame);
-  if (stoneSliderKnob) stoneSliderKnob.style.left = `${clamped}%`;
-  const wordEl = document.getElementById('stoneMoodWord');
-  if (wordEl) wordEl.textContent = spec.word;
-  sliderDots.forEach((d, i) => d.classList.toggle('is-active', i === spec.dotIndex));
-}
-
-/* ==========================================================================
-   2. Dynamic Capsule Slots & Casual Directory Rendering
-   ========================================================================== */
-function renderAvatarInnerHtml(person) {
-  if (person && person.hasPhoto && person.avatar) {
-    return `<img src="${escapeHtml(person.avatar)}" alt="${escapeHtml(person.nameCn)}" draggable="false" />`;
+  const firstCare = (p.care_days && p.care_days[0]) || null;
+  const ribTxt = document.getElementById('careRibbonText');
+  const ribEta = document.getElementById('careRibbonEta');
+  if (firstCare) {
+    ribTxt.textContent = `${firstCare.date_label} · ${firstCare.title}`;
+    ribEta.textContent = firstCare.done ? '✓ 已记完' : `${firstCare.days_left} ›`;
+  } else if (p.shortMemo) {
+    ribTxt.textContent = p.shortMemo.slice(0, 42);
+    ribEta.textContent = '档案 ›';
+  } else {
+    ribTxt.textContent = `轻点打开「${p.name}」人物档案与记挂日程`;
+    ribEta.textContent = '查看 ›';
   }
-  return `<span>${escapeHtml(person ? person.monogram : '心')}</span>`;
 }
 
-export function renderNavigationAndCapsule() {
-  if (capsuleExpandedItems && dockCenterCapsule) {
-    const totalSlots = state.coreIds.length + 2;
-    const expandedW = Math.min(346, Math.max(156, totalSlots * 48 + 20));
-    dockCenterCapsule.style.setProperty('--expanded-capsule-w', `${expandedW}px`);
+function renderTriDockSeals() {
+  const strip = document.getElementById('dockSealsCluster');
+  const featured = state.people.slice(0, 5);
+  if (state.personId && !featured.some((x) => x.id === state.personId)) {
+    const active = currentPerson();
+    if (active) featured[Math.min(4, featured.length - 1)] = active;
+  }
+  strip.innerHTML = featured.map((p) => {
+    const isSilver = p.tier === 'silver';
+    const isCrystal = p.tier === 'crystal';
+    const imgUrl = !isSilver && p.mainPhotoUrl ? p.mainPhotoUrl : null;
+    const cls = [
+      'dock-seal-btn',
+      p.id === state.personId ? 'is-active' : '',
+      isSilver ? 'is-silver-seal' : '',
+      isCrystal && !imgUrl ? 'is-crystal-seal' : '',
+    ].filter(Boolean).join(' ');
+    return `<button class="${cls}" data-dock-pid="${p.id}" type="button" title="${escapeHtml(p.name)} · ${TIER_META[p.tier]?.label || ''}">
+      ${imgUrl ? `<img src="${imgUrl}" alt="${escapeHtml(p.name)}" />` : escapeHtml(p.initial || p.name.slice(0, 1))}
+    </button>`;
+  }).join('');
+  strip.querySelectorAll('[data-dock-pid]').forEach((b) => {
+    b.addEventListener('click', () => selectPerson(b.dataset.dockPid));
+  });
+}
 
-    const coreAvatarsHtml = state.coreIds
-      .map((id) => {
-        const p = PEOPLE_DB[id];
-        if (!p) return '';
-        const isSelected = state.viewMode === 'person-journal' && state.activePersonId === id;
-        return `
-          <button
-            type="button"
-            class="capsule-obj-avatar ${isSelected ? 'is-selected' : ''}"
-            data-capsule-target="${escapeHtml(id)}"
-            data-tier="${escapeHtml(p.tier)}"
-            aria-label="${escapeHtml(p.nameCn)}"
-          >
-            ${renderAvatarInnerHtml(p)}
-          </button>
-        `;
-      })
-      .join('');
+function buildVoiceBarsHtml(rec) {
+  const heights = [36, 62, 48, 86, 70, 42, 94, 58, 76, 44, 88, 64, 50, 92, 68, 40, 82, 54, 72, 46, 84, 56, 38];
+  const litCnt = state.playingVoiceId === rec.id ? Math.floor(state.voiceProgress * heights.length) : 0;
+  return heights.map((h, i) => `<i class="${i < litCnt ? 'is-lit' : ''}" style="height:${h}%"></i>`).join('');
+}
 
-    const isCasualMode =
-      state.viewMode === 'casual-directory' || state.casualIds.includes(state.activePersonId);
+function renderFolioFeed(vp, p) {
+  const isSilver = p.tier === 'silver';
+  const hasPhoto = !isSilver && Boolean(p.mainPhotoUrl);
+  vp.classList.toggle('is-folio-wings', hasPhoto);
 
-    const casualSlotHtml = `
-      <button
-        type="button"
-        class="capsule-obj-avatar is-casual-icon ${isCasualMode ? 'is-selected' : ''}"
-        data-capsule-target="__casual_dir__"
-        data-tier="crystal"
-        aria-label="记繁琐"
-      >
-        <span class="casual-token-inner">${CASUAL_DIRECTORY_SVG}</span>
+  const facts = (p.facts || []).filter((f) => !f.faded);
+  const recs = [...p.records];
+  const items = [];
+
+  if (!isSilver) {
+    const firstVoiceIdx = recs.findIndex((r) => r.type === 'voice');
+    const firstPhotoIdx = recs.findIndex((r) => r.type === 'photo' && r.img);
+    const firstChatIdx  = recs.findIndex((r) => r.type === 'chat');
+    const used = new Set();
+
+    if (facts[0]) items.push({ _kind: 'fact', data: facts[0], id: facts[0].id });
+    if (firstVoiceIdx >= 0) { items.push({ _kind: 'rec', data: recs[firstVoiceIdx] }); used.add(firstVoiceIdx); }
+    if (firstPhotoIdx >= 0) { items.push({ _kind: 'rec', data: recs[firstPhotoIdx] }); used.add(firstPhotoIdx); }
+    if (facts[1]) items.push({ _kind: 'fact', data: facts[1], id: facts[1].id });
+    if (firstChatIdx >= 0)  { items.push({ _kind: 'rec', data: recs[firstChatIdx] }); used.add(firstChatIdx); }
+    if (facts[2]) items.push({ _kind: 'fact', data: facts[2], id: facts[2].id });
+    recs.forEach((r, idx) => { if (!used.has(idx)) items.push({ _kind: 'rec', data: r }); });
+  } else {
+    recs.forEach((r) => items.push({ _kind: 'rec', data: r }));
+  }
+
+  const renderItemCard = (item, idx) => {
+    const staggerCls = idx % 2 === 0 ? 'is-stagger-left' : 'is-stagger-right';
+    const phase = -(idx * 5 + 1);
+
+    if (item._kind === 'fact') {
+      const f = item.data;
+      return `
+        <article class="slip-shell kind-fact ${staggerCls}" data-open-dossier-fact="1" style="cursor:pointer;">
+          <div class="slip-inner">
+            ${amMeshHtml(phase)}
+            <div class="slip-body">
+              <div class="fact-pill-kicker">
+                <span class="fact-pill-dot" aria-hidden="true"></span>
+                <span>${escapeHtml(f.kind)}</span>
+              </div>
+              <div class="fact-pill-text">${escapeHtml(f.text)}</div>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    const rec = item.data;
+    if (isSilver || rec.type === 'shield-log') {
+      const veiled = !(state.shieldGlobalOpen || state.unveiledIds.has(rec.id));
+      const bodyTxt = rec.text || rec.summary || (rec.segments && rec.segments.join('')) || rec.caption || '';
+      return `
+        <article class="slip-shell kind-silver" data-rec-id="${rec.id}">
+          <div class="slip-inner">
+            <div class="slip-body">
+              <div class="fluted-veil-box ${veiled ? 'is-veiled' : ''}">
+                <div class="fluted-raw-text">${escapeHtml(bodyTxt)}</div>
+                <div class="fluted-glass-overlay">
+                  <span style="font-size:12px;color:#243445;font-weight:500;">边界留痕已收起 · ${escapeHtml(rec.date)}</span>
+                  <button class="fluted-unveil-btn" data-unveil-id="${rec.id}" type="button">查看原文</button>
+                </div>
+              </div>
+              <div class="slip-foot">
+                <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button">${rec.fav ? '★' : '☆'}</button>
+                <span style="font-family:var(--font-mono);">${escapeHtml(rec.date)}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    if (rec.type === 'photo' && rec.img) {
+      const pal = (rec.palette || ['#D8C2A0', '#8B7D6B', '#463D34']).slice(0, 3);
+      const isCurrentBg = p.activeHeroMaterialId === rec.id;
+      return `
+        <article class="slip-shell kind-photo ${staggerCls}" data-rec-id="${rec.id}">
+          <div class="slip-inner">
+            <div class="photo-slip-stage" data-open-lb="${rec.id}">
+              <img src="${rec.img}" alt="${escapeHtml(rec.caption)}" />
+              <div class="photo-slip-scrim"></div>
+              <div class="photo-top-bar">
+                <span class="photo-date-chip">${escapeHtml(rec.scene_label || rec.tag)}</span>
+                <span class="photo-pigments" style="position:static;" aria-hidden="true">${pal.map((c) => `<i style="background:${c}"></i>`).join('')}</span>
+              </div>
+              <div class="photo-slip-caption-wrap">
+                <div class="photo-slip-caption">${escapeHtml(rec.caption)}</div>
+                <div class="photo-foot-actions">
+                  <button class="photo-hero-pill" data-quick-bg-mat="${rec.id}" type="button">${isCurrentBg ? '✓ 当前背景' : '✦ 映作背景'}</button>
+                  <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button" style="color:#FAF6F0;">${rec.fav ? '★' : '☆'}</button>
+                  <span style="font-family:var(--font-mono);font-size:11px;opacity:0.84;">${escapeHtml(rec.date)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    if (rec.type === 'voice') {
+      const playing = state.playingVoiceId === rec.id;
+      const segs = rec.segments || [rec.text || ''];
+      const activeSegIdx = playing ? Math.min(segs.length - 1, Math.floor(state.voiceProgress * segs.length)) : -1;
+      return `
+        <article class="slip-shell kind-voice ${staggerCls}" data-rec-id="${rec.id}">
+          <div class="slip-inner">
+            ${amMeshHtml(phase)}
+            <div class="slip-body">
+              <div class="chat-head-row">
+                <span class="chat-tag-pill">● ${escapeHtml(rec.date)} · 语音声囊</span>
+                <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button">${rec.fav ? '★' : '☆'}</button>
+              </div>
+              <div class="voice-transcript">
+                ${segs.map((sg, si) => `<span class="voice-seg ${si === activeSegIdx ? 'is-spoken' : ''}">${escapeHtml(sg)}</span>`).join('')}
+              </div>
+              <div class="voice-bar-row">
+                <button class="voice-play-orb" data-play-voice="${rec.id}" type="button" aria-label="${playing ? '暂停' : '播放'}">${playing ? '❚❚' : '▶'}</button>
+                <div class="voice-bars" aria-hidden="true">${buildVoiceBarsHtml(rec)}</div>
+                <span class="voice-dur">0:${String(rec.duration || 16).padStart(2, '0')}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    if (rec.type === 'chat') {
+      const msgs = (rec.messages || []).slice(0, 4);
+      return `
+        <article class="slip-shell kind-chat ${staggerCls}" data-rec-id="${rec.id}">
+          <div class="slip-inner">
+            ${amMeshHtml(phase)}
+            <div class="slip-body">
+              <div class="chat-head-row">
+                <span class="chat-tag-pill">● ${escapeHtml(rec.date)} · 微信归档</span>
+                <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button">${rec.fav ? '★' : '☆'}</button>
+              </div>
+              <div style="font-family:var(--font-serif);font-size:15px;font-weight:600;letter-spacing:0.02em;">${escapeHtml(rec.card_title || rec.tag)}</div>
+              ${rec.summary ? `<div class="chat-takeaway">${escapeHtml(rec.summary)}</div>` : ''}
+              ${msgs.length ? `
+                <div class="chat-exchange">
+                  ${msgs.map((m) => {
+                    const isMe = m.from === '我' || m.sender === 'me' || m.is_target === false;
+                    const spk = isMe ? '我' : (m.from || m.sender || p.name);
+                    return `<div class="chat-msg-row ${isMe ? 'is-me' : ''}"><span class="chat-speaker">${escapeHtml(spk)}</span><span>${escapeHtml(m.text)}</span></div>`;
+                  }).join('')}
+                </div>
+              ` : `<div class="voice-transcript">${escapeHtml(rec.text)}</div>`}
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    if (rec.type === 'draft') {
+      return `
+        <article class="slip-shell kind-draft ${staggerCls}" data-rec-id="${rec.id}">
+          <div class="slip-inner">
+            ${amMeshHtml(phase)}
+            <div class="slip-body">
+              <div class="voice-transcript">${escapeHtml(rec.text)}</div>
+              <button class="draft-pencil-hint" data-open-wheel="${rec.id}" type="button">
+                <span>${escapeHtml(rec.lunar_hint || '12月16日 ✎ · 轻点核对')}</span>
+              </button>
+              <div class="slip-foot">
+                <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button">${rec.fav ? '★' : '☆'}</button>
+                <span style="font-family:var(--font-mono);">${escapeHtml(rec.date)}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    return `
+      <article class="slip-shell kind-note ${staggerCls}" data-rec-id="${rec.id}">
+        <div class="slip-inner">
+          ${amMeshHtml(phase)}
+          <div class="slip-body">
+            ${rec.card_title ? `<div style="font-family:var(--font-serif);font-size:15px;font-weight:600;">${escapeHtml(rec.card_title)}</div>` : ''}
+            <div class="voice-transcript">${escapeHtml(rec.text || rec.summary || '')}</div>
+            <div class="slip-foot">
+              <button class="slip-fav-btn ${rec.fav ? 'is-fav' : ''}" data-fav-id="${rec.id}" type="button">${rec.fav ? '★' : '☆'}</button>
+              <span style="font-family:var(--font-mono);">${escapeHtml(rec.date)}</span>
+            </div>
+          </div>
+        </div>
+      </article>
+    `;
+  };
+
+  const pendingMention = state.inboxItems.find((it) => it.kind === 'entity_disambiguation' || it.kind === 'new_person');
+  const whisperHtml = !isSilver && pendingMention
+    ? `<button class="question-whisper-btn" id="btnQuestionEntry" type="button">
+         <span>● 发现待确认人物「${escapeHtml(pendingMention.mention || '新人物')}」· 轻点归属</span>
+         <span>›</span>
+       </button>`
+    : '';
+
+  if (!items.length) {
+    vp.innerHTML = `
+      <article class="slip-shell kind-note">
+        <div class="slip-inner">
+          ${amMeshHtml(-1)}
+          <div class="slip-body" style="text-align:center;padding:24px 16px;">
+            <div class="voice-transcript">「${escapeHtml(p.name)}」的手帐页刚刚翻开，轻点左下角麦克风记下第一笔吧。</div>
+          </div>
+        </div>
+      </article>
+    ` + whisperHtml;
+  } else {
+    vp.innerHTML = items.map((it, i) => renderItemCard(it, i)).join('') + whisperHtml;
+  }
+
+  vp.querySelectorAll('[data-open-lb]').forEach((el) => el.addEventListener('click', (e) => {
+    if (e.target.closest('[data-quick-bg-mat]') || e.target.closest('[data-fav-id]')) return;
+    openLightboxById(el.dataset.openLb);
+  }));
+  vp.querySelectorAll('[data-quick-bg-mat]').forEach((el) => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    promoteMaterialToBackground(p, el.dataset.quickBgMat);
+  }));
+  vp.querySelectorAll('[data-open-dossier-fact]').forEach((el) => el.addEventListener('click', openDossierSheet));
+  vp.querySelectorAll('[data-play-voice]').forEach((el) => el.addEventListener('click', () => toggleVoicePlay(el.dataset.playVoice)));
+  vp.querySelectorAll('[data-fav-id]').forEach((el) => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMaterialFavorite(p, el.dataset.favId);
+  }));
+  vp.querySelectorAll('[data-unveil-id]').forEach((el) => el.addEventListener('click', () => {
+    state.unveiledIds.add(el.dataset.unveilId);
+    renderFeed();
+  }));
+  vp.querySelectorAll('[data-open-wheel]').forEach((el) => el.addEventListener('click', () => openDateWheelSheet(el.dataset.openWheel)));
+  const qe = vp.querySelector('#btnQuestionEntry');
+  if (qe) qe.addEventListener('click', () => openDirectorySheet(false));
+}
+
+function renderSeasonFeed(vp, p) {
+  vp.classList.remove('is-folio-wings');
+  const isSilver = p.tier === 'silver';
+  let featDone = false;
+  vp.innerHTML = `<div class="season-grid">${p.records.map((rec, idx) => {
+    const isPhoto = !isSilver && rec.type === 'photo' && rec.img;
+    const isFeat = isPhoto && !featDone;
+    if (isFeat) featDone = true;
+    const txt = rec.caption || (rec.segments && rec.segments.join('')) || rec.summary || rec.text || '';
+    if (isPhoto) {
+      const pal = (rec.palette || ['#D8C2A0', '#8B7D6B', '#463D34']).slice(0, 3);
+      return `
+        <div class="slip-shell season-tile-shell ${isFeat ? 'is-featured' : ''}" data-s-open="${rec.id}" data-s-photo="1">
+          <div class="slip-inner season-tile" style="position:relative;">
+            <img src="${rec.img}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" />
+            <div class="photo-slip-scrim"></div>
+            <div style="position:relative;z-index:2;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;">
+              <span style="font-size:11px;padding:3px 8px;border-radius:999px;background:rgba(14,15,18,0.42);color:#FAF6F0;">${escapeHtml(rec.date)}</span>
+              <span style="display:inline-flex;gap:4px;padding:3px 6px;border-radius:999px;background:rgba(14,15,18,0.38);">${pal.map((c) => `<i style="width:6px;height:6px;border-radius:50%;background:${c};display:block;"></i>`).join('')}</span>
+            </div>
+            <div style="position:relative;z-index:2;padding:10px 12px;color:#FAF6F0;font-family:var(--font-serif);font-size:13px;line-height:1.45;">${escapeHtml(txt.slice(0, 40))}</div>
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="slip-shell season-tile-shell kind-${rec.type === 'voice' ? 'voice' : 'chat'}" data-s-open="${rec.id}">
+        <div class="slip-inner season-tile">
+          ${amMeshHtml(-(idx * 3 + 2))}
+          <div class="slip-body" style="height:100%;justify-content:space-between;">
+            <span style="font-size:11px;opacity:0.74;font-family:var(--font-mono);">${escapeHtml(rec.date)} · ${escapeHtml(rec.tag || '手帐')}</span>
+            <div style="font-family:var(--font-serif);font-size:13px;line-height:1.52;">${escapeHtml(txt.slice(0, 48))}</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('')}</div>`;
+
+  vp.querySelectorAll('[data-s-open]').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (el.dataset.sPhoto) openLightboxById(el.dataset.sOpen);
+      else jumpToRecord(el.dataset.sOpen);
+    });
+  });
+}
+
+function renderRingsFeed(vp, p) {
+  vp.classList.remove('is-folio-wings');
+  const list = p.records;
+  if (!list.length) {
+    vp.innerHTML = `<div style="text-align:center;opacity:0.7;padding:32px;">暂无光阴年轮节点</div>`;
+    return;
+  }
+  if (!state.selectedRingId || !list.some((r) => r.id === state.selectedRingId)) state.selectedRingId = list[0].id;
+  const selIdx = Math.max(0, list.findIndex((r) => r.id === state.selectedRingId));
+  const sel = list[selIdx];
+  const cx = 200, cy = 200, radii = { 1: 68, 2: 112, 3: 154 };
+
+  const ticks = Array.from({ length: 60 }, (_, i) => {
+    const a = (i * 6 - 90) * Math.PI / 180;
+    const major = i % 5 === 0;
+    const r1 = major ? 166 : 170, r2 = 176;
+    return `<line x1="${(cx + Math.cos(a) * r1).toFixed(1)}" y1="${(cy + Math.sin(a) * r1).toFixed(1)}" x2="${(cx + Math.cos(a) * r2).toFixed(1)}" y2="${(cy + Math.sin(a) * r2).toFixed(1)}" stroke="currentColor" stroke-width="${major ? 1.2 : 0.6}" opacity="${major ? 0.36 : 0.16}"/>`;
+  }).join('');
+
+  const nodes = list.map((rec, idx) => {
+    const r = radii[rec.ring] || radii[1];
+    const deg = typeof rec.angle === 'number' ? rec.angle : (idx * (360 / Math.max(list.length, 4)) + 24);
+    const rad = (deg - 90) * Math.PI / 180;
+    const x = cx + Math.cos(rad) * r, y = cy + Math.sin(rad) * r;
+    const isSel = rec.id === sel.id;
+    const fill = p.tier === 'silver' ? '#4F6D88' : 'var(--real-warm, #E6BE86)';
+    return `
+      <g data-ring-id="${rec.id}" style="cursor:pointer;">
+        ${isSel ? `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${fill}" stroke-width="1" stroke-dasharray="3 4" opacity="0.72"/>` : ''}
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isSel ? 15 : 9}" fill="${fill}" opacity="${isSel ? 0.24 : 0.08}"/>
+        <circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${isSel ? 6.5 : 4.5}" fill="${fill}" stroke="rgba(14,16,20,0.72)" stroke-width="1.6"/>
+        <text x="${(x + (x >= cx ? 11 : -11)).toFixed(1)}" y="${(y + 4).toFixed(1)}" text-anchor="${x >= cx ? 'start' : 'end'}" fill="currentColor" font-size="10.5" font-family="var(--font-mono)" opacity="${isSel ? 0.98 : 0.66}">${escapeHtml(rec.date)}</text>
+      </g>
+    `;
+  }).join('');
+
+  const bodyTxt = sel.caption || (sel.segments && sel.segments.join('')) || sel.summary || sel.text || '';
+  vp.innerHTML = `
+    <article class="slip-shell kind-chat kind-rings-wide">
+      <div class="slip-inner">
+        ${amMeshHtml(-4)}
+        <div class="slip-body rings-card-body">
+          <svg class="rings-svg" viewBox="0 0 400 400" aria-label="光阴年轮星盘">
+            ${ticks}
+            <circle cx="${cx}" cy="${cy}" r="154" fill="none" stroke="currentColor" stroke-width="0.9" stroke-dasharray="4 5" opacity="0.28"/>
+            <circle cx="${cx}" cy="${cy}" r="112" fill="none" stroke="currentColor" stroke-width="0.9" opacity="0.26"/>
+            <circle cx="${cx}" cy="${cy}" r="68"  fill="none" stroke="currentColor" stroke-width="1" opacity="0.34"/>
+            <circle cx="${cx}" cy="${cy}" r="30"  fill="rgba(255,255,255,0.08)" stroke="currentColor" stroke-width="0.9" opacity="0.45"/>
+            <text x="${cx}" y="${cy + 6}" text-anchor="middle" fill="currentColor" font-family="var(--font-serif)" font-size="18">${escapeHtml(p.initial || p.name.slice(0, 1))}</text>
+            ${nodes}
+          </svg>
+          <div class="rings-inspector">
+            <div class="s-label"><span>${escapeHtml(sel.date)} · ${escapeHtml(sel.tag || '手帐')}</span><span>${selIdx + 1} / ${list.length}</span></div>
+            ${p.tier !== 'silver' && sel.type === 'photo' && sel.img ? `<img class="rings-thumb" src="${sel.img}" alt="" />` : ''}
+            <div class="voice-transcript">${escapeHtml(bodyTxt)}</div>
+            <div style="display:flex;gap:8px;margin-top:4px;">
+              <button class="s-btn-primary" id="btnRingOpen" type="button" style="height:34px;font-size:12px;">${p.tier !== 'silver' && sel.type === 'photo' && sel.img ? '暗房观片 ↗' : '定位原件 ↗'}</button>
+              <button class="s-btn-ghost" id="btnRingPrev" type="button" style="height:34px;font-size:12px;">← 上一刻</button>
+              <button class="s-btn-ghost" id="btnRingNext" type="button" style="height:34px;font-size:12px;">下一刻 →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </article>
+  `;
+  vp.querySelectorAll('[data-ring-id]').forEach((g) => g.addEventListener('click', () => { state.selectedRingId = g.dataset.ringId; renderFeed(); }));
+  vp.querySelector('#btnRingOpen').addEventListener('click', () => {
+    if (p.tier !== 'silver' && sel.type === 'photo' && sel.img) openLightboxById(sel.id);
+    else jumpToRecord(sel.id);
+  });
+  vp.querySelector('#btnRingPrev').addEventListener('click', () => { state.selectedRingId = list[(selIdx - 1 + list.length) % list.length].id; renderFeed(); });
+  vp.querySelector('#btnRingNext').addEventListener('click', () => { state.selectedRingId = list[(selIdx + 1) % list.length].id; renderFeed(); });
+}
+
+function renderFeed() {
+  const vp = document.getElementById('feedViewport');
+  const p = currentPerson();
+  if (!p) return;
+  renderTopAndMasthead();
+  if (state.scale === 'folio') renderFolioFeed(vp, p);
+  else if (state.scale === 'season') renderSeasonFeed(vp, p);
+  else renderRingsFeed(vp, p);
+}
+
+function toggleVoicePlay(recId) {
+  if (state.playingVoiceId === recId) {
+    clearInterval(state.voiceTimer);
+    state.playingVoiceId = null;
+    state.voiceProgress = 0;
+    renderFeed();
+    return;
+  }
+  clearInterval(state.voiceTimer);
+  state.playingVoiceId = recId;
+  state.voiceProgress = 0.08;
+  renderFeed();
+  state.voiceTimer = setInterval(() => {
+    state.voiceProgress += 0.08;
+    if (state.voiceProgress >= 1) {
+      clearInterval(state.voiceTimer);
+      state.playingVoiceId = null;
+      state.voiceProgress = 0;
+    }
+    renderFeed();
+  }, 320);
+}
+
+function jumpToRecord(recId) {
+  closeCupid();
+  closeAllSheets();
+  closeSpotlight();
+  state.scale = 'folio';
+  renderFeed();
+  setTimeout(() => {
+    const el = document.querySelector(`[data-rec-id="${recId}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('is-jump-flash');
+      setTimeout(() => el.classList.remove('is-jump-flash'), 1200);
+    }
+  }, 60);
+}
+
+function selectPerson(pid) {
+  state.personId = pid;
+  state.scale = 'folio';
+  state.selectedRingId = null;
+  state.cupidAttachedIds.clear();
+  renderApp();
+  const sc = document.getElementById('mainScroller');
+  if (sc && document.documentElement.classList.contains('v15-iphone-sim')) sc.scrollTo({ top: 0, behavior: 'instant' });
+  else window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+/* ============================================================================
+   6. LIVE MUTATIONS: FAVORITE, BACKGROUND PROMOTE, TIER SWITCH, PHOTO UPLOAD
+   ============================================================================ */
+async function toggleMaterialFavorite(p, recId) {
+  const rec = p.records.find((r) => r.id === recId);
+  if (!rec) return;
+  const nextFav = !rec.fav;
+  rec.fav = nextFav;
+  renderFeed();
+  if (document.getElementById('lightboxOverlay').classList.contains('is-open')) renderLightbox();
+
+  try {
+    const updated = await apiJson(`/materials/${recId}`, {
+      method: 'PATCH',
+      headers: { 'If-Match': `"${rec.version}"` },
+      body: { isFavorite: nextFav },
+    });
+    if (updated) {
+      rec.version = updated.version;
+      rec.fav = Boolean(updated.isFavorite);
+    }
+    showToast(nextFav ? '★ 已珍藏并同步云端' : '已取消珍藏');
+  } catch (err) {
+    rec.fav = !nextFav;
+    renderFeed();
+    showToast(err.message || '同步珍藏状态失败');
+  }
+}
+
+async function promoteMaterialToBackground(p, materialId) {
+  if (p.tier === 'silver') {
+    showToast('银箭人物遵循零照片隐私护盾，不设背景摄影');
+    return;
+  }
+  try {
+    const updated = await apiJson(`/persons/${p.id}/background:from-material`, {
+      method: 'POST',
+      body: { materialId },
+    });
+    if (updated) {
+      p.mainPhotoUrl = updated.mainPhotoUrl || p.mainPhotoUrl;
+      p.visualTokens = updated.visualTokens || p.visualTokens;
+      p.activeHeroMaterialId = materialId;
+      p.version = updated.version || p.version;
+      syncChromaForPerson(p);
+      renderTriDockSeals();
+      renderFeed();
+      if (document.getElementById('lightboxOverlay').classList.contains('is-open')) renderLightbox();
+      if (document.getElementById('dossierSheet').classList.contains('is-open')) openDossierSheet();
+      showToast('✦ 已映作背景并实时提取真原图琉璃色域');
+    }
+  } catch (err) {
+    showToast(err.message || '切换背景相纸失败');
+  }
+}
+
+async function uploadDirectHeroPhoto(p, file) {
+  if (!p || !file) return;
+  if (p.tier === 'silver') {
+    showToast('银箭人物遵循零照片隐私护盾，不设背景摄影');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const updated = await apiJson(`/persons/${p.id}/photos/main`, { method: 'POST', body: fd });
+    if (updated) {
+      p.mainPhotoUrl = updated.mainPhotoUrl;
+      p.visualTokens = updated.visualTokens || p.visualTokens;
+      p.version = updated.version || p.version;
+      syncChromaForPerson(p);
+      renderTriDockSeals();
+      renderFeed();
+      if (document.getElementById('dossierSheet').classList.contains('is-open')) openDossierSheet();
+      showToast('✦ 已上传背景摄影并自动重算琉璃色域');
+    }
+  } catch (err) {
+    showToast(err.message || '上传背景摄影失败');
+  }
+}
+
+async function switchPersonTier(tier) {
+  const p = currentPerson();
+  if (!p || p.tier === tier) return;
+  try {
+    const updated = await apiJson(`/persons/${p.id}/tier`, {
+      method: 'PATCH',
+      headers: { 'If-Match': `"${p.version}"` },
+      body: { tier },
+    });
+    if (updated) {
+      await refreshBootstrap({ keepPersonId: true });
+      showToast(`已将「${p.name}」切换为 ${TIER_META[tier].full}`);
+    }
+  } catch (err) {
+    showToast(err.message || '切换箭矢层级失败');
+  }
+}
+
+/* ============================================================================
+   7. SCENE 6: LIVE FULL-SCREEN CUPID COMPANION CHAT (SSE + MATERIAL DRAWER)
+   ============================================================================ */
+async function openCupid() {
+  const p = currentPerson();
+  if (!p) return;
+  closeAllSheets();
+  closeSpotlight();
+  document.getElementById('cupidHeadTitle').textContent = p.tier === 'silver' ? `丘比特 · ${p.name}（同盟）` : `丘比特 · ${p.name}`;
+  document.getElementById('cupidHeadTierImg').src = ARROW_PINS[p.tier] || ARROW_PINS.gold;
+  document.getElementById('cupidMatCount').textContent = `手帐 ${p.records.length}`;
+  document.getElementById('cupidChatInput').placeholder = p.tier === 'silver'
+    ? '尽管跟丘比特吐吐槽，完全站你这边…'
+    : `和丘比特说说关于「${p.name}」…`;
+  document.getElementById('cupidFullscreen').classList.add('is-open');
+  renderMatDrawer();
+  renderCupidChat();
+
+  if (!state.cupidLoaded.has(p.id)) {
+    try {
+      const page = await apiJson(`/persons/${p.id}/chat/messages?limit=50&order=asc`);
+      const msgs = (page && Array.isArray(page.items)) ? page.items : [];
+      state.cupidMessages[p.id] = msgs.map((m) => ({
+        id: m.id,
+        role: m.role === 'user' ? 'user' : 'ai',
+        text: m.content || '',
+        whisper: m.whisperNote || '',
+        perspectives: p.tier === 'gold' && Array.isArray(m.perspectives) ? m.perspectives : [],
+        citations: Array.isArray(m.citations) ? m.citations : [],
+        suggestions: Array.isArray(m.suggestions) ? m.suggestions : [],
+        crisis: m.crisisCard || null,
+      }));
+      state.cupidLoaded.add(p.id);
+      renderCupidChat();
+    } catch (_) {}
+  }
+}
+
+function closeCupid() {
+  document.getElementById('cupidFullscreen').classList.remove('is-open');
+  closeMatDrawer();
+}
+
+function openMatDrawer() {
+  renderMatDrawer();
+  document.getElementById('cupidMatScrim').classList.add('is-open');
+  document.getElementById('cupidMatDrawer').classList.add('is-open');
+}
+
+function closeMatDrawer() {
+  document.getElementById('cupidMatScrim').classList.remove('is-open');
+  document.getElementById('cupidMatDrawer').classList.remove('is-open');
+}
+
+function renderMatDrawer() {
+  const p = currentPerson();
+  if (!p) return;
+  document.getElementById('matDrawerTitle').textContent = `${p.name}的手帐素材`;
+  const list = document.getElementById('matDrawerList');
+  list.innerHTML = p.records.map((r) => {
+    const picked = state.cupidAttachedIds.has(r.id);
+    const txt = r.caption || (r.segments && r.segments.join('')) || r.summary || r.text || '';
+    const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+    return `
+      <button class="drawer-item ${picked ? 'is-picked' : ''}" data-pick-mat="${r.id}" type="button">
+        <div style="display:flex;justify-content:space-between;font-size:11px;opacity:0.72;">
+          <span>${icon} ${escapeHtml(r.date)} · ${escapeHtml(r.tag || '手帐')}</span>
+          <span>${picked ? '✓ 已引用' : '+ 引用'}</span>
+        </div>
+        <div>${escapeHtml(txt.slice(0, 56))}</div>
       </button>
     `;
-
-    const addSlotHtml = `
-      <button
-        type="button"
-        class="capsule-obj-avatar is-add-person"
-        data-capsule-target="__add_person__"
-        aria-label="新添人物"
-      >＋</button>
-    `;
-
-    capsuleExpandedItems.innerHTML = coreAvatarsHtml + casualSlotHtml + addSlotHtml;
-  }
-
-  if (capsulePortraitCluster) {
-    const isCasualMode =
-      state.viewMode === 'casual-directory' || state.casualIds.includes(state.activePersonId);
-
-    capsulePortraitCluster.classList.toggle('is-casual-mode', isCasualMode);
-
-    if (isCasualMode) {
-      const corePortraitsHtml = state.coreIds
-        .slice(0, 3)
-        .map((id, idx) => {
-          const p = PEOPLE_DB[id];
-          return p
-            ? `<span class="cluster-mini-avatar core-slot-${idx}" aria-hidden="true">${renderAvatarInnerHtml(p)}</span>`
-            : '';
-        })
-        .join('');
-
-      capsulePortraitCluster.innerHTML = `
-        ${corePortraitsHtml}
-        <span class="cluster-mini-casual is-active-casual" aria-hidden="true">${CASUAL_DIRECTORY_SVG}</span>
-      `;
-    } else {
-      const cur =
-        PEOPLE_DB[state.activePersonId] ||
-        PEOPLE_DB[state.coreIds[0]] ||
-        PEOPLE_DB[state.casualIds[0]] ||
-        null;
-      const others = cur ? state.coreIds.filter((id) => id !== cur.id) : [];
-      const leftP = others[0] ? PEOPLE_DB[others[0]] : null;
-      const rightP = others[1] ? PEOPLE_DB[others[1]] : null;
-
-      capsulePortraitCluster.innerHTML = `
-        ${leftP ? `<span class="cluster-mini-avatar pos-left" aria-hidden="true">${renderAvatarInnerHtml(leftP)}</span>` : ''}
-        <div class="capsule-active-token">${renderAvatarInnerHtml(cur)}</div>
-        ${rightP ? `<span class="cluster-mini-avatar pos-right" aria-hidden="true">${renderAvatarInnerHtml(rightP)}</span>` : ''}
-        <span class="cluster-mini-casual" aria-hidden="true">${CASUAL_DIRECTORY_SVG}</span>
-      `;
-    }
-  }
-
-  renderCasualDirectory();
-}
-
-export function renderCasualDirectory() {
-  const countEl = document.getElementById('casualDirectoryCount');
-  if (countEl) countEl.textContent = `${state.casualIds.length}`;
-  if (!casualEntriesStage) return;
-
-  casualEntriesStage.innerHTML = state.casualIds
-    .map((id) => {
-      const p = PEOPLE_DB[id];
-      if (!p) return '';
-      const isJustDemoted = state.lastDemotedId === id;
-      const hasFreshVoiceSlip = p.voiceSlips && p.voiceSlips.length > 0;
-      const rightMetaHtml = hasFreshVoiceSlip
-        ? `<span class="folio-fresh-dot">●</span>`
-        : `<span class="folio-date-whisper">${escapeHtml(p.folioDate)}</span>`;
-
-      return `
-        <button
-          type="button"
-          class="casual-folio-row ${isJustDemoted ? 'is-just-demoted' : ''}"
-          data-open-casual-person="${escapeHtml(p.id)}"
-          role="listitem"
-        >
-          <span class="folio-side-tab" style="background:${escapeHtml(p.tabColor)};" aria-hidden="true"></span>
-          <span class="folio-monogram-seal" style="background:${escapeHtml(p.sealBg)}; color:${escapeHtml(p.sealColor)};" aria-hidden="true">
-            ${escapeHtml(p.monogram)}
-          </span>
-          <div class="folio-body">
-            <div class="folio-top-line">
-              <span class="folio-name">${escapeHtml(p.nameCn)}</span>
-              <span class="folio-badge">${escapeHtml(p.roleTag)}</span>
-              ${rightMetaHtml}
-            </div>
-            <p class="folio-memo">${escapeHtml(p.shortMemo)}</p>
-          </div>
-          <span class="folio-chevron" aria-hidden="true">›</span>
-        </button>
-      `;
-    })
-    .join('');
-}
-
-/* ==========================================================================
-   3. Scrapbook Visual Editions, Tactile Arrow Pin & Real Tier Transitions
-   ========================================================================== */
-export function setJournalEdition(editionName, persist = true) {
-  const valid = VALID_EDITIONS.includes(editionName) ? editionName : 'cotton';
-  state.edition = valid;
-  viewport.setAttribute('data-journal-edition', valid);
-
-  const p = PEOPLE_DB[state.activePersonId];
-  const captionEl = document.getElementById('journalPhotoCaption');
-  if (captionEl && p && p.hasPhoto) {
-    captionEl.textContent = valid === 'dotgrid' ? p.captionFilm : p.captionCotton;
-  }
-
-  if (persist && state.session) {
-    apiJson('/me/preferences', {
-      method: 'PATCH',
-      body: { preferredEdition: valid },
-    }).catch(() => {});
-  }
-}
-
-function getEffectiveTier() {
-  if (state.viewMode === 'casual-directory') return 'crystal';
-  const p = PEOPLE_DB[state.activePersonId];
-  return p && VALID_TIERS.includes(p.tier) ? p.tier : 'gold';
-}
-
-function syncArrowPinAndChatCupid(animateStrike = false) {
-  const tier = getEffectiveTier();
-
-  viewport.setAttribute('data-arrow-tier', tier);
-  aiChatFullscreen.setAttribute('data-arrow-tier', tier);
-  aiChatFullscreen.setAttribute('data-cupid-layout', state.cupidLayout);
-
-  if (journalArrowPinBtn) {
-    journalArrowPinBtn.setAttribute('data-tier', tier);
-    if (animateStrike) {
-      journalArrowPinBtn.classList.remove('is-striking');
-      void journalArrowPinBtn.offsetWidth;
-      journalArrowPinBtn.classList.add('is-striking');
-    }
-  }
-  if (journalArrowPinImg) {
-    journalArrowPinImg.src = ARROW_PIN_IMAGES[tier] || ARROW_PIN_IMAGES.gold;
-  }
-
-  const chatHeaderArrow = document.getElementById('chatHeaderArrowWrap');
-  if (chatHeaderArrow) chatHeaderArrow.innerHTML = ARROW_SVGS[tier] || ARROW_SVGS.gold;
-
-  const portraitImg = document.getElementById('museCupidPortraitImg');
-  if (portraitImg) {
-    const nextSrc = MUSE_CUPID_PORTRAITS[state.cupidLayout] || MUSE_CUPID_PORTRAITS.a;
-    if (portraitImg.getAttribute('src') !== nextSrc) {
-      portraitImg.src = nextSrc;
-    }
-  }
-
-  document.querySelectorAll('[data-select-tier]').forEach((item) => {
-    const selected = item.dataset.selectTier === tier;
-    item.classList.toggle('is-selected', selected);
-    item.setAttribute('aria-checked', String(selected));
+  }).join('');
+  list.querySelectorAll('[data-pick-mat]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const id = b.dataset.pickMat;
+      if (state.cupidAttachedIds.has(id)) state.cupidAttachedIds.delete(id);
+      else state.cupidAttachedIds.add(id);
+      renderMatDrawer();
+      renderAttachedTray();
+    });
   });
 }
 
-export function triggerCupidCompanionGreet() {
-  const medallion = document.getElementById('museCupidMedallion');
-  if (!medallion) return;
-  medallion.classList.remove('is-cupid-greeting');
-  void medallion.offsetWidth;
-  medallion.classList.add('is-cupid-greeting');
-  setTimeout(() => medallion.classList.remove('is-cupid-greeting'), 580);
+function renderAttachedTray() {
+  const p = currentPerson();
+  if (!p) return;
+  const tray = document.getElementById('cupidAttachedTray');
+  const ids = [...state.cupidAttachedIds];
+  if (!ids.length) { tray.innerHTML = ''; return; }
+  tray.innerHTML = ids.map((id) => {
+    const r = p.records.find((x) => x.id === id);
+    if (!r) return '';
+    return `<span class="cupid-attached-chip"><span>📎 ${escapeHtml(r.date)} ${escapeHtml(r.tag || '手帐')}</span><button type="button" data-rm-att="${id}" style="opacity:0.75;">✕</button></span>`;
+  }).join('');
+  tray.querySelectorAll('[data-rm-att]').forEach((b) => b.addEventListener('click', () => {
+    state.cupidAttachedIds.delete(b.dataset.rmAtt);
+    renderAttachedTray();
+    renderMatDrawer();
+  }));
 }
 
-export function setCupidLayout(layoutName, persist = true) {
-  const valid = VALID_CUPID_LAYOUTS.includes(layoutName) ? layoutName : 'a';
-  state.cupidLayout = valid;
-  syncArrowPinAndChatCupid(false);
-  triggerCupidCompanionGreet();
-  if (persist && state.session) {
-    apiJson('/me/preferences', {
-      method: 'PATCH',
-      body: { cupidLayout: valid },
-    }).catch(() => {});
-  }
-}
+function renderCupidChat() {
+  const p = currentPerson();
+  if (!p) return;
+  const thread = state.cupidMessages[p.id] || [];
+  const citeIcon = (tid) => {
+    const r = p.records.find((x) => x.id === tid);
+    if (!r) return '✦';
+    return r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+  };
 
-export function setArrowPopoverOpen(open) {
-  state.arrowPopoverOpen = Boolean(open);
-  arrowSelectorPopover.classList.toggle('is-open', state.arrowPopoverOpen);
-  arrowSelectorPopover.setAttribute('aria-hidden', String(!state.arrowPopoverOpen));
-  journalArrowPinBtn.setAttribute('aria-expanded', String(state.arrowPopoverOpen));
-}
+  const body = document.getElementById('cupidChatBody');
+  const traces = p.records.slice(0, 3).map((r) => `${r.date} ${r.tag}：${(r.caption || r.text || r.summary || '').slice(0, 44)}`);
+  const introLetter = p.tier === 'silver'
+    ? `已为你备妥「${p.name}」的 ${p.records.length} 条加密边界留痕。这里是完全站你这边的私密树洞——想吐槽、想复盘时间线，还是想拟一封不卑不亢的书面回复，直接开口就好。`
+    : p.tier === 'crystal'
+      ? `已翻阅「${p.name}」的 ${p.records.length} 条往来备忘与 ${p.facts.length} 项规矩玉签。需要核对细节或起草一段干脆礼貌的消息，随时告诉我。`
+      : `已翻阅「${p.name}」的 ${p.records.length} 条真实日常手帐与 ${p.facts.length} 项小习惯。你可以直接提问，或点右上角「手帐」抽屉附带某条原件来聊。`;
 
-function renderPersonVoiceSlips(person) {
-  const hasSlips = Boolean(person && Array.isArray(person.voiceSlips) && person.voiceSlips.length > 0);
-  if (viewport) viewport.setAttribute('data-has-voice-slips', String(hasSlips));
-  if (!voiceExtractedMount) return;
-  if (!hasSlips) {
-    voiceExtractedMount.innerHTML = '';
-    return;
-  }
-  const recentSlips = person.voiceSlips.slice(0, 2);
-  voiceExtractedMount.innerHTML = recentSlips
-    .map(
-      (s) => `
-      <article class="voice-extracted-slip" data-slip-tier="${escapeHtml(person.tier)}">
-        <span class="slip-washi-strip" aria-hidden="true"></span>
-        <div class="slip-top-meta">
-          <span class="slip-ai-tag">✦ ${escapeHtml(s.tag)}</span>
-          <span class="slip-voice-stamp">♪ ${escapeHtml(s.dur)}</span>
+  const lastAi = [...thread].reverse().find((m) => m.role === 'ai');
+  const prompts = (lastAi && lastAi.suggestions && lastAi.suggestions.length) ? lastAi.suggestions : p.cupidPrompts;
+
+  body.innerHTML = `
+    <div style="text-align:center;font-size:11.5px;opacity:0.62;">已核对 ${p.records.length} 条实库加密手帐 · ${p.facts.length} 项记住的小事</div>
+
+    ${traces.length ? `
+      <div class="cupid-trace-pill">
+        <button class="cupid-trace-toggle" id="btnCupidTrace" type="button">
+          <span>✦ 已载入「${escapeHtml(p.name)}」近期 ${traces.length} 组手帐原件</span>
+          <span>${state.cupidTraceOpen ? '收起 ▴' : '查看原件 ▾'}</span>
+        </button>
+        <div class="cupid-trace-list ${state.cupidTraceOpen ? '' : 'is-collapsed'}">
+          ${traces.map((t) => `<div>· ${escapeHtml(t)}</div>`).join('')}
         </div>
-        <p class="slip-event-body">${escapeHtml(s.body)}</p>
-      </article>
-    `
-    )
-    .join('');
-}
+      </div>
+    ` : ''}
 
-function syncEventsViewForPerson(p) {
-  if (!p) return;
-  const c1Photo = document.getElementById('eventsCard1Photo');
-  const c1Loc = document.getElementById('eventsCard1Loc');
-  const c1Owner = document.getElementById('eventsCard1Owner');
-  const c1Back = document.getElementById('eventsCard1BackText');
-  const c1Dur = document.getElementById('eventsCard1Dur');
-  const av1 = document.getElementById('eventsAvatar1');
-  const c2Back = document.getElementById('eventsCard2BackText');
-  const c2Loc = document.getElementById('eventsCard2Loc');
+    <div class="cupid-msg is-ai">
+      <div>${escapeHtml(introLetter)}</div>
+    </div>
 
-  if (c1Photo && p.hasPhoto && p.mainPhoto) c1Photo.src = p.mainPhoto;
-  if (av1 && p.avatar) av1.src = p.avatar;
-  if (c1Loc) c1Loc.textContent = `${p.folioDate} · ${p.contextSub} · ${p.nameCn}`;
-  if (c1Owner) c1Owner.textContent = p.nameCn;
-  if (c1Back) c1Back.textContent = `“${p.noteBody}”`;
-  if (c1Dur) c1Dur.textContent = `▶ ${p.voiceDur || '0:18'}`;
-  if (c2Loc) c2Loc.textContent = `${p.folioDate} · ${p.roleTag}`;
-  if (c2Back) c2Back.textContent = `“${p.shortMemo}”`;
-}
-
-export function openPersonJournal(personId) {
-  const p = PEOPLE_DB[personId] || PEOPLE_DB[state.coreIds[0]] || PEOPLE_DB[state.casualIds[0]];
-  if (!p) {
-    openCasualDirectory();
-    return;
-  }
-  state.viewMode = 'person-journal';
-  state.activePersonId = p.id;
-
-  setArrowPopoverOpen(false);
-  viewport.setAttribute('data-view-mode', 'person-journal');
-  viewport.setAttribute('data-has-photo', String(Boolean(p.hasPhoto)));
-  const stageEl = document.getElementById('scrapbookArtifactsStage');
-  const hubEl = document.getElementById('casualRelationshipsHub');
-  if (stageEl) stageEl.hidden = false;
-  if (hubEl) {
-    hubEl.hidden = true;
-    hubEl.setAttribute('aria-hidden', 'true');
-  }
-
-  const isCasualPerson = state.casualIds.includes(p.id);
-  if (btnBackToCasualList) {
-    btnBackToCasualList.hidden = !isCasualPerson;
-  }
-
-  document.getElementById('journalFolioDate').textContent = p.folioDate;
-  document.getElementById('journalFolioSubject').textContent = p.nameCn;
-  const hoboDayEl = document.getElementById('hoboBigDay');
-  const hoboMonthEl = document.getElementById('hoboMonthWk');
-  const ticketNoEl = document.getElementById('ticketSerialNo');
-  if (hoboDayEl) hoboDayEl.textContent = p.hoboDay;
-  if (hoboMonthEl) hoboMonthEl.textContent = p.hoboMonthWk;
-  if (ticketNoEl) ticketNoEl.textContent = p.ticketNo;
-
-  if (p.hasPhoto) {
-    artifactPhotoMount.hidden = false;
-    artifactDossierCard.hidden = true;
-    document.getElementById('journalMainPhoto').src = p.mainPhoto;
-    document.getElementById('journalSubPhoto').src = p.subPhoto;
-    document.getElementById('journalPhotoCaption').textContent =
-      state.edition === 'dotgrid' ? p.captionFilm : p.captionCotton;
-  } else {
-    artifactPhotoMount.hidden = true;
-    artifactDossierCard.hidden = false;
-    document.getElementById('dossierTopTape').style.background = p.tapeColor;
-    const monoEl = document.getElementById('dossierMonogram');
-    monoEl.textContent = p.monogram;
-    monoEl.style.background = p.sealBg;
-    monoEl.style.color = p.sealColor;
-    document.getElementById('dossierPersonName').textContent = p.nameCn;
-    document.getElementById('dossierRoleTag').textContent = p.roleTag;
-    document.getElementById('dossierContextSub').textContent = p.contextSub;
-    document.getElementById('dossierTraitsList').innerHTML = (p.traits || [])
-      .map((t) => `<li>${escapeHtml(t)}</li>`)
-      .join('');
-  }
-
-  document.getElementById('journalNoteBody').textContent = p.noteBody;
-  document.getElementById('journalNoteSign').textContent = p.noteSign;
-  document.getElementById('journalVoiceDur').textContent = p.voiceDur;
-  document.getElementById('journalStampCode').textContent = p.stampCode;
-  renderPersonVoiceSlips(p);
-  syncEventsViewForPerson(p);
-
-  syncArrowPinAndChatCupid(false);
-  renderNavigationAndCapsule();
-}
-
-export function openCasualDirectory() {
-  state.viewMode = 'casual-directory';
-  setArrowPopoverOpen(false);
-  viewport.setAttribute('data-view-mode', 'casual-directory');
-  const stageEl = document.getElementById('scrapbookArtifactsStage');
-  const hubEl = document.getElementById('casualRelationshipsHub');
-  if (stageEl) stageEl.hidden = true;
-  if (hubEl) {
-    hubEl.hidden = false;
-    hubEl.setAttribute('aria-hidden', 'false');
-  }
-
-  if (btnBackToCasualList) btnBackToCasualList.hidden = true;
-  document.getElementById('journalFolioDate').textContent = 'CRYSTAL';
-  document.getElementById('journalFolioSubject').textContent = '记繁琐名录';
-
-  syncArrowPinAndChatCupid(false);
-  renderNavigationAndCapsule();
-}
-
-export async function changeActivePersonArrowTier(newTier) {
-  const normalized = newTier === 'none' ? 'crystal' : newTier;
-  if (!VALID_TIERS.includes(normalized)) return;
-  if (state.viewMode !== 'person-journal') return;
-
-  const person = PEOPLE_DB[state.activePersonId];
-  if (!person) return;
-
-  const prevTier = person.tier;
-  if (prevTier === normalized) {
-    setArrowPopoverOpen(false);
-    return;
-  }
-
-  person.tier = normalized;
-  setArrowPopoverOpen(false);
-
-  const wasInCore = state.coreIds.includes(person.id);
-
-  if (normalized === 'crystal' && wasInCore) {
-    state.coreIds = state.coreIds.filter((id) => id !== person.id);
-    state.casualIds = [person.id, ...state.casualIds.filter((id) => id !== person.id)];
-    state.lastDemotedId = person.id;
-    openCasualDirectory();
-  } else if ((normalized === 'gold' || normalized === 'silver') && !wasInCore) {
-    state.casualIds = state.casualIds.filter((id) => id !== person.id);
-    if (!state.coreIds.includes(person.id)) {
-      state.coreIds.push(person.id);
-    }
-    if (state.lastDemotedId === person.id) state.lastDemotedId = null;
-    openPersonJournal(person.id);
-    syncArrowPinAndChatCupid(true);
-  } else {
-    syncArrowPinAndChatCupid(true);
-    renderNavigationAndCapsule();
-  }
-
-  try {
-    const res = await apiJson(`/persons/${person.id}/tier`, {
-      method: 'PATCH',
-      body: { tier: normalized },
-    });
-    if (res && Array.isArray(res.coreIds) && Array.isArray(res.casualIds)) {
-      state.coreIds = res.coreIds.map(String).filter((id) => Boolean(PEOPLE_DB[id]));
-      state.casualIds = res.casualIds.map(String).filter((id) => Boolean(PEOPLE_DB[id]));
-      renderNavigationAndCapsule();
-    }
-  } catch (_) {
-    await refreshBootstrap();
-  }
-}
-
-/* ==========================================================================
-   4. Splash -> Center Capsule Morph & Seamless Real Authentication
-   ========================================================================== */
-let morphRafId = null;
-let emergeTimerId = null;
-
-export function renderSplashMorphAtProgress(rawP) {
-  if (!viewport || !splashMorphActor || !dockCenterCapsule) return;
-  const p = clamp01(rawP);
-  const vpRect = viewport.getBoundingClientRect();
-  const capRect = dockCenterCapsule.getBoundingClientRect();
-
-  const localVw = viewport.offsetWidth || 384;
-  const localVh = viewport.offsetHeight || 838;
-  const invScale = vpRect.width > 0 ? localVw / vpRect.width : 1;
-
-  const targetW = capRect.width > 0 ? capRect.width * invScale : 146;
-  const targetH = capRect.height > 0 ? capRect.height * invScale : 54;
-  const targetLeft = capRect.width > 0 ? (capRect.left - vpRect.left) * invScale : (localVw - targetW) * 0.5;
-  const targetTop = capRect.height > 0 ? (capRect.top - vpRect.top) * invScale : localVh - 18 - targetH;
-
-  const kW = easeOutCubic(clamp01(p / 0.84));
-  const kH = 1 - Math.pow(1 - clamp01(p / 0.94), 2.35);
-
-  const w = localVw + (targetW - localVw) * kW;
-  const h = localVh + (targetH - localVh) * kH;
-  const left = (localVw - w) * 0.5 + (targetLeft - (localVw - targetW) * 0.5) * kW;
-
-  const kTop = easeOutCubic(clamp01(p / 0.9));
-  const springDip = p > 0.82 ? Math.sin(((p - 0.82) / 0.18) * Math.PI) * 2.8 : 0;
-  const top = targetTop * kTop + springDip;
-  const radius = 46 + (targetH * 0.5 - 46) * easeOutCubic(clamp01(p / 0.76));
-
-  splashMorphActor.classList.add('is-morphing');
-  splashMorphActor.style.left = `${left.toFixed(2)}px`;
-  splashMorphActor.style.top = `${top.toFixed(2)}px`;
-  splashMorphActor.style.width = `${w.toFixed(2)}px`;
-  splashMorphActor.style.height = `${h.toFixed(2)}px`;
-  splashMorphActor.style.borderRadius = `${radius.toFixed(2)}px`;
-
-  if (morphCapsuleGlass) {
-    morphCapsuleGlass.style.opacity = clamp01((p - 0.58) / 0.36).toFixed(3);
-  }
-}
-
-export function playSplashToCapsuleMorph() {
-  if (morphRafId) cancelAnimationFrame(morphRafId);
-  if (emergeTimerId) clearTimeout(emergeTimerId);
-
-  setCapsuleExpanded(false);
-  setArrowPopoverOpen(false);
-  setMaterialDrawerOpen(false);
-  closeDispatchModal();
-  eventsFullScreen.classList.remove('is-active');
-  aiChatFullscreen.classList.remove('is-active');
-  cancelVoiceHoldSession();
-  glebTriDock.style.display = 'flex';
-
-  dockCenterCapsule.classList.add('is-pure-landscape');
-  state.activeScene = 'journal';
-
-  splashScreen.classList.add('is-fading-copy');
-
-  setTimeout(() => {
-    renderSplashMorphAtProgress(0);
-    splashScreen.classList.add('is-instant-hide');
-    splashScreen.classList.remove('is-active', 'is-fading-copy');
-    requestAnimationFrame(() => splashScreen.classList.remove('is-instant-hide'));
-
-    const durationMs = 700;
-    const startTs = performance.now();
-
-    const tick = (now) => {
-      const p = clamp01((now - startTs) / durationMs);
-      renderSplashMorphAtProgress(p);
-      if (p < 1) {
-        morphRafId = requestAnimationFrame(tick);
-      } else {
-        morphRafId = null;
-        splashMorphActor.classList.remove('is-morphing');
-        emergeTimerId = setTimeout(() => {
-          requestAnimationFrame(() => dockCenterCapsule.classList.remove('is-pure-landscape'));
-        }, 180);
+    ${thread.map((m) => {
+      if (m.role === 'user') {
+        return `<div class="cupid-msg is-user">${m.refs ? `<div style="font-size:11px;opacity:0.75;margin-bottom:4px;">📎 引用了 ${escapeHtml(m.refs)}</div>` : ''}${escapeHtml(m.text)}</div>`;
       }
-    };
-    morphRafId = requestAnimationFrame(tick);
-  }, 105);
-}
-
-async function ensureAuthenticatedAndBootJournal() {
-  const btn = document.getElementById('btnSplashLetsGo');
-  const label = document.getElementById('splashLetsGoLabel');
-  if (btn) btn.disabled = true;
-  if (label) label.textContent = '开启中…';
-
-  try {
-    if (!state.session || !state.session.accessToken) {
-      const guestEmail = getOrCreateGuestEmail();
-      const ch = await apiJson('/auth/email/otp:request', {
-        method: 'POST',
-        body: { email: guestEmail, purpose: 'login' },
-      });
-      if (!ch || !ch.devOtpCode) {
-        toggleSplashEmailForm(true);
-        if (label) label.textContent = "Let's Go";
-        if (btn) btn.disabled = false;
-        return;
+      if (m.crisis) {
+        const hotlines = (m.crisis.hotlines || []).map((h) => `<a class="cupid-crisis-link" href="tel:${escapeHtml(h.phone || h.number || '')}"><span>${escapeHtml(h.name || h.label || '援助热线')}</span><span>${escapeHtml(h.phone || h.number || '')}</span></a>`).join('');
+        return `<div class="cupid-crisis-card"><strong style="font-size:14px;">${escapeHtml(m.crisis.title || '先让我陪着你')}</strong><div style="font-size:13px;line-height:1.6;">${escapeHtml(m.crisis.careMessage || '')}</div><div class="cupid-crisis-hotlines">${hotlines}</div></div>`;
       }
-      const verified = await apiJson('/auth/email/otp:verify', {
-        method: 'POST',
-        body: {
-          challengeId: ch.challengeId,
-          email: guestEmail,
-          code: ch.devOtpCode,
-        },
-      });
-      saveSession({
-        userId: verified.userId,
-        email: guestEmail,
-        accessToken: verified.accessToken,
-        refreshToken: verified.refreshToken,
-      });
-    }
-
-    await refreshBootstrap({ allowSeed: true });
-    playSplashToCapsuleMorph();
-  } catch (_) {
-    saveSession(null);
-    toggleSplashEmailForm(true);
-  } finally {
-    if (label) label.textContent = "Let's Go";
-    if (btn) btn.disabled = false;
-  }
-}
-
-function toggleSplashEmailForm(open) {
-  const primaryActions = document.getElementById('splashPrimaryActions');
-  const form = document.getElementById('splashAuthForm');
-  const otpRow = document.getElementById('splashOtpRow');
-  const hint = document.getElementById('splashAuthHint');
-  if (primaryActions) primaryActions.hidden = Boolean(open);
-  if (form) form.hidden = !open;
-  if (!open) {
-    if (otpRow) otpRow.hidden = true;
-    if (hint) hint.textContent = '';
-    state.otpChallenge = null;
-  } else {
-    const emailInput = document.getElementById('splashEmailInput');
-    if (emailInput) emailInput.focus();
-  }
-}
-
-async function handleSendEmailOtp() {
-  const emailInput = document.getElementById('splashEmailInput');
-  const otpRow = document.getElementById('splashOtpRow');
-  const otpInput = document.getElementById('splashOtpInput');
-  const hint = document.getElementById('splashAuthHint');
-  const btnSend = document.getElementById('btnSendOtp');
-
-  const email = (emailInput ? emailInput.value : '').trim().toLowerCase();
-  if (!email || !email.includes('@')) {
-    if (hint) hint.textContent = '请输入有效邮箱';
-    return;
-  }
-
-  if (btnSend) btnSend.disabled = true;
-  if (hint) hint.textContent = '发送中…';
-
-  try {
-    const ch = await apiJson('/auth/email/otp:request', {
-      method: 'POST',
-      body: { email, purpose: 'login' },
-    });
-    state.otpChallenge = { challengeId: ch.challengeId, email };
-    if (otpRow) otpRow.hidden = false;
-    if (ch.devOtpCode && otpInput) {
-      otpInput.value = ch.devOtpCode;
-      if (hint) hint.textContent = '验证码已就绪';
-    } else if (hint) {
-      hint.textContent = '请查收邮箱验证码';
-    }
-    if (otpInput) otpInput.focus();
-  } catch (_) {
-    if (hint) hint.textContent = '发送稍忙，请重试';
-  } finally {
-    if (btnSend) btnSend.disabled = false;
-  }
-}
-
-async function handleVerifyEmailOtp(e) {
-  e.preventDefault();
-  const emailInput = document.getElementById('splashEmailInput');
-  const otpInput = document.getElementById('splashOtpInput');
-  const hint = document.getElementById('splashAuthHint');
-  const btnVerify = document.getElementById('btnVerifyOtp');
-
-  const email = (state.otpChallenge && state.otpChallenge.email) || (emailInput ? emailInput.value.trim().toLowerCase() : '');
-  const code = otpInput ? otpInput.value.trim() : '';
-  if (!state.otpChallenge || !code) {
-    await handleSendEmailOtp();
-    return;
-  }
-
-  if (btnVerify) btnVerify.disabled = true;
-  if (hint) hint.textContent = '同步手帐…';
-
-  try {
-    const verified = await apiJson('/auth/email/otp:verify', {
-      method: 'POST',
-      body: {
-        challengeId: state.otpChallenge.challengeId,
-        email,
-        code,
-      },
-    });
-    saveSession({
-      userId: verified.userId,
-      email,
-      accessToken: verified.accessToken,
-      refreshToken: verified.refreshToken,
-    });
-    toggleSplashEmailForm(false);
-    await refreshBootstrap({ allowSeed: true });
-    playSplashToCapsuleMorph();
-  } catch (_) {
-    if (hint) hint.textContent = '验证码有误或已过期';
-  } finally {
-    if (btnVerify) btnVerify.disabled = false;
-  }
-}
-
-/* ==========================================================================
-   5. Person Creation, Note Editing, Deletion & Real Photo Upload
-   ========================================================================== */
-function openNewPersonModal(defaultTier = 'crystal') {
-  state.newPersonTier = VALID_TIERS.includes(defaultTier) ? defaultTier : 'crystal';
-  document.querySelectorAll('[data-new-tier]').forEach((btn) => {
-    btn.classList.toggle('is-active', btn.dataset.newTier === state.newPersonTier);
-  });
-  const nameIn = document.getElementById('newPersonNameInput');
-  const roleIn = document.getElementById('newPersonRoleInput');
-  if (nameIn) nameIn.value = '';
-  if (roleIn) roleIn.value = '';
-  personCreateModal.classList.add('is-open');
-  personCreateModal.setAttribute('aria-hidden', 'false');
-  setTimeout(() => nameIn && nameIn.focus(), 60);
-}
-
-function closeNewPersonModal() {
-  personCreateModal.classList.remove('is-open');
-  personCreateModal.setAttribute('aria-hidden', 'true');
-}
-
-async function submitNewPersonForm(e) {
-  e.preventDefault();
-  const nameIn = document.getElementById('newPersonNameInput');
-  const roleIn = document.getElementById('newPersonRoleInput');
-  const submitBtn = document.getElementById('btnSubmitNewPerson');
-  const nameCn = (nameIn ? nameIn.value : '').trim();
-  const roleTag = (roleIn ? roleIn.value : '').trim();
-  if (!nameCn) return;
-
-  if (submitBtn) submitBtn.disabled = true;
-  try {
-    const today = formatTodayTokens();
-    const created = await apiJson('/persons', {
-      method: 'POST',
-      body: {
-        nameCn,
-        roleTag: roleTag || '日常往来',
-        contextSub: roleTag ? `${roleTag} · 手帐一页` : '心络手帐',
-        shortMemo: `${nameCn}的专属手帐页`,
-        tier: state.newPersonTier,
-        visualTokens: {
-          folioDate: today.folioDate,
-          hoboDay: today.hoboDay,
-          hoboMonthWk: today.hoboMonthWk,
-          ticketNo: today.ticketNo,
-          stampCode: today.stampCode,
-          noteSign: `— ${nameCn} · 手札`,
-        },
-      },
-    });
-    if (created && created.id) {
-      await apiJson(`/persons/${created.id}/materials`, {
-        method: 'POST',
-        body: {
-          kind: 'note',
-          title: `${nameCn} · 初记`,
-          body: `为${nameCn}留出的一页空白，随时记下相处里的偏好与约定。`,
-          snippet: `${nameCn}的专属手帐页`,
-          stampCode: today.stampCode,
-          pinned: true,
-        },
-      });
-      closeNewPersonModal();
-      state.activePersonId = String(created.id);
-      state.viewMode = 'person-journal';
-      await refreshBootstrap();
-      openPersonJournal(String(created.id));
-    }
-  } catch (_) {
-  } finally {
-    if (submitBtn) submitBtn.disabled = false;
-  }
-}
-
-function openNoteEditModal() {
-  const p = PEOPLE_DB[state.activePersonId];
-  if (!p) return;
-  state.deleteConfirmArmed = false;
-  const delBtn = document.getElementById('btnDeletePerson');
-  if (delBtn) delBtn.textContent = '移除';
-  document.getElementById('noteEditTitle').textContent = p.nameCn;
-  document.getElementById('editShortMemoInput').value = p.shortMemo || '';
-  document.getElementById('editNoteBodyInput').value = p.noteBody || '';
-  noteEditModal.classList.add('is-open');
-  noteEditModal.setAttribute('aria-hidden', 'false');
-}
-
-function closeNoteEditModal() {
-  noteEditModal.classList.remove('is-open');
-  noteEditModal.setAttribute('aria-hidden', 'true');
-  state.deleteConfirmArmed = false;
-}
-
-async function submitNoteEditForm(e) {
-  e.preventDefault();
-  const p = PEOPLE_DB[state.activePersonId];
-  if (!p) return;
-  const memoVal = document.getElementById('editShortMemoInput').value.trim();
-  const bodyVal = document.getElementById('editNoteBodyInput').value.trim();
-  const saveBtn = document.getElementById('btnSaveNoteEdit');
-  if (saveBtn) saveBtn.disabled = true;
-
-  try {
-    const nextTraits = memoVal ? [memoVal, ...(p.traits || []).filter((t) => t !== memoVal).slice(0, 2)] : p.traits;
-    await apiJson(`/persons/${p.id}`, {
-      method: 'PATCH',
-      body: {
-        shortMemo: memoVal || p.shortMemo,
-        traits: nextTraits,
-      },
-    });
-    if (bodyVal) {
-      if (p.primaryNoteId && UUID_RE.test(p.primaryNoteId)) {
-        await apiJson(`/materials/${p.primaryNoteId}`, {
-          method: 'PATCH',
-          body: {
-            body: bodyVal,
-            snippet: (memoVal || bodyVal).slice(0, 120),
-          },
-        });
-      } else {
-        await apiJson(`/persons/${p.id}/materials`, {
-          method: 'POST',
-          body: {
-            kind: 'note',
-            title: `${p.nameCn} · 手札`,
-            body: bodyVal,
-            snippet: (memoVal || bodyVal).slice(0, 120),
-            pinned: true,
-          },
-        });
-      }
-    }
-    closeNoteEditModal();
-    await refreshBootstrap();
-    openPersonJournal(p.id);
-  } catch (_) {
-  } finally {
-    if (saveBtn) saveBtn.disabled = false;
-  }
-}
-
-async function handleDeleteActivePerson() {
-  const p = PEOPLE_DB[state.activePersonId];
-  if (!p) return;
-  const delBtn = document.getElementById('btnDeletePerson');
-  if (!state.deleteConfirmArmed) {
-    state.deleteConfirmArmed = true;
-    if (delBtn) delBtn.textContent = '确认移除';
-    return;
-  }
-  if (delBtn) delBtn.disabled = true;
-  try {
-    await apiJson(`/persons/${p.id}`, { method: 'DELETE' });
-    closeNoteEditModal();
-    state.activePersonId = null;
-    await refreshBootstrap();
-    if (state.coreIds.length === 0 && state.casualIds.length === 0) {
-      openNewPersonModal('gold');
-    }
-  } catch (_) {
-  } finally {
-    if (delBtn) delBtn.disabled = false;
-  }
-}
-
-function compressImageFileToBlob(file, maxEdge = 1280, squareCrop = false) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (squareCrop) {
-        const side = Math.min(img.width, img.height);
-        const sx = (img.width - side) * 0.5;
-        const sy = (img.height - side) * 0.5;
-        canvas.width = maxEdge;
-        canvas.height = maxEdge;
-        ctx.drawImage(img, sx, sy, side, side, 0, 0, maxEdge, maxEdge);
-      } else {
-        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      }
-      canvas.toBlob(
-        (blob) => (blob ? resolve(blob) : reject(new Error('Image encode failed'))),
-        'image/jpeg',
-        0.88
-      );
-    };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Image load failed'));
-    };
-    img.src = url;
-  });
-}
-
-async function handlePersonPhotoSelected(file) {
-  const p = PEOPLE_DB[state.activePersonId];
-  if (!file || !p) return;
-  try {
-    const [mainBlob, avatarBlob] = await Promise.all([
-      compressImageFileToBlob(file, 1360, false),
-      compressImageFileToBlob(file, 256, true),
-    ]);
-
-    const mainForm = new FormData();
-    mainForm.append('file', mainBlob, 'polaroid.jpg');
-    await apiJson(`/persons/${p.id}/photos/main`, {
-      method: 'POST',
-      body: mainForm,
-    });
-
-    const avForm = new FormData();
-    avForm.append('file', avatarBlob, 'avatar.jpg');
-    await apiJson(`/persons/${p.id}/photos/avatar`, {
-      method: 'POST',
-      body: avForm,
-    });
-
-    await refreshBootstrap();
-    openPersonJournal(p.id);
-  } catch (_) {}
-}
-
-/* ==========================================================================
-   6. Center Capsule Interactions (Tap & Horizontal Scrub)
-   ========================================================================== */
-function getCapsuleButtons() {
-  return Array.from(capsuleExpandedItems.querySelectorAll('.capsule-obj-avatar'));
-}
-
-export function setCapsuleExpanded(expanded) {
-  state.capsuleExpanded = Boolean(expanded);
-  if (state.capsuleExpanded) {
-    dockCenterCapsule.classList.remove('is-pure-landscape');
-    setArrowPopoverOpen(false);
-  }
-  dockCenterCapsule.classList.toggle('is-expanded', state.capsuleExpanded);
-  capsuleExpandedItems.setAttribute('aria-hidden', String(!state.capsuleExpanded));
-
-  if (!state.capsuleExpanded) {
-    clearCapsuleScrubMagnification();
-  }
-}
-
-function clearCapsuleScrubMagnification() {
-  getCapsuleButtons().forEach((btn) => {
-    btn.style.removeProperty('--scrub-scale');
-    btn.style.removeProperty('--scrub-lift');
-    btn.classList.remove('is-scrub-focus');
-  });
-}
-
-function updateCapsuleScrubAtX(clientX) {
-  const btns = getCapsuleButtons();
-  let closestBtn = null;
-  let minDist = Infinity;
-
-  btns.forEach((btn) => {
-    const r = btn.getBoundingClientRect();
-    const cx = r.left + r.width * 0.5;
-    const dist = Math.abs(clientX - cx);
-    if (dist < minDist) {
-      minDist = dist;
-      closestBtn = btn;
-    }
-    const proximity = Math.max(0, 1 - dist / 60);
-    btn.style.setProperty('--scrub-scale', (1 + proximity * 0.24).toFixed(3));
-    btn.style.setProperty('--scrub-lift', `${(-proximity * 7).toFixed(2)}px`);
-  });
-
-  btns.forEach((btn) => {
-    btn.classList.toggle('is-scrub-focus', btn === closestBtn && minDist < 48);
-  });
-
-  return minDist < 54 ? closestBtn : null;
-}
-
-function selectCapsuleTarget(targetKey) {
-  if (!targetKey) return;
-  closeDispatchModal();
-  if (targetKey === '__add_person__') {
-    openNewPersonModal('gold');
-    return;
-  }
-  if (targetKey === '__casual_dir__') {
-    openCasualDirectory();
-  } else if (PEOPLE_DB[targetKey]) {
-    openPersonJournal(targetKey);
-  }
-  if (state.activeScene !== 'journal') {
-    switchScene('journal');
-  }
-}
-
-function initCenterCapsuleInteractions() {
-  let pointerDown = false;
-  let activePointerId = null;
-  let scrubbing = false;
-  let startX = 0;
-  let scrubbedBtn = null;
-  let downTargetAvatar = null;
-
-  dockCenterCapsule.addEventListener('dragstart', (e) => e.preventDefault());
-
-  dockCenterCapsule.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    pointerDown = true;
-    activePointerId = e.pointerId;
-    scrubbing = false;
-    scrubbedBtn = null;
-    downTargetAvatar = state.capsuleExpanded ? e.target.closest('.capsule-obj-avatar') : null;
-    startX = e.clientX;
-  });
-
-  window.addEventListener('pointermove', (e) => {
-    if (!pointerDown) return;
-    const dx = Math.abs(e.clientX - startX);
-
-    if (!scrubbing && dx >= 8) {
-      scrubbing = true;
-      try {
-        if (activePointerId !== null) dockCenterCapsule.setPointerCapture(activePointerId);
-      } catch (_) {}
-      if (!state.capsuleExpanded) {
-        setCapsuleExpanded(true);
-      }
-    }
-
-    if (scrubbing && state.capsuleExpanded) {
-      scrubbedBtn = updateCapsuleScrubAtX(e.clientX);
-    }
-  });
-
-  const finishCapsulePointer = (e, cancelled = false) => {
-    if (!pointerDown) return;
-    pointerDown = false;
-    try {
-      if (activePointerId !== null && dockCenterCapsule.hasPointerCapture(activePointerId)) {
-        dockCenterCapsule.releasePointerCapture(activePointerId);
-      }
-    } catch (_) {}
-    activePointerId = null;
-
-    if (cancelled) {
-      scrubbing = false;
-      clearCapsuleScrubMagnification();
-      return;
-    }
-
-    if (scrubbing) {
-      const finalBtn = updateCapsuleScrubAtX(e.clientX) || scrubbedBtn;
-      if (finalBtn && finalBtn.dataset.capsuleTarget) {
-        selectCapsuleTarget(finalBtn.dataset.capsuleTarget);
-      }
-      setTimeout(() => setCapsuleExpanded(false), 75);
-      scrubbing = false;
-      return;
-    }
-
-    if (!dockCenterCapsule.contains(e.target) && !downTargetAvatar) return;
-
-    const tappedAvatar = e.target.closest('.capsule-obj-avatar') || downTargetAvatar;
-    downTargetAvatar = null;
-    if (state.capsuleExpanded && tappedAvatar && tappedAvatar.dataset.capsuleTarget) {
-      selectCapsuleTarget(tappedAvatar.dataset.capsuleTarget);
-      setCapsuleExpanded(false);
-    } else {
-      setCapsuleExpanded(!state.capsuleExpanded);
-    }
-  };
-
-  window.addEventListener('pointerup', (e) => finishCapsulePointer(e, false));
-  window.addEventListener('pointercancel', (e) => finishCapsulePointer(e, true));
-
-  document.addEventListener('pointerdown', (e) => {
-    if (state.capsuleExpanded && !dockCenterCapsule.contains(e.target)) {
-      setCapsuleExpanded(false);
-    }
-  });
-}
-
-/* ==========================================================================
-   7. Split-Arc Real Voice Recording + Quick Text Capture + 5s Undo
-   ========================================================================== */
-let voiceWaveRaf = null;
-let voiceTimerInterval = null;
-let voiceStartTs = 0;
-let mediaRecorder = null;
-let mediaStream = null;
-let audioChunks = [];
-let audioMimeType = 'audio/webm';
-let audioCtx = null;
-let audioAnalyser = null;
-let audioFreqBuf = null;
-let liveMicBoost = 1;
-let undoTimerId = null;
-
-const CANCEL_RADIUS_LOCAL = 188;
-
-function pickSupportedAudioMime() {
-  if (typeof MediaRecorder === 'undefined') return '';
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4',
-    'audio/ogg;codecs=opus',
-    'audio/ogg',
-  ];
-  for (const mime of candidates) {
-    if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(mime)) {
-      return mime;
-    }
-  }
-  return '';
-}
-
-function extForMime(mime) {
-  const m = (mime || '').toLowerCase();
-  if (m.includes('mp4') || m.includes('m4a')) return 'm4a';
-  if (m.includes('ogg')) return 'ogg';
-  if (m.includes('wav')) return 'wav';
-  return 'webm';
-}
-
-function renderSilkWaveform(now) {
-  if (!voiceSilkCtx || !voiceSilkCanvas) return;
-  const w = voiceSilkCanvas.width;
-  const h = voiceSilkCanvas.height;
-  const midY = h * 0.5;
-  const t = now * 0.0046;
-
-  if (audioAnalyser && audioFreqBuf) {
-    audioAnalyser.getByteFrequencyData(audioFreqBuf);
-    let sum = 0;
-    for (let i = 0; i < audioFreqBuf.length; i += 1) sum += audioFreqBuf[i];
-    const avg = sum / (audioFreqBuf.length * 255);
-    liveMicBoost = 0.55 + Math.min(1.35, avg * 3.2);
-  } else {
-    liveMicBoost = 1;
-  }
-
-  voiceSilkCtx.clearRect(0, 0, w, h);
-
-  const isCancel = state.voiceDragZone === 'cancel';
-  const isGlobal = state.voiceDragZone === 'global';
-  const ribbons = isCancel
-    ? [
-        { color: 'rgba(255, 245, 244, 0.92)', amp: 9, freq: 0.026, speed: 0.95, lw: 2.0 },
-        { color: 'rgba(255, 198, 192, 0.58)', amp: 6, freq: 0.04, speed: -0.75, lw: 1.5 },
-      ]
-    : isGlobal
-    ? [
-        { color: 'rgba(218, 150, 56, 0.88)', amp: 12, freq: 0.03, speed: 1.35, lw: 2.1 },
-        { color: 'rgba(92, 168, 236, 0.65)', amp: 9, freq: 0.042, speed: -1.05, lw: 1.7 },
-        { color: 'rgba(176, 128, 232, 0.45)', amp: 6, freq: 0.056, speed: 1.65, lw: 1.3 },
-      ]
-    : [
-        { color: 'rgba(218, 142, 58, 0.86)', amp: 12, freq: 0.03, speed: 1.25, lw: 2.1 },
-        { color: 'rgba(238, 116, 56, 0.48)', amp: 8.5, freq: 0.042, speed: -0.95, lw: 1.6 },
-        { color: 'rgba(182, 128, 92, 0.34)', amp: 5.5, freq: 0.055, speed: 1.6, lw: 1.3 },
-      ];
-
-  ribbons.forEach((rb, rIdx) => {
-    voiceSilkCtx.beginPath();
-    for (let x = 0; x <= w; x += 3) {
-      const envelope = Math.sin((x / w) * Math.PI);
-      const y =
-        midY +
-        Math.sin(x * rb.freq + t * rb.speed + rIdx) *
-          Math.cos(x * 0.014 - t * 0.6) *
-          rb.amp *
-          liveMicBoost *
-          envelope;
-      if (x === 0) voiceSilkCtx.moveTo(x, y);
-      else voiceSilkCtx.lineTo(x, y);
-    }
-    voiceSilkCtx.strokeStyle = rb.color;
-    voiceSilkCtx.lineWidth = rb.lw;
-    voiceSilkCtx.lineCap = 'round';
-    voiceSilkCtx.stroke();
-  });
-
-  if (state.voiceHolding) {
-    voiceWaveRaf = requestAnimationFrame(renderSilkWaveform);
-  }
-}
-
-function getTargetPersonForCurrentPage() {
-  if (state.viewMode === 'casual-directory') {
-    const firstId = state.casualIds[0] || state.coreIds[0];
-    return PEOPLE_DB[firstId] || null;
-  }
-  return PEOPLE_DB[state.activePersonId] || PEOPLE_DB[state.coreIds[0]] || null;
-}
-
-export function setVoiceDragZone(zoneName) {
-  const valid = ['current', 'global', 'cancel'].includes(zoneName) ? zoneName : 'current';
-  state.voiceDragZone = valid;
-  if (voiceHoldStage) voiceHoldStage.setAttribute('data-voice-zone', valid);
-  if (viewport) viewport.setAttribute('data-voice-cancel', String(valid === 'cancel'));
-
-  const upLabel = document.getElementById('voiceZoneUpGlobal');
-  const rightLabel = document.getElementById('voiceZoneRightCurrent');
-  if (upLabel) upLabel.classList.toggle('is-highlighted', valid === 'global');
-  if (rightLabel) rightLabel.classList.toggle('is-highlighted', valid === 'current');
-}
-
-async function beginBrowserMicCapture() {
-  audioChunks = [];
-  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    if (!state.voiceHolding) {
-      stream.getTracks().forEach((tr) => tr.stop());
-      return;
-    }
-    mediaStream = stream;
-    const chosenMime = pickSupportedAudioMime();
-    audioMimeType = chosenMime || 'audio/webm';
-    mediaRecorder = chosenMime ? new MediaRecorder(stream, { mimeType: chosenMime }) : new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) audioChunks.push(ev.data);
-    };
-    mediaRecorder.start(120);
-
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (Ctx) {
-      audioCtx = new Ctx();
-      const src = audioCtx.createMediaStreamSource(stream);
-      audioAnalyser = audioCtx.createAnalyser();
-      audioAnalyser.fftSize = 64;
-      audioFreqBuf = new Uint8Array(audioAnalyser.frequencyBinCount);
-      src.connect(audioAnalyser);
-    }
-  } catch (_) {
-    mediaRecorder = null;
-    mediaStream = null;
-  }
-}
-
-function stopBrowserMicCapture() {
-  return new Promise((resolve) => {
-    const cleanupTracks = () => {
-      if (mediaStream) {
-        mediaStream.getTracks().forEach((tr) => tr.stop());
-        mediaStream = null;
-      }
-      if (audioCtx) {
-        audioCtx.close().catch(() => {});
-        audioCtx = null;
-      }
-      audioAnalyser = null;
-      audioFreqBuf = null;
-    };
-
-    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-      cleanupTracks();
-      const blob = audioChunks.length > 0 ? new Blob(audioChunks, { type: audioMimeType }) : null;
-      mediaRecorder = null;
-      audioChunks = [];
-      resolve(blob);
-      return;
-    }
-
-    const rec = mediaRecorder;
-    mediaRecorder = null;
-    rec.onstop = () => {
-      cleanupTracks();
-      const blob = audioChunks.length > 0 ? new Blob(audioChunks, { type: rec.mimeType || audioMimeType }) : null;
-      audioChunks = [];
-      resolve(blob);
-    };
-    try {
-      rec.stop();
-    } catch (_) {
-      cleanupTracks();
-      resolve(null);
-    }
-  });
-}
-
-function armUndoButton(jobId, undoDeadlineIso) {
-  if (undoTimerId) {
-    clearTimeout(undoTimerId);
-    undoTimerId = null;
-  }
-  if (!jobId || !undoDeadlineIso || !btnUndoVoiceCapture) {
-    state.lastCaptureUndo = null;
-    if (btnUndoVoiceCapture) btnUndoVoiceCapture.hidden = true;
-    return;
-  }
-  const remainMs = Date.parse(undoDeadlineIso) - Date.now();
-  if (!(remainMs > 400)) {
-    state.lastCaptureUndo = null;
-    btnUndoVoiceCapture.hidden = true;
-    return;
-  }
-  state.lastCaptureUndo = { jobId: String(jobId) };
-  btnUndoVoiceCapture.hidden = false;
-  undoTimerId = setTimeout(() => {
-    state.lastCaptureUndo = null;
-    btnUndoVoiceCapture.hidden = true;
-  }, remainMs);
-}
-
-async function handleUndoLastCapture() {
-  if (!state.lastCaptureUndo || !state.lastCaptureUndo.jobId) return;
-  const { jobId } = state.lastCaptureUndo;
-  state.lastCaptureUndo = null;
-  if (btnUndoVoiceCapture) btnUndoVoiceCapture.hidden = true;
-  try {
-    await apiJson(`/captures/${jobId}:undo`, { method: 'POST', body: {} });
-    closeDispatchModal();
-    await refreshBootstrap();
-  } catch (_) {}
-}
-
-export function openDispatchModal(splits, jobId = null, undoDeadline = null) {
-  if (!aiVoiceDispatchModal) return;
-  state.lastDispatchSplits = Array.isArray(splits) ? splits : [];
-  armUndoButton(jobId, undoDeadline);
-
-  const listEl = document.getElementById('dispatchCardsList');
-  listEl.innerHTML = state.lastDispatchSplits
-    .map((item) => {
-      const pid = String(item.personId);
-      const p = PEOPLE_DB[pid];
-      const nameCn = (p && p.nameCn) || item.personName || '新人物';
-      const mono = (p && p.monogram) || nameCn.slice(0, 1);
-      const sealBg = (p && p.sealBg) || 'linear-gradient(145deg, #fcf4e6 0%, #efd9b8 100%)';
-      const sealColor = (p && p.sealColor) || '#694418';
-      return `
-        <button type="button" class="dispatch-person-card" data-jump-split-person="${escapeHtml(pid)}">
-          <span class="dispatch-monogram" style="background:${escapeHtml(sealBg)}; color:${escapeHtml(sealColor)};">${escapeHtml(mono)}</span>
-          <span class="dispatch-card-body">
-            <span class="dispatch-card-top">
-              <strong>${escapeHtml(nameCn)}</strong>
-            </span>
-            <small>${escapeHtml(item.body)}</small>
-          </span>
-          <span class="dispatch-jump-lbl" aria-hidden="true">›</span>
-        </button>
-      `;
-    })
-    .join('');
-
-  aiVoiceDispatchModal.classList.add('is-open');
-  aiVoiceDispatchModal.setAttribute('aria-hidden', 'false');
-}
-
-export function closeDispatchModal() {
-  if (!aiVoiceDispatchModal) return;
-  aiVoiceDispatchModal.classList.remove('is-open');
-  aiVoiceDispatchModal.setAttribute('aria-hidden', 'true');
-}
-
-function openQuickCaptureSheet() {
-  quickCaptureSheet.classList.add('is-open');
-  quickCaptureSheet.setAttribute('aria-hidden', 'false');
-  const inp = document.getElementById('quickCaptureInput');
-  if (inp) {
-    inp.value = '';
-    setTimeout(() => inp.focus(), 50);
-  }
-}
-
-function closeQuickCaptureSheet() {
-  quickCaptureSheet.classList.remove('is-open');
-  quickCaptureSheet.setAttribute('aria-hidden', 'true');
-}
-
-async function submitCaptureToBackend({ audioBlob = null, text = null, routeMode = 'current' }) {
-  const targetP = getTargetPersonForCurrentPage();
-  const activePersonId = targetP && UUID_RE.test(targetP.id) ? targetP.id : null;
-
-  dockVoiceOrbBtn.classList.add('is-processing');
-  try {
-    let resp;
-    if (audioBlob && audioBlob.size > 512) {
-      const ext = extForMime(audioBlob.type);
-      const fd = new FormData();
-      fd.append('audio', audioBlob, `voice.${ext}`);
-      fd.append('routeMode', routeMode);
-      if (activePersonId) fd.append('activePersonId', activePersonId);
-      resp = await apiJson('/voice/ingest', {
-        method: 'POST',
-        body: fd,
-      });
-    } else if (text && text.trim()) {
-      resp = await apiJson('/voice/ingest', {
-        method: 'POST',
-        body: {
-          source: 'text',
-          text: text.trim(),
-          routeMode,
-          activePersonId,
-        },
-      });
-    } else {
-      return;
-    }
-
-    await refreshBootstrap();
-
-    const splits = (resp && Array.isArray(resp.splits) ? resp.splits : []);
-    if (routeMode === 'global' && splits.length > 0) {
-      openDispatchModal(splits, resp.jobId, resp.undoDeadline);
-    } else if (splits.length > 1) {
-      openDispatchModal(splits, resp.jobId, resp.undoDeadline);
-    } else if (splits.length === 1) {
-      const targetId = String(splits[0].personId);
-      if (PEOPLE_DB[targetId]) {
-        openPersonJournal(targetId);
-      }
-      const charm = document.getElementById('artifactVoiceCharm');
-      if (charm) {
-        charm.classList.remove('is-freshly-pinned');
-        void charm.offsetWidth;
-        charm.classList.add('is-freshly-pinned');
-        setTimeout(() => charm.classList.remove('is-freshly-pinned'), 1400);
-      }
-    }
-  } catch (_) {
-  } finally {
-    dockVoiceOrbBtn.classList.remove('is-processing');
-  }
-}
-
-export function startVoiceHold(initialZone = 'current') {
-  if (state.voiceHolding) return;
-  setCapsuleExpanded(false);
-  setArrowPopoverOpen(false);
-  closeDispatchModal();
-  closeQuickCaptureSheet();
-
-  state.voiceHolding = true;
-  voiceStartTs = performance.now();
-  if (viewport) viewport.setAttribute('data-voice-holding', 'true');
-
-  setVoiceDragZone(initialZone);
-
-  dockVoiceOrbBtn.classList.add('is-holding');
-  voiceHoldStage.classList.add('is-active');
-  voiceHoldStage.setAttribute('aria-hidden', 'false');
-
-  if (voiceHoldTimerEl) voiceHoldTimerEl.textContent = '0:01';
-  if (voiceTimerInterval) clearInterval(voiceTimerInterval);
-  voiceTimerInterval = setInterval(() => {
-    const secs = Math.max(1, Math.min(59, Math.floor((performance.now() - voiceStartTs) / 1000) + 1));
-    if (voiceHoldTimerEl) voiceHoldTimerEl.textContent = `0:${String(secs).padStart(2, '0')}`;
-  }, 300);
-
-  if (voiceWaveRaf) cancelAnimationFrame(voiceWaveRaf);
-  voiceWaveRaf = requestAnimationFrame(renderSilkWaveform);
-
-  beginBrowserMicCapture();
-}
-
-export function cancelVoiceHoldSession() {
-  if (!state.voiceHolding) return;
-  state.voiceHolding = false;
-
-  dockVoiceOrbBtn.classList.remove('is-holding');
-  voiceHoldStage.classList.remove('is-active');
-  voiceHoldStage.setAttribute('aria-hidden', 'true');
-  if (viewport) {
-    viewport.removeAttribute('data-voice-holding');
-    viewport.removeAttribute('data-voice-cancel');
-  }
-  if (voiceDragPuck) voiceDragPuck.classList.remove('is-dragging');
-
-  if (voiceTimerInterval) {
-    clearInterval(voiceTimerInterval);
-    voiceTimerInterval = null;
-  }
-  if (voiceWaveRaf) {
-    cancelAnimationFrame(voiceWaveRaf);
-    voiceWaveRaf = null;
-  }
-}
-
-async function finishVoiceHoldAndRoute() {
-  if (!state.voiceHolding) return;
-  const heldMs = performance.now() - voiceStartTs;
-  const chosenZone = state.voiceDragZone;
-  cancelVoiceHoldSession();
-  const audioBlob = await stopBrowserMicCapture();
-
-  if (chosenZone === 'cancel') {
-    return;
-  }
-
-  if (heldMs < 400 || !audioBlob || audioBlob.size <= 512) {
-    openQuickCaptureSheet();
-    return;
-  }
-
-  await submitCaptureToBackend({
-    audioBlob,
-    routeMode: chosenZone === 'global' ? 'global' : 'current',
-  });
-}
-
-function initDirectionalVoiceInteractions() {
-  let draggingFromOrb = false;
-
-  const updatePointerDrag = (clientX, clientY) => {
-    const vpRect = viewport.getBoundingClientRect();
-    const orbRect = dockVoiceOrbBtn.getBoundingClientRect();
-    const invScale = vpRect.width > 0 ? viewport.offsetWidth / vpRect.width : 1;
-
-    const originX = (orbRect.left + orbRect.width * 0.5 - vpRect.left) * invScale;
-    const originY = (orbRect.top + orbRect.height * 0.5 - vpRect.top) * invScale;
-    const curX = (clientX - vpRect.left) * invScale;
-    const curY = (clientY - vpRect.top) * invScale;
-
-    const dx = curX - originX;
-    const upY = originY - curY;
-    const dist = Math.hypot(dx, upY);
-
-    if (dist > 8 && voiceDragPuck) {
-      voiceDragPuck.classList.add('is-dragging');
-      voiceDragPuck.style.left = `${curX.toFixed(1)}px`;
-      voiceDragPuck.style.top = `${curY.toFixed(1)}px`;
-    }
-
-    if (dist > CANCEL_RADIUS_LOCAL) {
-      setVoiceDragZone('cancel');
-      return;
-    }
-
-    if (dist > 26) {
-      const angleDeg = (Math.atan2(upY, dx) * 180) / Math.PI;
-      if (angleDeg > 46 && angleDeg <= 145) {
-        setVoiceDragZone('global');
-        return;
-      }
-    }
-
-    setVoiceDragZone('current');
-  };
-
-  let holdTriggerTimer = null;
-  let orbDownX = 0;
-  let orbDownY = 0;
-  let orbLastX = 0;
-  let orbLastY = 0;
-
-  dockVoiceOrbBtn.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    draggingFromOrb = true;
-    orbDownX = e.clientX;
-    orbDownY = e.clientY;
-    orbLastX = e.clientX;
-    orbLastY = e.clientY;
-    try {
-      dockVoiceOrbBtn.setPointerCapture(e.pointerId);
-    } catch (_) {}
-    if (holdTriggerTimer) clearTimeout(holdTriggerTimer);
-    holdTriggerTimer = setTimeout(() => {
-      holdTriggerTimer = null;
-      if (draggingFromOrb && !state.voiceHolding) {
-        startVoiceHold('current');
-        updatePointerDrag(orbLastX, orbLastY);
-      }
-    }, 260);
-  });
-
-  window.addEventListener('pointermove', (e) => {
-    if (!draggingFromOrb) return;
-    orbLastX = e.clientX;
-    orbLastY = e.clientY;
-    if (!state.voiceHolding) {
-      if (Math.hypot(e.clientX - orbDownX, e.clientY - orbDownY) > 14) {
-        if (holdTriggerTimer) {
-          clearTimeout(holdTriggerTimer);
-          holdTriggerTimer = null;
-        }
-        startVoiceHold('current');
-        updatePointerDrag(e.clientX, e.clientY);
-      }
-      return;
-    }
-    updatePointerDrag(e.clientX, e.clientY);
-  });
-
-  window.addEventListener('pointerup', () => {
-    if (!draggingFromOrb) return;
-    draggingFromOrb = false;
-    if (holdTriggerTimer) {
-      clearTimeout(holdTriggerTimer);
-      holdTriggerTimer = null;
-    }
-    if (!state.voiceHolding) {
-      if (quickCaptureSheet.classList.contains('is-open')) {
-        closeQuickCaptureSheet();
-      } else {
-        setCapsuleExpanded(false);
-        setArrowPopoverOpen(false);
-        closeDispatchModal();
-        openQuickCaptureSheet();
-      }
-      return;
-    }
-    finishVoiceHoldAndRoute();
-  });
-
-  window.addEventListener('pointercancel', () => {
-    if (!draggingFromOrb) return;
-    draggingFromOrb = false;
-    if (holdTriggerTimer) {
-      clearTimeout(holdTriggerTimer);
-      holdTriggerTimer = null;
-    }
-    cancelVoiceHoldSession();
-    stopBrowserMicCapture();
-  });
-
-  document.querySelectorAll('[data-trigger-voice-route]').forEach((labelBtn) => {
-    labelBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      setVoiceDragZone(labelBtn.dataset.triggerVoiceRoute);
-      finishVoiceHoldAndRoute();
-    });
-  });
-
-  document.getElementById('voiceHoldScrim').addEventListener('click', () => {
-    cancelVoiceHoldSession();
-    stopBrowserMicCapture();
-  });
-}
-
-/* ==========================================================================
-   8. Scene 6: Real Muse Cupid Companion Chat (History + Gemini 2.5 Flash SSE)
-   ========================================================================== */
-let currentDrawerMaterials = [];
-
-function resolveChatTargetPerson() {
-  if (state.viewMode === 'person-journal' && PEOPLE_DB[state.activePersonId]) {
-    return PEOPLE_DB[state.activePersonId];
-  }
-  const fallbackId = state.casualIds[0] || state.coreIds[0] || state.activePersonId;
-  return fallbackId ? PEOPLE_DB[fallbackId] : null;
-}
-
-function renderDrawerMaterials(materialsArray) {
-  currentDrawerMaterials = Array.isArray(materialsArray) ? materialsArray : [];
-  state.selectedMaterialIds = [];
-  syncMultimodalComposerUI();
-
-  if (!drawerMaterialsList) return;
-  drawerMaterialsList.innerHTML = currentDrawerMaterials
-    .map((mat) => {
-      const visualHtml =
-        mat.type === 'photo'
-          ? `<img src="${escapeHtml(mat.thumb)}" alt="${escapeHtml(mat.title)}" class="drawer-mat-thumb" />`
-          : `<span class="drawer-mat-icon-box" aria-hidden="true">${escapeHtml(mat.icon || '✎')}</span>`;
-      return `
-        <button type="button" class="drawer-mat-card" data-mat-id="${escapeHtml(mat.id)}">
-          ${visualHtml}
-          <span class="drawer-mat-meta">
-            <strong>${escapeHtml(mat.title)}</strong>
-            <small>${escapeHtml(mat.snippet)}</small>
-          </span>
-          <span class="drawer-mat-check" aria-hidden="true">✓</span>
-        </button>
-      `;
-    })
-    .join('');
-}
-
-export function setMaterialDrawerOpen(open) {
-  state.drawerOpen = Boolean(open);
-  if (!chatMaterialDrawer || !chatMaterialScrim) return;
-  chatMaterialDrawer.style.removeProperty('transform');
-  chatMaterialDrawer.style.removeProperty('transition');
-  chatMaterialDrawer.classList.toggle('is-open', state.drawerOpen);
-  chatMaterialDrawer.setAttribute('aria-hidden', String(!state.drawerOpen));
-  chatMaterialScrim.classList.toggle('is-open', state.drawerOpen);
-}
-
-export function toggleMaterialSelection(matId) {
-  const exists = state.selectedMaterialIds.includes(matId);
-  state.selectedMaterialIds = exists
-    ? state.selectedMaterialIds.filter((id) => id !== matId)
-    : [...state.selectedMaterialIds, matId];
-  syncMultimodalComposerUI();
-}
-
-function syncMultimodalComposerUI() {
-  document.querySelectorAll('.drawer-mat-card').forEach((card) => {
-    card.classList.toggle('is-selected', state.selectedMaterialIds.includes(card.dataset.matId));
-  });
-  const count = state.selectedMaterialIds.length;
-  if (drawerSelectedCount) {
-    drawerSelectedCount.hidden = count === 0;
-    drawerSelectedCount.textContent = `${count}`;
-  }
-  if (!chatAttachedTray) return;
-  if (count === 0) {
-    chatAttachedTray.hidden = true;
-    chatAttachedTray.innerHTML = '';
-    return;
-  }
-  const selectedMats = state.selectedMaterialIds
-    .map((id) => currentDrawerMaterials.find((m) => m.id === id))
-    .filter(Boolean);
-  chatAttachedTray.hidden = false;
-  chatAttachedTray.innerHTML = selectedMats
-    .map((mat) => {
-      const miniThumb =
-        mat.type === 'photo'
-          ? `<img src="${escapeHtml(mat.thumb)}" alt="" />`
-          : `<span class="attached-chip-badge">${escapeHtml(mat.icon || '✎')}</span>`;
-      return `
-        <span class="attached-chip" data-chip-id="${escapeHtml(mat.id)}">
-          ${miniThumb}
-          <span class="attached-chip-title">${escapeHtml(mat.title)}</span>
-          <button type="button" class="attached-chip-remove" data-remove-mat="${escapeHtml(mat.id)}" aria-label="移除">✕</button>
-        </span>
-      `;
-    })
-    .join('');
-}
-
-function buildWelcomeGreetingForPerson(p) {
-  if (p.tier === 'silver') {
-    return {
-      main: `关于「${p.nameCn}」的边界留档我都替你收稳啦。遇到拿不准怎么回绝或留痕的时刻，随时丢给我。`,
-      whisper: '温和而笃定地守住分寸，不必替别人的越界内耗。',
-    };
-  }
-  if (p.tier === 'crystal') {
-    return {
-      main: `「${p.nameCn}」的往来偏好都在手帐里记好啦。要发邮件、约时间或是挑伴手礼，随时问我一声。`,
-      whisper: '日常相处点到即止、礼数周全就最省心啦。',
-    };
-  }
-  return {
-    main: `「${p.nameCn}」的小喜好和约定我都替你记在心上啦。今天想聊聊见面的小心思，还是顺手翻翻手帐素材？`,
-    whisper: '点击左下角 ＋ 或从右侧左滑，可以随时调取 TA 的手帐便签。',
-  };
-}
-
-function renderSingleChatMessageNode(msg, personMaterials) {
-  if (msg.role === 'user') {
-    const bubble = document.createElement('div');
-    bubble.className = 'chat-bubble user';
-    const refIds = Array.isArray(msg.referencedMaterialIds) ? msg.referencedMaterialIds.map(String) : [];
-    const attached = refIds
-      .map((id) => personMaterials.find((m) => m.id === id))
-      .filter(Boolean);
-    if (attached.length > 0) {
-      const attWrap = document.createElement('div');
-      attWrap.className = 'bubble-multimodal-attachments';
-      attWrap.innerHTML = attached
-        .map((mat) => {
-          const media =
-            mat.type === 'photo'
-              ? `<img src="${escapeHtml(mat.thumb)}" alt="" />`
-              : `<span class="bubble-att-badge-icon">${escapeHtml(mat.icon || '✎')}</span>`;
-          return `<span class="bubble-att-card">${media}<span class="bubble-att-label">${escapeHtml(mat.title)}</span></span>`;
-        })
-        .join('');
-      bubble.appendChild(attWrap);
-    }
-    const textDiv = document.createElement('div');
-    textDiv.textContent = msg.content || '';
-    bubble.appendChild(textDiv);
-    return bubble;
-  }
-
-  const aiBubble = document.createElement('div');
-  aiBubble.className = 'chat-bubble ai';
-  const mainDiv = document.createElement('div');
-  mainDiv.textContent = msg.content || '';
-  aiBubble.appendChild(mainDiv);
-  if (msg.whisperNote) {
-    const wDiv = document.createElement('div');
-    wDiv.className = 'chat-whisper-note';
-    wDiv.textContent = msg.whisperNote;
-    aiBubble.appendChild(wDiv);
-  }
-  return aiBubble;
-}
-
-async function loadChatSceneForActiveContext() {
-  const p = resolveChatTargetPerson();
-  if (!p) return;
-  state.chatPersonId = p.id;
-  state.clearChatArmed = false;
-  const clearBtn = document.getElementById('btnClearChatHistory');
-  if (clearBtn) clearBtn.classList.remove('is-confirming');
-
-  const now = new Date();
-  const timeEl = document.getElementById('chatTimeDivider');
-  if (timeEl) {
-    timeEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  }
-
-  document.getElementById('aiChatHeaderName').textContent = '丘比特';
-  chatTextInput.placeholder = '嘿，丘比特…';
-  document.getElementById('drawerOwnerTitle').textContent = p.nameCn;
-  renderDrawerMaterials(p.materials || []);
-
-  const msgContainer = document.getElementById('aiChatMessages');
-  msgContainer.innerHTML = '';
-
-  try {
-    const page = await apiJson(`/persons/${p.id}/chat/messages?limit=50&order=asc`);
-    if (state.chatPersonId !== p.id) return;
-    const items = (page && Array.isArray(page.items)) ? page.items : [];
-    if (items.length === 0) {
-      const welcome = buildWelcomeGreetingForPerson(p);
-      const aiBubble = document.createElement('div');
-      aiBubble.className = 'chat-bubble ai';
-      aiBubble.innerHTML = `
-        <div>${escapeHtml(welcome.main)}</div>
-        <div class="chat-whisper-note">${escapeHtml(welcome.whisper)}</div>
-      `;
-      msgContainer.appendChild(aiBubble);
-    } else {
-      items.forEach((m) => {
-        msgContainer.appendChild(renderSingleChatMessageNode(m, p.materials || []));
-      });
-    }
-    msgContainer.scrollTop = msgContainer.scrollHeight;
-  } catch (_) {}
-}
-
-function renderCrisisCardBubble(card) {
-  const wrap = document.createElement('div');
-  wrap.className = 'chat-crisis-card';
-  const hotlinesHtml = (card.hotlines || [])
-    .map((h) => {
-      const name = h.name || h.label || '援助热线';
-      const phone = h.phone || h.number || '';
-      return `<a class="chat-crisis-hotline" href="tel:${escapeHtml(phone)}"><span>${escapeHtml(name)}</span><span>${escapeHtml(phone)}</span></a>`;
-    })
-    .join('');
-  wrap.innerHTML = `
-    <strong>${escapeHtml(card.title || '先让我陪着你')}</strong>
-    <p>${escapeHtml(card.careMessage || '')}</p>
-    <div class="chat-crisis-hotlines">${hotlinesHtml}</div>
+      const cits = (m.citations || []).map((ct) => {
+        const mid = ct.materialId || ct.targetId || '';
+        const lbl = ct.title || ct.label || '手帐原件';
+        return `<button class="cupid-cite-chip" data-cite-jump="${escapeHtml(mid)}" type="button"><span>${citeIcon(mid)}</span><span>${escapeHtml(lbl.slice(0, 18))}</span><span>↗</span></button>`;
+      }).join('');
+      const perspHtml = p.tier === 'gold' && m.perspectives && m.perspectives.length
+        ? `<div class="cupid-perspective-card" style="margin-top:10px;">
+             <div style="font-size:11.5px;font-weight:600;opacity:0.86;margin-bottom:4px;">✦ 换个角度想想 · 金箭专属</div>
+             <div style="opacity:0.90;">${m.perspectives.map((pt) => escapeHtml(pt)).join('；')}</div>
+           </div>`
+        : '';
+      return `<div class="cupid-msg is-ai">
+        <div>${escapeHtml(m.text)}</div>
+        ${cits ? `<div class="cupid-cites-row">${cits}</div>` : ''}
+        ${m.whisper ? `<div class="cupid-whisper-line">${escapeHtml(m.whisper)}</div>` : ''}
+        ${perspHtml}
+      </div>`;
+    }).join('')}
+
+    ${state.cupidThinking ? `<div style="font-size:12.5px;opacity:0.80;padding:4px 8px;">✦ ${p.tier === 'silver' ? '正在核对时间线并起草回应…' : '丘比特正在翻阅手帐原件…'}</div>` : ''}
+
+    <div class="cupid-prompts-strip">
+      ${prompts.map((q) => `<button class="cupid-prompt-chip" data-ask-q="${escapeHtml(q)}" type="button">${escapeHtml(q)}</button>`).join('')}
+      ${thread.length ? `<button class="cupid-prompt-chip" id="btnClearCupidThread" type="button" style="opacity:0.65;">清空对话</button>` : ''}
+    </div>
   `;
-  return wrap;
+
+  document.getElementById('cupidShimmerShell').classList.toggle('is-thinking', state.cupidThinking);
+  renderAttachedTray();
+
+  const tb = body.querySelector('#btnCupidTrace');
+  if (tb) tb.addEventListener('click', () => { state.cupidTraceOpen = !state.cupidTraceOpen; renderCupidChat(); });
+  body.querySelectorAll('[data-cite-jump]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.citeJump) jumpToRecord(b.dataset.citeJump);
+  }));
+  body.querySelectorAll('[data-ask-q]').forEach((b) => b.addEventListener('click', () => sendCupidQuestion(b.dataset.askQ)));
+  const clr = body.querySelector('#btnClearCupidThread');
+  if (clr) {
+    clr.addEventListener('click', async () => {
+      try {
+        await apiJson(`/persons/${p.id}/chat/messages`, { method: 'DELETE' });
+        state.cupidMessages[p.id] = [];
+        renderCupidChat();
+        showToast('已清空本页丘比特对话记录');
+      } catch (err) {
+        showToast(err.message || '清空失败');
+      }
+    });
+  }
+  body.scrollTop = body.scrollHeight;
 }
 
-async function sendMultimodalChatMessage() {
-  if (state.chatStreaming) return;
-  const p = PEOPLE_DB[state.chatPersonId] || resolveChatTargetPerson();
-  if (!p) return;
+async function sendCupidQuestion(qText) {
+  const p = currentPerson();
+  if (!p || state.cupidThinking) return;
+  const attachedRecs = [...state.cupidAttachedIds].map((id) => p.records.find((r) => r.id === id)).filter(Boolean);
+  const q = (qText || '').trim() || (attachedRecs.length ? `结合我引用的这${attachedRecs.length}条手帐，帮我出出主意吧？` : '');
+  if (!q) return;
 
-  const rawText = chatTextInput.value.trim();
-  const attachedMats = state.selectedMaterialIds
-    .map((id) => currentDrawerMaterials.find((m) => m.id === id))
-    .filter(Boolean);
-  if (!rawText && attachedMats.length === 0) return;
+  if (!state.cupidMessages[p.id]) state.cupidMessages[p.id] = [];
+  const refStr = attachedRecs.map((r) => `${r.date} ${r.tag || '手帐'}`).join('、');
+  const validMaterialIds = attachedRecs.map((r) => r.id).filter((id) => UUID_RE.test(id));
 
-  const finalUserText =
-    rawText || `结合我选中的这${attachedMats.length > 1 ? '几份' : '份'}手帐材料，帮我出出主意吧？`;
-  const validMaterialUuids = attachedMats.map((m) => m.id).filter((id) => UUID_RE.test(id));
+  state.cupidMessages[p.id].push({ role: 'user', text: q, refs: refStr });
+  const aiMsg = { role: 'ai', text: '', whisper: '', perspectives: [], citations: [], suggestions: [], crisis: null };
+  state.cupidMessages[p.id].push(aiMsg);
 
-  const msgContainer = document.getElementById('aiChatMessages');
-  const userBubble = document.createElement('div');
-  userBubble.className = 'chat-bubble user';
-
-  if (attachedMats.length > 0) {
-    const attWrap = document.createElement('div');
-    attWrap.className = 'bubble-multimodal-attachments';
-    attWrap.innerHTML = attachedMats
-      .map((mat) => {
-        const media =
-          mat.type === 'photo'
-            ? `<img src="${escapeHtml(mat.thumb)}" alt="" />`
-            : `<span class="bubble-att-badge-icon">${escapeHtml(mat.icon || '✎')}</span>`;
-        return `<span class="bubble-att-card">${media}<span class="bubble-att-label">${escapeHtml(mat.title)}</span></span>`;
-      })
-      .join('');
-    userBubble.appendChild(attWrap);
-  }
-
-  const textNode = document.createElement('div');
-  textNode.textContent = finalUserText;
-  userBubble.appendChild(textNode);
-  msgContainer.appendChild(userBubble);
-
-  chatTextInput.value = '';
-  state.selectedMaterialIds = [];
-  syncMultimodalComposerUI();
-  setMaterialDrawerOpen(false);
-
-  const aiBubble = document.createElement('div');
-  aiBubble.className = 'chat-bubble ai';
-  const bodyDiv = document.createElement('div');
-  bodyDiv.innerHTML = `<span class="chat-stream-dots" aria-hidden="true"><i></i><i></i><i></i></span>`;
-  aiBubble.appendChild(bodyDiv);
-  msgContainer.appendChild(aiBubble);
-  msgContainer.scrollTop = msgContainer.scrollHeight;
-
-  triggerCupidCompanionGreet();
-  state.chatStreaming = true;
-
-  let streamedText = '';
-  let dotsCleared = false;
+  state.cupidAttachedIds.clear();
+  closeMatDrawer();
+  state.cupidThinking = true;
+  renderCupidChat();
 
   try {
     const resp = await apiFetch(`/persons/${p.id}/chat/stream`, {
       method: 'POST',
       headers: { Accept: 'text/event-stream' },
       body: {
-        message: finalUserText,
-        referencedMaterialIds: validMaterialUuids,
+        message: q,
+        referencedMaterialIds: validMaterialIds,
         clientMessageId: makeUuid(),
       },
     });
-
-    if (!resp.ok || !resp.body) {
-      throw new Error(`HTTP ${resp.status}`);
-    }
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
-    const handleSseBlock = (block) => {
+    const handleBlock = (block) => {
       const lines = block.split(/\r?\n/);
       let evName = 'message';
       const dataLines = [];
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          evName = line.slice(6).trim();
-        } else if (line.startsWith('data:')) {
-          dataLines.push(line.slice(5).trim());
-        }
+      for (const ln of lines) {
+        if (ln.startsWith('event:')) evName = ln.slice(6).trim();
+        else if (ln.startsWith('data:')) dataLines.push(ln.slice(5).trim());
       }
-      if (dataLines.length === 0) return;
+      if (!dataLines.length) return;
       let payload = null;
-      try {
-        payload = JSON.parse(dataLines.join('\n'));
-      } catch (_) {
-        return;
-      }
+      try { payload = JSON.parse(dataLines.join('\n')); } catch (_) { return; }
 
-      if (evName === 'delta' && payload && payload.text) {
-        if (!dotsCleared) {
-          dotsCleared = true;
-          bodyDiv.textContent = '';
+      if (evName === 'delta' && payload?.text) {
+        aiMsg.text += payload.text;
+        renderCupidChat();
+      } else if (evName === 'citation' && payload?.materialId) {
+        if (!aiMsg.citations.some((c) => c.materialId === payload.materialId)) {
+          aiMsg.citations.push(payload);
         }
-        streamedText += payload.text;
-        bodyDiv.textContent = streamedText;
-        msgContainer.scrollTop = msgContainer.scrollHeight;
-      } else if (evName === 'whisper' && payload && payload.text) {
-        const wDiv = document.createElement('div');
-        wDiv.className = 'chat-whisper-note';
-        wDiv.textContent = payload.text;
-        aiBubble.appendChild(wDiv);
-        msgContainer.scrollTop = msgContainer.scrollHeight;
+        renderCupidChat();
+      } else if (evName === 'whisper' && payload?.text) {
+        aiMsg.whisper = payload.text;
+        renderCupidChat();
+      } else if (evName === 'perspective' && p.tier === 'gold' && Array.isArray(payload?.items)) {
+        aiMsg.perspectives = payload.items;
+        renderCupidChat();
+      } else if (evName === 'suggestion' && Array.isArray(payload?.items)) {
+        aiMsg.suggestions = payload.items;
+        renderCupidChat();
       } else if (evName === 'crisis' && payload) {
-        aiBubble.replaceWith(renderCrisisCardBubble(payload));
-        msgContainer.scrollTop = msgContainer.scrollHeight;
-      } else if (evName === 'error') {
-        if (!streamedText) {
-          bodyDiv.textContent = '丘比特刚刚走神了一小会儿，再和我说一次好吗？';
-        }
+        aiMsg.crisis = payload;
+        renderCupidChat();
       }
     };
 
@@ -2876,421 +1615,1320 @@ async function sendMultimodalChatMessage() {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let sepIdx = buffer.indexOf('\n\n');
-      while (sepIdx !== -1) {
-        const block = buffer.slice(0, sepIdx);
-        buffer = buffer.slice(sepIdx + 2);
-        if (block.trim()) handleSseBlock(block);
-        sepIdx = buffer.indexOf('\n\n');
+      let sep = buffer.indexOf('\n\n');
+      while (sep !== -1) {
+        const blk = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        if (blk.trim()) handleBlock(blk);
+        sep = buffer.indexOf('\n\n');
       }
     }
-    if (buffer.trim()) handleSseBlock(buffer);
-    triggerCupidCompanionGreet();
-  } catch (_) {
-    if (!streamedText) {
-      bodyDiv.textContent = '网络微风轻晃了一下，稍后再试一次吧。';
+    if (buffer.trim()) handleBlock(buffer);
+    if (!aiMsg.text && !aiMsg.crisis) {
+      aiMsg.text = '丘比特刚刚收到了你的话，正在整理思路，再发一次试试吧。';
     }
+  } catch (err) {
+    aiMsg.text = aiMsg.text || `网络轻晃了一下（${err.message}），稍后再试。`;
   } finally {
-    state.chatStreaming = false;
+    state.cupidThinking = false;
+    renderCupidChat();
   }
 }
 
-async function handleClearChatHistory() {
-  const p = PEOPLE_DB[state.chatPersonId];
+/* ============================================================================
+   8. LIQUID GLASS SHEETS (DOSSIER, DIRECTORY, CAPTURE, SETTINGS, LUNAR WHEEL)
+   ============================================================================ */
+function openSheet(id) {
+  closeAllSheets();
+  closeSpotlight();
+  document.getElementById('sheetBackdrop').classList.add('is-open');
+  document.getElementById(id).classList.add('is-open');
+}
+
+function closeAllSheets() {
+  document.getElementById('sheetBackdrop').classList.remove('is-open');
+  document.querySelectorAll('.glass-sheet.is-open').forEach((s) => s.classList.remove('is-open'));
+  if (state.capWaveRaf) { cancelAnimationFrame(state.capWaveRaf); state.capWaveRaf = null; }
+}
+
+/* Sheet 1: 人物档案口袋 */
+function openDossierSheet() {
+  const p = currentPerson();
   if (!p) return;
-  const btn = document.getElementById('btnClearChatHistory');
-  if (!state.clearChatArmed) {
-    state.clearChatArmed = true;
-    if (btn) btn.classList.add('is-confirming');
-    setTimeout(() => {
-      state.clearChatArmed = false;
-      if (btn) btn.classList.remove('is-confirming');
-    }, 3200);
+  document.getElementById('dossierSheetTitle').textContent = `${p.name} · 人物档案`;
+  const body = document.getElementById('dossierSheetBody');
+  const photoMats = p.tier === 'silver' ? [] : p.records.filter((r) => r.type === 'photo' && r.img);
+
+  body.innerHTML = `
+    <div class="s-card">
+      <div class="s-label"><span>近况简报</span><span>${TIER_META[p.tier]?.full || ''}</span></div>
+      <div style="font-family:var(--font-serif);font-size:14px;line-height:1.68;">${escapeHtml(p.shortMemo || p.contextSub || `已为「${p.name}」建立独立加密关系档案。`)}</div>
+      <button class="s-btn-primary" id="btnDossierToCupid" type="button" style="width:fit-content;height:34px;font-size:12.5px;">让丘比特帮我准备 →</button>
+    </div>
+
+    ${p.tier !== 'silver' ? `
+      <div class="s-card">
+        <div class="s-label">
+          <span>背景摄影相纸</span>
+          <button class="s-pill is-active" id="btnDossierUploadBg" type="button" style="height:24px;font-size:11px;">＋ 上传照片</button>
+        </div>
+        ${photoMats.length ? `
+          <div class="bg-picker-strip">
+            ${photoMats.map((ph) => `
+              <button class="bg-pick-btn ${ph.id === p.activeHeroMaterialId ? 'is-active' : ''}" data-bg-mat-id="${ph.id}" type="button">
+                <img src="${ph.img}" alt="${escapeHtml(ph.scene_label || ph.tag)}" />
+                <span>${escapeHtml((ph.scene_label || ph.tag || '相片').slice(0, 8))}</span>
+              </button>
+            `).join('')}
+          </div>
+        ` : `<div style="font-size:12px;opacity:0.7;">上传一张人物摄影或生活留影，心络将实时提取真原图琉璃色域。</div>`}
+      </div>
+    ` : `
+      <div class="s-card">
+        <div class="s-label"><span>银箭零照片隐私护盾</span><span>已强制启用</span></div>
+        <div style="font-size:12.5px;line-height:1.6;opacity:0.82;">银箭人物不设背景摄影、不渲染彩墨流光，所有边界留痕默认由长虹玻璃幕布收起。</div>
+      </div>
+    `}
+
+    <div class="s-card">
+      <div class="s-label">
+        <span>记挂的日子 · 农历/公历双历</span>
+        <button class="s-pill" id="btnDossierAddDate" type="button" style="height:24px;font-size:11px;">＋ 核对农历</button>
+      </div>
+      ${p.care_days.length ? p.care_days.map((cd) => `
+        <div style="display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:13px;background:rgba(255,255,255,0.06);border:0.75px solid rgba(255,255,255,0.12);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+            <div>
+              <div style="font-size:13.5px;font-weight:600;">${escapeHtml(cd.title)}</div>
+              <div style="font-size:11.5px;opacity:0.68;margin-top:2px;">${escapeHtml(cd.date_label)} · ${escapeHtml(cd.lunar_label)} · ${escapeHtml(cd.days_left)}</div>
+            </div>
+            <button class="s-pill ${cd.done ? 'is-active' : ''}" data-cd-done="${cd.id}" type="button">${cd.done ? '✓ 记完了' : '记完了'}</button>
+          </div>
+          <div class="s-pill-row">
+            ${[['提前 7 天', [7, 1, 0]], ['提前 1 天', [1, 0]], ['当天', [0]]].map(([lbl, arr]) =>
+              `<button class="s-pill ${cd.lead === lbl ? 'is-active' : ''}" data-cd-lead="${cd.id}" data-lead-arr="${arr.join(',')}" type="button">${lbl}</button>`
+            ).join('')}
+          </div>
+        </div>
+      `).join('') : `<div style="font-size:12.5px;opacity:0.66;">还没有记挂日程，点击右上角「核对农历」添入第一条。</div>`}
+    </div>
+
+    <div class="s-card">
+      <div class="s-label"><span>记住的小事 · 实库玉签</span><span>${p.facts.length} 项</span></div>
+      ${p.facts.map((f, fi) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:${fi ? '0.75px solid rgba(255,255,255,0.10)' : 'none'};">
+          <div style="font-size:13px;line-height:1.5;opacity:${f.faded ? 0.42 : 0.94};text-decoration:${f.faded ? 'line-through' : 'none'};">
+            <strong style="margin-right:6px;opacity:0.74;">${escapeHtml(f.kind)}</strong>${escapeHtml(f.text)}
+          </div>
+          <button class="s-pill" data-fact-toggle="${f.id}" type="button">${f.faded ? '恢复' : '淡忘'}</button>
+        </div>
+      `).join('')}
+      <form id="addFactForm" style="display:flex;gap:8px;margin-top:6px;">
+        <input class="spot-input" id="newFactInput" type="text" placeholder="添记一条小习惯或忌口…" style="flex:1;padding:7px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);font-size:12.5px;" />
+        <button class="s-pill is-active" type="submit">落墨</button>
+      </form>
+    </div>
+  `;
+
+  body.querySelector('#btnDossierToCupid').addEventListener('click', openCupid);
+  const upBtn = body.querySelector('#btnDossierUploadBg');
+  if (upBtn) {
+    upBtn.addEventListener('click', () => document.getElementById('dossierBgUploadInput').click());
+  }
+  body.querySelectorAll('[data-bg-mat-id]').forEach((b) => b.addEventListener('click', () => {
+    promoteMaterialToBackground(p, b.dataset.bgMatId);
+  }));
+  body.querySelector('#btnDossierAddDate').addEventListener('click', () => openDateWheelSheet(null));
+
+  body.querySelectorAll('[data-cd-done]').forEach((b) => b.addEventListener('click', async () => {
+    const cd = p.care_days.find((x) => x.id === b.dataset.cdDone);
+    if (!cd) return;
+    const nextStatus = cd.done ? 'active' : 'completed';
+    try {
+      await apiJson(`/reminders/${cd.id}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': `"${cd.version}"` },
+        body: { status: nextStatus },
+      });
+      await refreshBootstrap({ keepPersonId: true });
+      openDossierSheet();
+    } catch (err) { showToast(err.message || '更新提醒失败'); }
+  }));
+
+  body.querySelectorAll('[data-cd-lead]').forEach((b) => b.addEventListener('click', async () => {
+    const cd = p.care_days.find((x) => x.id === b.dataset.cdLead);
+    if (!cd) return;
+    const leadDays = b.dataset.leadArr.split(',').map(Number);
+    try {
+      await apiJson(`/reminders/${cd.id}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': `"${cd.version}"` },
+        body: { leadDays },
+      });
+      await refreshBootstrap({ keepPersonId: true });
+      openDossierSheet();
+      showToast(`提醒已调整为「${leadDaysLabel(leadDays)}」`);
+    } catch (err) { showToast(err.message || '更新提前天数失败'); }
+  }));
+
+  body.querySelectorAll('[data-fact-toggle]').forEach((b) => b.addEventListener('click', async () => {
+    const f = p.facts.find((x) => x.id === b.dataset.factToggle);
+    if (!f) return;
+    const nextStatus = f.faded ? 'confirmed' : 'rejected';
+    try {
+      await apiJson(`/facts/${f.id}`, {
+        method: 'PATCH',
+        headers: { 'If-Match': `"${f.version}"` },
+        body: { status: nextStatus },
+      });
+      await refreshBootstrap({ keepPersonId: true });
+      openDossierSheet();
+      showToast(nextStatus === 'rejected' ? '已淡忘此条玉签' : '已恢复玉签');
+    } catch (err) { showToast(err.message || '更新玉签失败'); }
+  }));
+
+  body.querySelector('#addFactForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const inp = body.querySelector('#newFactInput');
+    const txt = (inp.value || '').trim();
+    if (!txt) return;
+    try {
+      await apiJson(`/persons/${p.id}/facts`, {
+        method: 'POST',
+        body: { type: 'preference', polarity: 'positive', content: txt },
+      });
+      await refreshBootstrap({ keepPersonId: true });
+      openDossierSheet();
+      showToast('✦ 已加密落墨至人物玉签');
+    } catch (err) { showToast(err.message || '添加玉签失败'); }
+  });
+
+  openSheet('dossierSheet');
+}
+
+/* Sheet 2: 人物名册与记繁琐 + 72h 冷静区 + 新添人物 */
+function openDirectorySheet(focusNew = false) {
+  if (focusNew) state.showNewPersonForm = true;
+  renderDirectorySheet();
+  openSheet('directorySheet');
+}
+
+function renderDirectorySheet() {
+  const body = document.getElementById('directorySheetBody');
+  const list = state.people.filter((p) => state.dirFilter === 'all' || p.tier === state.dirFilter);
+  const coolingItems = state.inboxItems.filter((it) => it.kind === 'venting_hold');
+  const disambigItems = state.inboxItems.filter((it) => it.kind !== 'venting_hold');
+
+  body.innerHTML = `
+    ${state.showNewPersonForm ? `
+      <form class="s-card" id="newPersonForm">
+        <div class="s-label"><span>新添一页手帐人物</span><button type="button" id="btnCancelNewP" style="opacity:0.7;">收起</button></div>
+        <input class="spot-input" id="newPName" type="text" placeholder="姓名（例如：妈妈 / 表姨 / 张学长）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" required />
+        <input class="spot-input" id="newPRole" type="text" placeholder="关系身份（选填，如：母亲 / 伴侣 / 项目同事）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
+        <input class="spot-input" id="newPMemo" type="text" placeholder="一句初印象或小习惯（选填）" style="padding:9px 12px;border-radius:12px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);" />
+        <div class="s-pill-row" id="newPTierRow">
+          <button class="s-pill is-active" data-new-tier="gold" type="button">金箭 · 记爱</button>
+          <button class="s-pill" data-new-tier="crystal" type="button">水晶箭 · 记繁琐</button>
+          <button class="s-pill" data-new-tier="silver" type="button">银箭 · 记恨</button>
+        </div>
+        <button class="s-btn-primary" type="submit">添入名册并建页</button>
+      </form>
+    ` : ''}
+
+    <div class="s-pill-row">
+      <button class="s-pill ${state.dirFilter === 'all' ? 'is-active' : ''}" data-df="all" type="button">全部 (${state.people.length})</button>
+      <button class="s-pill ${state.dirFilter === 'gold' ? 'is-active' : ''}" data-df="gold" type="button">金箭 (${state.people.filter((x) => x.tier === 'gold').length})</button>
+      <button class="s-pill ${state.dirFilter === 'crystal' ? 'is-active' : ''}" data-df="crystal" type="button">水晶箭 (${state.people.filter((x) => x.tier === 'crystal').length})</button>
+      <button class="s-pill ${state.dirFilter === 'silver' ? 'is-active' : ''}" data-df="silver" type="button">银箭 (${state.people.filter((x) => x.tier === 'silver').length})</button>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      ${list.map((p) => {
+        const imgUrl = p.tier !== 'silver' && p.mainPhotoUrl ? p.mainPhotoUrl : null;
+        return `
+          <button class="dir-person-row ${p.id === state.personId ? 'is-active' : ''}" data-pick-person="${p.id}" type="button">
+            <span class="dir-avatar">${imgUrl ? `<img src="${imgUrl}" alt="" />` : escapeHtml(p.initial || p.name.slice(0, 1))}</span>
+            <span style="flex:1;min-width:0;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <strong style="font-size:14px;">${escapeHtml(p.name)}</strong>
+                <span style="font-size:11px;opacity:0.68;">${escapeHtml(p.role)}</span>
+              </div>
+              <div style="font-size:11.5px;opacity:0.65;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">${escapeHtml(p.shortMemo || p.contextSub || `${p.records.length} 条记录`)}</div>
+            </span>
+            <span style="font-size:11.5px;opacity:0.65;">${p.records.length} 页 ›</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+
+    ${disambigItems.length ? disambigItems.map((it) => `
+      <div class="s-card">
+        <div class="s-label"><span>待确认归属</span><span>${escapeHtml(it.mention || '新人物')}</span></div>
+        <div style="font-size:13px;line-height:1.55;">${escapeHtml(it.summary || '')}</div>
+        <div class="s-pill-row">
+          <button class="s-pill is-active" data-inbox-create="${it.id}" data-inbox-name="${escapeHtml(it.mention || '新人物')}" type="button">新建人物并归档</button>
+          <button class="s-pill" data-inbox-discard="${it.id}" type="button">暂不归档</button>
+        </div>
+      </div>
+    `).join('') : ''}
+
+    <div class="s-card">
+      <div class="s-label"><span>72h 冷静区 · 金箭关系保护</span><span>${coolingItems.length} 条</span></div>
+      ${coolingItems.length ? coolingItems.map((cz) => `
+        <div style="font-size:12.5px;line-height:1.58;opacity:0.86;">
+          <div style="font-size:11px;opacity:0.65;margin-bottom:3px;">${escapeHtml(cz.personName || '金箭保护')} · 72h 情绪缓冲</div>
+          <div>${escapeHtml(cz.summary || '')}</div>
+          <div class="s-pill-row" style="margin-top:8px;">
+            <button class="s-pill" data-inbox-discard="${cz.id}" type="button">释怀淡忘</button>
+            <button class="s-pill" data-inbox-keep="${cz.id}" type="button">仍写入手帐</button>
+          </div>
+        </div>
+      `).join('') : `<div style="font-size:12.5px;opacity:0.65;">当前无情绪气话暂存，你的关系档案保持温润清澈。</div>`}
+    </div>
+  `;
+
+  body.querySelectorAll('[data-df]').forEach((b) => b.addEventListener('click', () => { state.dirFilter = b.dataset.df; renderDirectorySheet(); }));
+  body.querySelectorAll('[data-pick-person]').forEach((b) => b.addEventListener('click', () => { selectPerson(b.dataset.pickPerson); closeAllSheets(); }));
+  body.querySelectorAll('[data-inbox-discard]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await apiJson(`/inbox/${b.dataset.inboxDiscard}:resolve`, { method: 'POST', body: { action: 'discard' } });
+      await refreshBootstrap({ keepPersonId: true });
+      renderDirectorySheet();
+      showToast('已释怀移除');
+    } catch (err) { showToast(err.message || '操作失败'); }
+  }));
+  body.querySelectorAll('[data-inbox-keep]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await apiJson(`/inbox/${b.dataset.inboxKeep}:resolve`, { method: 'POST', body: { action: 'keep_as_note' } });
+      await refreshBootstrap({ keepPersonId: true });
+      renderDirectorySheet();
+      showToast('已转入正式手帐');
+    } catch (err) { showToast(err.message || '操作失败'); }
+  }));
+  body.querySelectorAll('[data-inbox-create]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await apiJson(`/inbox/${b.dataset.inboxCreate}:resolve`, {
+        method: 'POST',
+        body: { action: 'create_person', displayName: b.dataset.inboxName, tier: 'crystal' },
+      });
+      await refreshBootstrap({ keepPersonId: false });
+      renderDirectorySheet();
+      showToast(`已为「${b.dataset.inboxName}」建页并归档`);
+    } catch (err) { showToast(err.message || '建页失败'); }
+  }));
+
+  const form = body.querySelector('#newPersonForm');
+  if (form) {
+    let chosenTier = 'gold';
+    form.querySelector('#btnCancelNewP').addEventListener('click', () => { state.showNewPersonForm = false; renderDirectorySheet(); });
+    form.querySelectorAll('[data-new-tier]').forEach((tb) => tb.addEventListener('click', () => {
+      chosenTier = tb.dataset.newTier;
+      form.querySelectorAll('[data-new-tier]').forEach((x) => x.classList.toggle('is-active', x === tb));
+    }));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nm = form.querySelector('#newPName').value.trim();
+      const rl = form.querySelector('#newPRole').value.trim();
+      const mm = form.querySelector('#newPMemo').value.trim();
+      if (!nm) return;
+      try {
+        const created = await apiJson('/persons', {
+          method: 'POST',
+          body: { nameCn: nm, roleTag: rl || '手帐人物', shortMemo: mm, tier: chosenTier },
+        });
+        state.showNewPersonForm = false;
+        await refreshBootstrap({ keepPersonId: false });
+        if (created?.id) selectPerson(created.id);
+        closeAllSheets();
+        showToast(`已为「${nm}」建页并写入加密库`);
+      } catch (err) {
+        showToast(err.message || '新建人物失败');
+      }
+    });
+  }
+}
+
+/* Sheet 3: 轻声记一笔 (Voice / WeChat Chat / Photo Upload / Care Reminder) */
+function startCaptureWave() {
+  const cv = document.getElementById('capWaveCv');
+  if (!cv) return;
+  const ctx = cv.getContext('2d');
+  let phase = 0;
+  const draw = () => {
+    const W = cv.width, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const bars = 46, gap = W / bars;
+    const warm = getComputedStyle(document.documentElement).getPropertyValue('--real-warm').trim() || '#E5BC8B';
+    const p = currentPerson();
+    const isLight = !p || p.tier === 'silver' || !p.mainPhotoUrl;
+    for (let i = 0; i < bars; i++) {
+      const amp = 0.25 + 0.65 * Math.abs(Math.sin(phase + i * 0.34) * Math.cos(phase * 0.5 + i * 0.17));
+      const bh = Math.max(5, amp * (H - 12));
+      ctx.fillStyle = i % 4 === 0 ? warm : (isLight ? 'rgba(32,52,74,0.28)' : 'rgba(255,250,242,0.38)');
+      ctx.beginPath();
+      ctx.roundRect(i * gap + 2, (H - bh) / 2, Math.max(3, gap - 5), bh, 3);
+      ctx.fill();
+    }
+    phase += 0.08;
+    state.capWaveRaf = requestAnimationFrame(draw);
+  };
+  state.capWaveRaf = requestAnimationFrame(draw);
+}
+
+function updateCapturePreview() {
+  const p = currentPerson();
+  if (!p) return;
+  const txt = (document.getElementById('capTextarea').value || '').trim();
+  const hits = state.people.filter((x) => txt && txt.includes(x.name));
+  const pv = document.getElementById('capAiRoutePreview');
+  const drop = document.getElementById('capPhotoDrop');
+  drop.classList.toggle('is-show', state.capMode === 'photo');
+
+  const modeLbl =
+    state.capMode === 'voice' ? '语音声囊'
+      : state.capMode === 'wechat' ? '微信拆解单卡'
+        : state.capMode === 'photo' ? '相片留影卡'
+          : '记挂提醒';
+  if (state.capMode !== 'photo' && hits.length >= 2) {
+    pv.textContent = `多人自动拆入 → 「${hits.map((h) => h.name).join('」+「')}」`;
+  } else {
+    const t = hits[0] || p;
+    pv.textContent = t.tier === 'silver' ? `智能路由 →「${t.name}」· 银箭长虹玻璃留痕` : `智能拆解 →「${t.name}」· 自动生成${modeLbl}`;
+  }
+}
+
+function openCaptureSheet() {
+  const p = currentPerson();
+  if (!p) return;
+  document.getElementById('capSheetTitle').textContent = `随口记一笔 · ${p.name}`;
+  document.getElementById('btnCapSaveDirect').textContent = `存入「${p.name}」`;
+  updateCapturePreview();
+  openSheet('captureSheet');
+  startCaptureWave();
+}
+
+async function commitSmartCapture(text, autoMulti) {
+  const p = currentPerson();
+  if (!p) return;
+  const raw = (text || '').trim();
+  const fileInput = document.getElementById('capPhotoFile');
+  const chosenFile = fileInput && fileInput.files && fileInput.files[0];
+
+  if (state.capMode === 'photo') {
+    if (!chosenFile) {
+      showToast('请先挑选一张照片');
+      return;
+    }
+    const fd = new FormData();
+    fd.append('photo', chosenFile);
+    fd.append('kind', 'photo');
+    fd.append('title', raw.slice(0, 18) || '生活留影');
+    fd.append('body', raw || '随手拍下的一帧生活瞬间。');
+    fd.append('cardMeta', JSON.stringify({ sceneLabel: raw.slice(0, 14) || '生活留影' }));
+    try {
+      await apiJson(`/persons/${p.id}/materials`, { method: 'POST', body: fd });
+      fileInput.value = '';
+      document.getElementById('capPhotoName').textContent = '选择一张生活或人像照片（自动剥离 EXIF 并提取色域）';
+      document.getElementById('capTextarea').value = '';
+      closeAllSheets();
+      await refreshBootstrap({ keepPersonId: true });
+      showToast('✦ 已剥离 EXIF 并加密归档相片卡');
+    } catch (err) {
+      showToast(err.message || '相片上传失败');
+    }
     return;
   }
-  state.clearChatArmed = false;
-  if (btn) btn.classList.remove('is-confirming');
-  try {
-    await apiJson(`/persons/${p.id}/chat/messages`, { method: 'DELETE' });
-    await loadChatSceneForActiveContext();
-  } catch (_) {}
-}
 
-function initSilentRightEdgeSwipeDrawer() {
-  if (!aiChatFullscreen || !chatMaterialDrawer) return;
-  let tracking = false;
-  let mode = null;
-  let startX = 0;
-  let startY = 0;
-  let latestDx = 0;
-  const DRAWER_WIDTH = 268;
-
-  const beginSwipe = (e, swipeMode) => {
-    tracking = true;
-    mode = swipeMode;
-    startX = e.clientX;
-    startY = e.clientY;
-    latestDx = 0;
-  };
-
-  if (chatRightEdgeZone) {
-    chatRightEdgeZone.addEventListener('pointerdown', (e) => {
-      if (state.drawerOpen) return;
-      beginSwipe(e, 'opening');
-      try {
-        chatRightEdgeZone.setPointerCapture(e.pointerId);
-      } catch (_) {}
-    });
+  if (!raw) {
+    showToast('先说一句或粘贴一段对话再存入');
+    return;
   }
 
-  aiChatFullscreen.addEventListener('pointerdown', (e) => {
-    if (tracking) return;
-    const rect = aiChatFullscreen.getBoundingClientRect();
-    const distFromRight = rect.right - e.clientX;
-    if (!state.drawerOpen && distFromRight <= 52 && e.clientY > rect.top + 84 && e.clientY < rect.bottom - 76) {
-      beginSwipe(e, 'opening');
-    } else if (state.drawerOpen && chatMaterialDrawer.contains(e.target)) {
-      beginSwipe(e, 'closing');
-    }
-  });
-
-  window.addEventListener('pointermove', (e) => {
-    if (!tracking) return;
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    if (Math.abs(dy) > Math.abs(dx) * 1.35 && Math.abs(dx) < 18) return;
-
-    latestDx = dx;
-    if (mode === 'opening' && dx < -6) {
-      const pull = Math.min(DRAWER_WIDTH, Math.abs(dx));
-      chatMaterialDrawer.style.transition = 'none';
-      chatMaterialDrawer.style.transform = `translateX(${Math.max(0, DRAWER_WIDTH - pull).toFixed(1)}px)`;
-      chatMaterialScrim.classList.toggle('is-open', pull > 36);
-    } else if (mode === 'closing' && dx > 8) {
-      chatMaterialDrawer.style.transition = 'none';
-      chatMaterialDrawer.style.transform = `translateX(${Math.min(DRAWER_WIDTH, dx).toFixed(1)}px)`;
-    }
-  });
-
-  const endSwipe = () => {
-    if (!tracking) return;
-    tracking = false;
-    chatMaterialDrawer.style.removeProperty('transition');
-    chatMaterialDrawer.style.removeProperty('transform');
-    if (mode === 'opening') setMaterialDrawerOpen(latestDx < -34);
-    else if (mode === 'closing') setMaterialDrawerOpen(!(latestDx > 40));
-    mode = null;
-  };
-
-  window.addEventListener('pointerup', endSwipe);
-  window.addEventListener('pointercancel', endSwipe);
-  if (chatMaterialScrim) chatMaterialScrim.addEventListener('click', () => setMaterialDrawerOpen(false));
-}
-
-/* ==========================================================================
-   9. Scene Navigation & Complete Event Wiring
-   ========================================================================== */
-export function switchScene(sceneName) {
-  if (morphRafId) {
-    cancelAnimationFrame(morphRafId);
-    morphRafId = null;
-  }
-  if (emergeTimerId) {
-    clearTimeout(emergeTimerId);
-    emergeTimerId = null;
-  }
-  splashMorphActor.classList.remove('is-morphing');
-  dockCenterCapsule.classList.remove('is-pure-landscape');
-
-  state.activeScene = sceneName;
-
-  splashScreen.classList.remove('is-active', 'is-fading-copy');
-  eventsFullScreen.classList.remove('is-active');
-  aiChatFullscreen.classList.remove('is-active');
-  moodStonePopover.classList.remove('is-open');
-  setArrowPopoverOpen(false);
-
-  if (sceneName !== 'aichat') setMaterialDrawerOpen(false);
-  if (sceneName !== 'capsule-open') setCapsuleExpanded(false);
-  if (sceneName !== 'voice-hold') cancelVoiceHoldSession();
-
-  glebTriDock.style.display = sceneName === 'splash' || sceneName === 'aichat' ? 'none' : 'flex';
-
-  if (sceneName === 'splash') {
-    splashScreen.classList.add('is-active');
-  } else if (sceneName === 'capsule-open') {
-    setCapsuleExpanded(true);
-  } else if (sceneName === 'events') {
-    eventsFullScreen.classList.add('is-active');
-  } else if (sceneName === 'aichat') {
-    syncArrowPinAndChatCupid(false);
-    aiChatFullscreen.classList.add('is-active');
-    loadChatSceneForActiveContext();
-  }
-}
-
-function populateStaticArrowIcons() {
-  const popGold = document.getElementById('popIconGold');
-  const popSilver = document.getElementById('popIconSilver');
-  const popCrystal = document.getElementById('popIconCrystal');
-  if (popGold) popGold.innerHTML = ARROW_SVGS.gold;
-  if (popSilver) popSilver.innerHTML = ARROW_SVGS.silver;
-  if (popCrystal) popCrystal.innerHTML = ARROW_SVGS.crystal;
-}
-
-function bindEvents() {
-  initCenterCapsuleInteractions();
-  initDirectionalVoiceInteractions();
-  initSilentRightEdgeSwipeDrawer();
-
-  // 1. Cycle 6 Curated Paper Editions by tapping top-left folio header
-  document.getElementById('journalFolioWhisper').addEventListener('click', () => {
-    const nextIdx = (VALID_EDITIONS.indexOf(state.edition) + 1) % VALID_EDITIONS.length;
-    setJournalEdition(VALID_EDITIONS[nextIdx], true);
-  });
-
-  // 2. Muse Top-Center Medallion cycles 4 Fair Living-Skin Cupid portraits cleanly
-  const museMedallion = document.getElementById('museCupidMedallion');
-  if (museMedallion) {
-    museMedallion.addEventListener('click', () => {
-      const nextIdx = (VALID_CUPID_LAYOUTS.indexOf(state.cupidLayout) + 1) % VALID_CUPID_LAYOUTS.length;
-      setCupidLayout(VALID_CUPID_LAYOUTS[nextIdx], true);
-    });
-  }
-
-  // 3. Top-Right Tactile Arrow Pushpin -> Gold / Silver / Crystal
-  journalArrowPinBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    setArrowPopoverOpen(!state.arrowPopoverOpen);
-  });
-  document.querySelectorAll('[data-select-tier]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      changeActivePersonArrowTier(btn.dataset.selectTier);
-    });
-  });
-  document.addEventListener('pointerdown', (e) => {
-    if (state.arrowPopoverOpen && !topRightArrowAnchor.contains(e.target)) {
-      setArrowPopoverOpen(false);
-    }
-  });
-
-  // 4. Back to Casual Directory & Casual Row Click
-  if (btnBackToCasualList) {
-    btnBackToCasualList.addEventListener('click', () => openCasualDirectory());
-  }
-  if (casualEntriesStage) {
-    casualEntriesStage.addEventListener('click', (e) => {
-      const row = e.target.closest('[data-open-casual-person]');
-      if (row) openPersonJournal(row.dataset.openCasualPerson);
-    });
-  }
-
-  // 5. Splash & Seamless Email Sync Auth
-  document.getElementById('btnSplashLetsGo').addEventListener('click', ensureAuthenticatedAndBootJournal);
-  document.getElementById('btnToggleSplashEmail').addEventListener('click', () => toggleSplashEmailForm(true));
-  document.getElementById('btnCancelSplashEmail').addEventListener('click', () => toggleSplashEmailForm(false));
-  document.getElementById('btnSendOtp').addEventListener('click', handleSendEmailOtp);
-  document.getElementById('splashAuthForm').addEventListener('submit', handleVerifyEmailOtp);
-
-  // 6. Add Person & Edit Note Modals + Real Photo Upload
-  document.getElementById('btnOpenNewPerson').addEventListener('click', () => openNewPersonModal('crystal'));
-  document.getElementById('btnCloseNewPerson').addEventListener('click', closeNewPersonModal);
-  personCreateModal.addEventListener('click', (e) => {
-    if (e.target === personCreateModal) closeNewPersonModal();
-  });
-  document.querySelectorAll('[data-new-tier]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.newPersonTier = btn.dataset.newTier;
-      document.querySelectorAll('[data-new-tier]').forEach((b) => {
-        b.classList.toggle('is-active', b.dataset.newTier === state.newPersonTier);
-      });
-    });
-  });
-  document.getElementById('personCreateForm').addEventListener('submit', submitNewPersonForm);
-
-  document.getElementById('artifactTextNote').addEventListener('click', openNoteEditModal);
-  artifactDossierCard.addEventListener('click', (e) => {
-    if (e.target.closest('#btnUploadPhotoOnDossier')) return;
-    openNoteEditModal();
-  });
-  document.getElementById('btnCloseNoteEdit').addEventListener('click', closeNoteEditModal);
-  noteEditModal.addEventListener('click', (e) => {
-    if (e.target === noteEditModal) closeNoteEditModal();
-  });
-  document.getElementById('noteEditForm').addEventListener('submit', submitNoteEditForm);
-  document.getElementById('btnDeletePerson').addEventListener('click', handleDeleteActivePerson);
-
-  const triggerPhotoPicker = (e) => {
-    e.stopPropagation();
-    if (photoUploadInput) {
-      photoUploadInput.value = '';
-      photoUploadInput.click();
-    }
-  };
-  document.getElementById('btnUploadPhotoOnPolaroid').addEventListener('click', triggerPhotoPicker);
-  document.getElementById('btnUploadPhotoOnDossier').addEventListener('click', triggerPhotoPicker);
-  photoUploadInput.addEventListener('change', (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (file) handlePersonPhotoSelected(file);
-  });
-
-  // 7. Quick Voice/Text Capture Sheet & AI Split Dispatch Modal
-  quickCaptureSheet.addEventListener('click', (e) => {
-    if (e.target === quickCaptureSheet) closeQuickCaptureSheet();
-  });
-  document.querySelectorAll('[data-quick-route]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const inp = document.getElementById('quickCaptureInput');
-      const val = inp ? inp.value.trim() : '';
-      if (!val) return;
-      const routeMode = btn.dataset.quickRoute === 'global' ? 'global' : 'current';
-      closeQuickCaptureSheet();
-      submitCaptureToBackend({ text: val, routeMode });
-    });
-  });
-  document.getElementById('quickCaptureInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const val = e.target.value.trim();
-      if (!val) return;
-      closeQuickCaptureSheet();
-      submitCaptureToBackend({ text: val, routeMode: 'global' });
-    }
-  });
-
-  document.getElementById('btnCloseDispatchModal').addEventListener('click', closeDispatchModal);
-  if (btnUndoVoiceCapture) {
-    btnUndoVoiceCapture.addEventListener('click', handleUndoLastCapture);
-  }
-  aiVoiceDispatchModal.addEventListener('click', (e) => {
-    if (e.target === aiVoiceDispatchModal) closeDispatchModal();
-    const jumpCard = e.target.closest('[data-jump-split-person]');
-    if (jumpCard) {
-      closeDispatchModal();
-      openPersonJournal(jumpCard.dataset.jumpSplitPerson);
-    }
-  });
-
-  // 8. Scrapbook Photo Mount & Voice Charm
-  artifactPhotoMount.addEventListener('click', (e) => {
-    if (e.target.closest('#btnUploadPhotoOnPolaroid')) return;
-    switchScene('events');
-  });
-  const voiceCharm = document.getElementById('artifactVoiceCharm');
-  voiceCharm.addEventListener('click', () => {
-    const playing = voiceCharm.classList.toggle('is-playing');
-    document.getElementById('voiceCharmPlayIcon').textContent = playing ? '❚❚' : '▶';
-    if (playing) {
-      setTimeout(() => {
-        voiceCharm.classList.remove('is-playing');
-        document.getElementById('voiceCharmPlayIcon').textContent = '▶';
-      }, 2600);
-    }
-  });
-
-  // 9. Muse Cupid Chat Controls
-  document.getElementById('btnOpenAiOrb').addEventListener('click', () => {
-    closeDispatchModal();
-    switchScene('aichat');
-  });
-  document.getElementById('btnCloseAiChat').addEventListener('click', () => {
-    switchScene('journal');
-  });
-  document.getElementById('btnClearChatHistory').addEventListener('click', handleClearChatHistory);
-
-  document.getElementById('btnOpenMaterialDrawerPlus').addEventListener('click', () => {
-    setMaterialDrawerOpen(!state.drawerOpen);
-  });
-  drawerMaterialsList.addEventListener('click', (e) => {
-    const card = e.target.closest('[data-mat-id]');
-    if (card) toggleMaterialSelection(card.dataset.matId);
-  });
-  chatAttachedTray.addEventListener('click', (e) => {
-    const rmBtn = e.target.closest('[data-remove-mat]');
-    if (rmBtn) toggleMaterialSelection(rmBtn.dataset.removeMat);
-  });
-  document.getElementById('btnSendChatMsg').addEventListener('click', sendMultimodalChatMessage);
-  chatTextInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendMultimodalChatMessage();
-  });
-
-  // 10. Events Flip Cards & Mood Stone Popover + Account Controls
-  document.getElementById('btnEventsBack').addEventListener('click', () => switchScene('journal'));
-  ['cinemaCard1', 'cinemaCard2'].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', () => el.classList.toggle('is-flipped'));
-  });
-
-  document.getElementById('btnToggleMiniStone').addEventListener('click', () => {
-    syncAccountLabel();
-    moodStonePopover.classList.add('is-open');
-    drawStoneFrame(currentStoneFrame);
-  });
-  document.getElementById('btnCloseMiniStone').addEventListener('click', () => {
-    moodStonePopover.classList.remove('is-open');
-  });
-  moodStonePopover.addEventListener('click', (e) => {
-    if (e.target === moodStonePopover) moodStonePopover.classList.remove('is-open');
-  });
-  document.getElementById('btnOpenSplashCover').addEventListener('click', () => {
-    moodStonePopover.classList.remove('is-open');
-    switchScene('splash');
-  });
-  document.getElementById('btnSwitchAccount').addEventListener('click', async () => {
-    moodStonePopover.classList.remove('is-open');
-    if (state.session && state.session.accessToken) {
-      apiJson('/auth/logout', {
+  if (state.capMode === 'care') {
+    try {
+      const targetDate = new Date(Date.now() + 86400000 * 3).toISOString().slice(0, 10);
+      await apiJson('/reminders', {
         method: 'POST',
-        body: { refreshToken: state.session.refreshToken },
-      }).catch(() => {});
+        body: {
+          personId: p.id,
+          title: raw.slice(0, 120),
+          rule: 'once',
+          onceDate: targetDate,
+          leadDays: [1, 0],
+        },
+      });
+      await apiJson(`/persons/${p.id}/materials`, {
+        method: 'POST',
+        body: { kind: 'note', title: '记挂待办', body: raw },
+      });
+      document.getElementById('capTextarea').value = '';
+      closeAllSheets();
+      await refreshBootstrap({ keepPersonId: true });
+      showToast(`✦ 已写入「${p.name}」近期记挂提醒带`);
+    } catch (err) {
+      showToast(err.message || '创建记挂失败');
     }
-    saveSession(null);
-    switchScene('splash');
-    toggleSplashEmailForm(true);
-  });
+    return;
+  }
 
-  if (stoneSliderWrap) {
-    let dragging = false;
-    const updateFromClientX = (clientX) => {
-      const rect = stoneSliderWrap.getBoundingClientRect();
-      setStoneByPercent(((clientX - rect.left) / rect.width) * 100);
-    };
-    stoneSliderWrap.addEventListener('pointerdown', (e) => {
-      dragging = true;
-      stoneSliderWrap.setPointerCapture(e.pointerId);
-      updateFromClientX(e.clientX);
+  const source = state.capMode === 'wechat' ? 'chat' : 'voice';
+  const routeMode = autoMulti ? 'global' : 'current';
+  try {
+    const res = await apiJson('/captures?sync=true', {
+      method: 'POST',
+      body: {
+        source,
+        routeMode,
+        activePersonId: p.id,
+        text: raw,
+      },
     });
-    stoneSliderWrap.addEventListener('pointermove', (e) => {
-      if (dragging) updateFromClientX(e.clientX);
-    });
-    stoneSliderWrap.addEventListener('pointerup', () => {
-      dragging = false;
-    });
+    document.getElementById('capTextarea').value = '';
+    closeAllSheets();
+    closeVoiceArc();
+    await refreshBootstrap({ keepPersonId: true });
+    showDispatchReceipt(res);
+  } catch (err) {
+    showToast(err.message || '归档失败');
   }
 }
 
-/* ==========================================================================
-   10. Boot Application
-   ========================================================================== */
-async function bootApp() {
-  preloadAllAssets();
-  populateStaticArrowIcons();
-  setJournalEdition('cotton', false);
-  setCupidLayout('a', false);
-  syncAccountLabel();
-  bindEvents();
+function showDispatchReceipt(captureResp) {
+  const box = document.getElementById('dispatchReceipt');
+  const splits = (captureResp && Array.isArray(captureResp.splits)) ? captureResp.splits : [];
+  if (!splits.length) {
+    showToast('已记录入待整理收件箱');
+    return;
+  }
+  const jobId = captureResp.jobId;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <strong style="font-size:13px;">✓ 已实库拆入 ${splits.length} 条手帐</strong>
+      <button class="s-pill" id="btnUndoDispatch" type="button" style="height:24px;font-size:11px;">撤销 5s</button>
+    </div>
+    ${splits.map((sp) => {
+      const target = state.people.find((x) => x.id === sp.personId);
+      const tLabel = target ? TIER_META[target.tier]?.label || '' : '';
+      return `
+        <div class="receipt-row">
+          <div style="min-width:0;flex:1;">
+            <strong style="margin-right:6px;">${escapeHtml(sp.personName || target?.name || '手帐')} ${tLabel ? `· ${tLabel}` : ''}</strong>
+            <div style="font-size:11.5px;opacity:0.74;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(sp.summary || '已加密归档')}</div>
+          </div>
+          ${sp.personId ? `<button class="s-pill" data-jump-person="${sp.personId}" type="button" style="height:24px;font-size:11px;">去看 ›</button>` : ''}
+        </div>
+      `;
+    }).join('')}
+  `;
+  box.classList.add('is-open');
+
+  box.querySelector('#btnUndoDispatch').addEventListener('click', async () => {
+    try {
+      await apiJson(`/captures/${jobId}:undo`, { method: 'POST', body: {} });
+      box.classList.remove('is-open');
+      await refreshBootstrap({ keepPersonId: true });
+      showToast('已从数据库撤回刚刚的分拣记录');
+    } catch (err) {
+      showToast(err.message || '撤销窗口已过');
+    }
+  });
+  box.querySelectorAll('[data-jump-person]').forEach((b) => b.addEventListener('click', () => {
+    box.classList.remove('is-open');
+    selectPerson(b.dataset.jumpPerson);
+  }));
+  clearTimeout(box._t);
+  box._t = setTimeout(() => box.classList.remove('is-open'), 5500);
+}
+
+/* Split-Arc Voice Stage (`断弧语音`) */
+function openVoiceArc() {
+  const p = currentPerson();
+  if (!p) return;
+  closeAllSheets();
+  document.getElementById('routeCurrentLabel').textContent = `→ 默认此人（${p.name}）`;
+  document.getElementById('voiceArcStage').classList.add('is-open');
+}
+function closeVoiceArc() {
+  document.getElementById('voiceArcStage').classList.remove('is-open');
+}
+
+/* Sheet 4: 设置 · 生物锁 · 真实 PIPL 数据主权导出 */
+function openSettingsSheet() {
+  const body = document.getElementById('settingsSheetBody');
+  const email = state.session?.email || '当前加密会话';
+  body.innerHTML = `
+    <div class="s-card">
+      <div class="s-label"><span>光影与琉璃氛围</span><span>Lumina 实时生效</span></div>
+      <div class="s-pill-row">
+        <button class="s-pill ${state.lighting === 'daylight' ? 'is-active' : ''}" data-set-light="daylight" type="button">晨光通透（原图不虚化）</button>
+        <button class="s-pill ${state.lighting === 'evening' ? 'is-active' : ''}" data-set-light="evening" type="button">暮色深琉璃</button>
+      </div>
+    </div>
+
+    <div class="s-card">
+      <div class="s-label"><span>隐私与账户密钥</span><span>PostgreSQL RLS + AES-256-GCM</span></div>
+      <div style="font-size:12.5px;opacity:0.78;">已登录：${escapeHtml(email)}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div>
+          <div style="font-size:13.5px;font-weight:600;">面容 ID 锁屏保护</div>
+          <div style="font-size:11.5px;opacity:0.68;margin-top:2px;">切出后台立即拉起毛玻璃隐私幕布</div>
+        </div>
+        <button class="s-pill ${state.faceIdLock ? 'is-active' : ''}" id="btnToggleFaceId" type="button">${state.faceIdLock ? '已开启' : '已关闭'}</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        ${!state.people.length ? '' : `<button class="s-pill" id="btnSettingsLogout" type="button">退出当前账号</button>`}
+      </div>
+    </div>
+
+    <div class="s-card">
+      <div class="s-label"><span>数据主权（《个保法》第 45/47 条）</span><span>GB 45438-2025</span></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div>
+          <div style="font-size:13px;font-weight:600;">导出全部加密手帐（.zip + SHA-256）</div>
+          <div style="font-size:11.5px;opacity:0.68;">含全部原文、照片、玉签与完整校验清单</div>
+        </div>
+        <button class="s-pill is-active" id="btnExportData" type="button">实时导出</button>
+      </div>
+      <div id="exportResultLine" style="font-size:11.5px;opacity:0.74;word-break:break-all;"></div>
+    </div>
+
+    <div class="s-card">
+      <div class="s-label"><span>双层生命安全保护通道</span><span>独立于大模型</span></div>
+      <div style="font-size:12px;line-height:1.62;opacity:0.80;">任何箭矢层级下，若识别到极端情绪或人身安全危机，立即固定提供 12356 / 110 / 12338 求助通道，永不诱导病态情感依赖。</div>
+    </div>
+  `;
+
+  body.querySelectorAll('[data-set-light]').forEach((b) => b.addEventListener('click', () => {
+    state.lighting = b.dataset.setLight;
+    document.documentElement.setAttribute('data-lighting', state.lighting);
+    openSettingsSheet();
+  }));
+  body.querySelector('#btnToggleFaceId').addEventListener('click', () => { state.faceIdLock = !state.faceIdLock; openSettingsSheet(); });
+  const lo = body.querySelector('#btnSettingsLogout');
+  if (lo) {
+    lo.addEventListener('click', async () => {
+      try {
+        await apiJson('/auth/logout', { method: 'POST', body: { refreshToken: state.session?.refreshToken } });
+      } catch (_) {}
+      saveSession(null);
+      state.people = [];
+      state.personId = null;
+      closeAllSheets();
+      openAuthGate();
+    });
+  }
+  body.querySelector('#btnExportData').addEventListener('click', () => handleLivePiplExport(body.querySelector('#exportResultLine')));
+  openSheet('settingsSheet');
+}
+
+async function handleLivePiplExport(statusEl) {
+  if (!state.session?.email) return;
+  if (statusEl) statusEl.textContent = '正在校验二次授权并打包解密归档…';
+  try {
+    const ch = await apiJson('/auth/email/otp:request', {
+      method: 'POST',
+      body: { email: state.session.email, purpose: 'reauth' },
+    });
+    if (!ch || !ch.devOtpCode) {
+      if (statusEl) statusEl.textContent = '请查收邮箱二次校验码后在账号安全页导出。';
+      return;
+    }
+    const verified = await apiJson('/auth/email/otp:verify', {
+      method: 'POST',
+      attachBearer: true,
+      body: { challengeId: ch.challengeId, email: state.session.email, code: ch.devOtpCode },
+    });
+    const exp = await apiJson('/me/exports', {
+      method: 'POST',
+      headers: { 'X-Reauth-Token': verified.reauthToken },
+      body: { asyncMode: false },
+    });
+    if (statusEl) statusEl.textContent = `✓ 导出包就绪 · SHA-256: ${(exp.sha256Hex || '').slice(0, 20)}…`;
+    if (exp.downloadPath) {
+      const dlResp = await fetch(exp.downloadPath, {
+        headers: { Authorization: `Bearer ${state.session.accessToken}` },
+      });
+      if (dlResp.ok) {
+        const blob = await dlResp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `mindweave_export_${String(exp.exportId).slice(0, 8)}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
+    }
+    showToast('✓ 已下载完整 GB 45438-2025 数据主权归档包');
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `导出暂未完成：${err.message}`;
+    showToast(err.message || '导出失败');
+  }
+}
+
+/* Sheet 5: 农历/公历三列滚轮核对 -> Live Reminder + Draft Patch */
+function openDateWheelSheet(draftRecId = null) {
+  if (draftRecId !== undefined) state.wheelDraftRecId = draftRecId;
+  const p = currentPerson();
+  if (!p) return;
+  const draft = state.wheelDraftRecId ? p.records.find((r) => r.id === state.wheelDraftRecId) : null;
+  const body = document.getElementById('dateWheelBody');
+  const years = [2026, 2027, 2028], months = [11, 12, 1], days = [15, 16, 17, 28];
+
+  body.innerHTML = `
+    <div class="s-card">
+      <div class="s-label"><span>记挂原话</span><span>${escapeHtml(draft?.lunar_label || '农历/公历双历')}</span></div>
+      <div style="font-family:var(--font-serif);font-size:14px;line-height:1.62;">${escapeHtml(draft?.text || `为「${p.name}」核对一个需要提前提醒的温暖日子。`)}</div>
+      <input class="spot-input" id="wheelTitleInput" type="text" value="${escapeHtml(draft?.card_title || draft?.text?.slice(0, 28) || `给${p.name}准备心意`)}" style="padding:8px 11px;border-radius:11px;background:rgba(255,255,255,0.08);border:0.75px solid rgba(255,255,255,0.16);font-size:13px;" />
+    </div>
+    <div class="s-card">
+      <div class="s-label"><span>对应公历日期核对</span><span>${state.wheelYear}年${state.wheelMonth}月${state.wheelDay}日</span></div>
+      <div class="wheel-grid">
+        <div class="wheel-col">${years.map((y) => `<button class="wheel-opt ${y === state.wheelYear ? 'is-sel' : ''}" data-wy="${y}" type="button">${y}年</button>`).join('')}</div>
+        <div class="wheel-col">${months.map((m) => `<button class="wheel-opt ${m === state.wheelMonth ? 'is-sel' : ''}" data-wm="${m}" type="button">${m}月</button>`).join('')}</div>
+        <div class="wheel-col">${days.map((d) => `<button class="wheel-opt ${d === state.wheelDay ? 'is-sel' : ''}" data-wd="${d}" type="button">${d}日</button>`).join('')}</div>
+      </div>
+      <button class="s-btn-primary" id="btnConfirmWheel" type="button" style="margin-top:4px;">确认落墨并提前 1 天提醒</button>
+    </div>
+  `;
+
+  body.querySelectorAll('[data-wy]').forEach((b) => b.addEventListener('click', () => { state.wheelYear = Number(b.dataset.wy); openDateWheelSheet(); }));
+  body.querySelectorAll('[data-wm]').forEach((b) => b.addEventListener('click', () => { state.wheelMonth = Number(b.dataset.wm); openDateWheelSheet(); }));
+  body.querySelectorAll('[data-wd]').forEach((b) => b.addEventListener('click', () => { state.wheelDay = Number(b.dataset.wd); openDateWheelSheet(); }));
+  body.querySelector('#btnConfirmWheel').addEventListener('click', async () => {
+    const title = (body.querySelector('#wheelTitleInput').value || '').trim() || `记挂「${p.name}」`;
+    const onceDate = `${state.wheelYear}-${String(state.wheelMonth).padStart(2, '0')}-${String(state.wheelDay).padStart(2, '0')}`;
+    try {
+      await apiJson('/reminders', {
+        method: 'POST',
+        body: { personId: p.id, title, rule: 'once', onceDate, leadDays: [1, 0] },
+      });
+      if (draft) {
+        await apiJson(`/materials/${draft.id}`, {
+          method: 'PATCH',
+          headers: { 'If-Match': `"${draft.version}"` },
+          body: {
+            cardMeta: {
+              ...(draft.cardMeta || {}),
+              lunarHint: `✓ 已落墨 ${state.wheelYear}·${state.wheelMonth}·${state.wheelDay}（提前 1 天）`,
+            },
+          },
+        });
+      }
+      closeAllSheets();
+      await refreshBootstrap({ keepPersonId: true });
+      showToast(`✦ 已落墨 ${state.wheelYear}年${state.wheelMonth}月${state.wheelDay}日 并写入提醒`);
+    } catch (err) {
+      showToast(err.message || '写入提醒失败');
+    }
+  });
+  openSheet('dateWheelSheet');
+}
+
+/* ============================================================================
+   9. SPOTLIGHT ⌘K & APPLE PHOTOS DARKROOM LIGHTBOX
+   ============================================================================ */
+function openSpotlight() {
+  closeAllSheets();
+  document.getElementById('spotlightOverlay').classList.add('is-open');
+  renderSpotlight();
+  setTimeout(() => document.getElementById('spotInput').focus(), 40);
+}
+function closeSpotlight() {
+  document.getElementById('spotlightOverlay').classList.remove('is-open');
+  document.getElementById('spotInput').value = '';
+}
+function hlText(txt, q) {
+  const safe = escapeHtml(txt || '');
+  if (!q) return safe;
+  const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return safe.replace(new RegExp(esc, 'gi'), (m) => `<mark class="spot-mark">${m}</mark>`);
+}
+
+function renderSpotlight() {
+  const q = (document.getElementById('spotInput').value || '').trim();
+  const ql = q.toLowerCase();
+  const p = currentPerson();
+  if (!p) return;
+  const items = [];
+
+  if (q) {
+    state.people.filter((x) => x.id !== p.id && (x.name + x.role).toLowerCase().includes(ql)).forEach((o) => {
+      items.push({ icon: '👤', title: `切换至「${o.name}」`, sub: o.role, go: () => { selectPerson(o.id); closeSpotlight(); } });
+    });
+  }
+  if (state.spotFilter === 'all' || state.spotFilter === 'fact') {
+    (p.facts || []).forEach((f) => {
+      if (!ql || (f.kind + f.text).toLowerCase().includes(ql)) {
+        items.push({ icon: '✦', title: `${f.kind} · ${f.text}`, sub: `${p.name} · 人物玉签`, go: () => { closeSpotlight(); openDossierSheet(); } });
+      }
+    });
+  }
+  p.records.forEach((r) => {
+    const cat = r.type === 'shield-log' ? 'chat' : r.type;
+    if (state.spotFilter !== 'all' && state.spotFilter !== cat) return;
+    const body = r.caption || (r.segments && r.segments.join('')) || r.summary || r.text || '';
+    const hay = `${r.card_title || ''} ${r.tag || ''} ${r.date || ''} ${body}`.toLowerCase();
+    if (!ql || hay.includes(ql)) {
+      const icon = r.type === 'voice' ? '🎙' : r.type === 'photo' ? '🖼' : r.type === 'chat' ? '💬' : '🛡';
+      items.push({
+        icon,
+        title: r.card_title || r.tag || r.date,
+        sub: `${r.date} · ${body.slice(0, 40)}`,
+        go: () => {
+          closeSpotlight();
+          if (p.tier !== 'silver' && r.type === 'photo' && r.img) openLightboxById(r.id);
+          else jumpToRecord(r.id);
+        },
+      });
+    }
+  });
+
+  const box = document.getElementById('spotResults');
+  if (!items.length) {
+    box.innerHTML = `<div style="padding:16px;text-align:center;font-size:12.5px;opacity:0.62;">未找到含「${escapeHtml(q)}」的记忆</div>`;
+    return;
+  }
+  box.innerHTML = items.slice(0, 8).map((it, i) => `
+    <button class="spot-item" data-sp-i="${i}" type="button">
+      <span style="width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,0.12);display:inline-flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;">${it.icon}</span>
+      <span style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${hlText(it.title, q)}</div>
+        <div style="font-size:11.5px;opacity:0.68;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${hlText(it.sub, q)}</div>
+      </span>
+      <span style="opacity:0.45;font-size:12px;">↗</span>
+    </button>
+  `).join('');
+  box.querySelectorAll('[data-sp-i]').forEach((b) => b.addEventListener('click', () => items[Number(b.dataset.spI)].go()));
+}
+
+function openLightboxById(recId) {
+  const p = currentPerson();
+  if (!p || p.tier === 'silver') return;
+  const photos = p.records.filter((r) => r.type === 'photo' && r.img);
+  if (!photos.length) return;
+  state.lbPhotos = photos;
+  state.lbIndex = Math.max(0, photos.findIndex((x) => x.id === recId));
+  renderLightbox();
+  document.getElementById('lightboxOverlay').classList.add('is-open');
+}
+
+function renderLightbox() {
+  const rec = state.lbPhotos[state.lbIndex];
+  const p = currentPerson();
+  if (!rec || !p) return;
+  document.getElementById('lbCounter').textContent = `${String(state.lbIndex + 1).padStart(2, '0')} / ${String(state.lbPhotos.length).padStart(2, '0')} · ${rec.date} · ${rec.tag}`;
+  const pal = (rec.palette || ['#D8C2A0', '#8B7D6B', '#463D34']).slice(0, 3);
+  document.getElementById('lbPigments').innerHTML = pal.map((c) => `<i style="width:7px;height:7px;border-radius:50%;background:${c};display:block;"></i>`).join('');
+  document.getElementById('lbMainImg').src = rec.img;
+  document.getElementById('lbCaption').textContent = rec.caption || '';
+  document.getElementById('btnLbFav').textContent = rec.fav ? '★ 已珍藏' : '☆ 珍藏';
+  document.getElementById('btnLbSetBg').textContent = p.activeHeroMaterialId === rec.id ? '✓ 已作背景' : '✦ 映作背景';
+  const th = document.getElementById('lbThumbs');
+  th.innerHTML = state.lbPhotos.map((ph, i) => `<button class="lb-thumb-btn ${i === state.lbIndex ? 'is-active' : ''}" data-lbi="${i}" type="button"><img src="${ph.img}" alt="" /></button>`).join('');
+  th.querySelectorAll('[data-lbi]').forEach((b) => b.addEventListener('click', () => { state.lbIndex = Number(b.dataset.lbi); renderLightbox(); }));
+}
+
+/* ============================================================================
+   10. 1-CLICK LIVE SEEDING INTO POSTGRESQL (8 AUTHENTIC EVERYDAY PERSONAS)
+   ============================================================================ */
+async function seedDemoPackIntoBackend() {
+  if (state.seeding) return;
+  state.seeding = true;
+  const btn = document.getElementById('btnLoadDemoPack');
+  const track = document.getElementById('seedProgressTrack');
+  const fill = document.getElementById('seedProgressFill');
+  const lbl = document.getElementById('seedProgressLabel');
+  if (btn) btn.disabled = true;
+  track.classList.add('is-active');
+
+  try {
+    lbl.textContent = '正在载入示范手帐清单…';
+    const bundleResp = await fetch('/assets/v16/seed_bundle.json');
+    const bundle = await bundleResp.json();
+    const personas = bundle.personas || [];
+
+    for (let i = 0; i < personas.length; i++) {
+      const src = personas[i];
+      const pct = Math.round(((i + 0.2) / personas.length) * 100);
+      fill.style.width = `${pct}%`;
+      lbl.textContent = `正在加密写入「${src.name}」(${i + 1}/${personas.length})…`;
+
+      const heroPrint = (src.stage_prints || []).find((pr) => pr.slug === src.hero_key) || (src.stage_prints && src.stage_prints[0]) || null;
+      const personDto = await apiJson('/persons', {
+        method: 'POST',
+        body: {
+          nameCn: src.name,
+          roleTag: (src.role || '').split('·').pop().trim() || '手帐人物',
+          contextSub: (src.stage_cue || '').slice(0, 120),
+          shortMemo: (src.persona_description?.summary || '').slice(0, 240),
+          traits: (src.persona_description?.facts || []).slice(0, 4).map((f) => String(f.text || '').slice(0, 180)),
+          tier: src.tier || 'gold',
+          visualTokens: {
+            faceZone: heroPrint?.faceZone || 'center',
+            deskFocus: heroPrint?.deskFocus || '54% 24%',
+            phoneFocus: heroPrint?.phoneFocus || '54% 24%',
+            cupidPromptsCsv: (src.cupid?.prompts || []).join('|').slice(0, 240),
+          },
+        },
+      });
+      const pid = personDto.id;
+
+      // Upload authentic hero portrait photo (strictly skipped on Silver Shield!)
+      if (src.tier !== 'silver' && src.hero_key) {
+        const imgResp = await fetch(`/assets/v16/${src.hero_key}.webp`);
+        if (imgResp.ok) {
+          const blob = await imgResp.blob();
+          const fd = new FormData();
+          fd.append('file', blob, `${src.hero_key}.webp`);
+          const afterUpload = await apiJson(`/persons/${pid}/photos/main`, { method: 'POST', body: fd });
+          // Preserve curated portrait framing alongside server-extracted pigments
+          if (heroPrint && afterUpload) {
+            const mergedTokens = {
+              ...(afterUpload.visualTokens || {}),
+              faceZone: heroPrint.faceZone || afterUpload.visualTokens?.faceZone || 'center',
+              deskFocus: heroPrint.deskFocus || afterUpload.visualTokens?.deskFocus || '54% 24%',
+              phoneFocus: heroPrint.phoneFocus || afterUpload.visualTokens?.phoneFocus || '54% 24%',
+            };
+            // Keep only scalar tokens
+            Object.keys(mergedTokens).forEach((k) => {
+              const v = mergedTokens[k];
+              if (v !== null && typeof v === 'object') delete mergedTokens[k];
+            });
+            await apiJson(`/persons/${pid}`, {
+              method: 'PATCH',
+              headers: { 'If-Match': `"${afterUpload.version}"` },
+              body: { visualTokens: mergedTokens },
+            });
+          }
+        }
+      }
+
+      // Seed facts
+      for (const f of (src.persona_description?.facts || []).slice(0, 4)) {
+        const mapped = LABEL_TO_FACT_TYPE[f.kind] || { type: 'preference', polarity: 'positive' };
+        await apiJson(`/persons/${pid}/facts`, {
+          method: 'POST',
+          body: { type: mapped.type, polarity: mapped.polarity, content: f.text },
+        });
+      }
+
+      // Seed voice memos
+      for (const v of (src.voice_memos || [])) {
+        await apiJson(`/persons/${pid}/materials`, {
+          method: 'POST',
+          body: {
+            kind: 'voice',
+            title: v.card_title || v.tag || '语音速记',
+            body: (v.segments || []).join(''),
+            isFavorite: Boolean(v.fav),
+            cardMeta: {
+              dateLabel: v.date,
+              timeLabel: v.time || '',
+              tag: v.tag || '语音速记',
+              duration: v.duration || 16,
+              segments: v.segments || [],
+              ring: v.ring || 1,
+              angle: v.angle || 54,
+            },
+          },
+        });
+      }
+
+      // Seed decomposed WeChat chats
+      for (const c of (src.chat_records || [])) {
+        const msgs = (c.messages || []).slice(0, 4).map((m) => ({
+          from: m.sender || m.from || src.name,
+          sender: m.is_target === false || m.sender === '我' ? 'me' : 'them',
+          text: m.text,
+        }));
+        await apiJson(`/persons/${pid}/materials`, {
+          method: 'POST',
+          body: {
+            kind: 'chat',
+            title: c.card_title || c.tag || '微信片段',
+            body: c.distilled || c.summary || msgs.map((m) => `${m.from}：${m.text}`).join('\n'),
+            snippet: (c.takeaway || c.summary || '').slice(0, 120),
+            isFavorite: Boolean(c.fav),
+            cardMeta: {
+              dateLabel: c.date,
+              timeLabel: c.time || '',
+              tag: c.tag || '微信片段',
+              summary: c.takeaway || c.summary || '',
+              messages: msgs,
+              ring: c.ring || 1,
+              angle: c.angle || 168,
+            },
+          },
+        });
+      }
+
+      // Seed real photo cards (up to 3 per person for crisp speed & rich gallery)
+      if (src.tier !== 'silver') {
+        for (const ph of (src.photo_records || []).slice(0, 3)) {
+          const prResp = await fetch(`/assets/v16/${ph.media_slug}.webp`);
+          if (!prResp.ok) continue;
+          const pBlob = await prResp.blob();
+          const fd = new FormData();
+          fd.append('photo', pBlob, `${ph.media_slug}.webp`);
+          fd.append('kind', 'photo');
+          fd.append('title', ph.tag || '生活留影');
+          fd.append('body', ph.caption || '');
+          fd.append('isFavorite', ph.fav ? 'true' : 'false');
+          fd.append('cardMeta', JSON.stringify({
+            dateLabel: ph.date,
+            timeLabel: ph.time || '',
+            tag: ph.tag || '相片',
+            sceneLabel: ph.scene_label || ph.tag || '',
+            palette: ph.palette || [],
+            ring: ph.ring || 1,
+            angle: ph.angle || 132,
+          }));
+          await apiJson(`/persons/${pid}/materials`, { method: 'POST', body: fd });
+        }
+      }
+
+      // Seed silver shield logs
+      for (const sl of (src.shield_logs || [])) {
+        await apiJson(`/persons/${pid}/materials`, {
+          method: 'POST',
+          body: {
+            kind: 'note',
+            title: sl.tag || '边界留痕',
+            body: sl.text || '',
+            isFavorite: Boolean(sl.fav),
+            cardMeta: { dateLabel: sl.date, timeLabel: sl.time || '', tag: sl.tag || '边界留痕', ring: sl.ring || 1, angle: sl.angle || 45 },
+          },
+        });
+      }
+
+      // Seed draft slip
+      if (src.draft_slip) {
+        const dr = src.draft_slip;
+        await apiJson(`/persons/${pid}/materials`, {
+          method: 'POST',
+          body: {
+            kind: 'draft',
+            title: dr.tag || '待核对日期',
+            body: dr.text || '',
+            isFavorite: Boolean(dr.fav),
+            cardMeta: {
+              dateLabel: dr.date,
+              tag: dr.tag || '待核对日期',
+              lunarLabel: dr.lunar_label || '',
+              lunarHint: dr.lunar_hint || '12月16日 ✎ · 轻点核对',
+              ring: dr.ring || 2,
+              angle: dr.angle || 212,
+            },
+          },
+        });
+      }
+
+      // Seed first care reminder
+      const firstCare = (src.care_days && src.care_days[0]) || null;
+      if (firstCare) {
+        const soonDate = new Date(Date.now() + 86400000 * (4 + i)).toISOString().slice(0, 10);
+        await apiJson('/reminders', {
+          method: 'POST',
+          body: { personId: pid, title: firstCare.title, rule: 'once', onceDate: soonDate, leadDays: [1, 0] },
+        });
+      }
+    }
+
+    fill.style.width = '100%';
+    lbl.textContent = '✓ 全部 8 位示范人物已加密落库，正在开启手帐…';
+    await refreshBootstrap({ keepPersonId: false });
+    showToast('✦ 8 位心络日常示范人物已写入加密 PostgreSQL');
+  } catch (err) {
+    lbl.textContent = `载入中断：${err.message}`;
+    showToast(err.message || '载入示范集失败');
+  } finally {
+    state.seeding = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ============================================================================
+   11. AUTH GATE (DEV 1-TAP + MANUAL EMAIL OTP)
+   ============================================================================ */
+function openAuthGate() {
+  document.getElementById('authGateOverlay').classList.add('is-open');
+}
+function closeAuthGate() {
+  document.getElementById('authGateOverlay').classList.remove('is-open');
+}
+
+async function handleQuickGuestLogin() {
+  const btn = document.getElementById('btnQuickGuestLogin');
+  const hint = document.getElementById('authHint');
+  btn.disabled = true;
+  hint.textContent = '正在建立专属加密会话…';
+  try {
+    const email = getOrCreateGuestEmail();
+    const ch = await apiJson('/auth/email/otp:request', {
+      method: 'POST',
+      body: { email, purpose: 'login' },
+    });
+    if (!ch || !ch.devOtpCode) {
+      document.getElementById('authEmailInput').value = email;
+      hint.textContent = '请输入邮箱收到的 6 位验证码登录';
+      document.getElementById('authOtpRow').style.display = 'flex';
+      state.otpChallenge = { challengeId: ch.challengeId, email };
+      return;
+    }
+    const verified = await apiJson('/auth/email/otp:verify', {
+      method: 'POST',
+      body: { challengeId: ch.challengeId, email, code: ch.devOtpCode },
+    });
+    saveSession({
+      userId: verified.userId,
+      email,
+      accessToken: verified.accessToken,
+      refreshToken: verified.refreshToken,
+    });
+    closeAuthGate();
+    await refreshBootstrap({ keepPersonId: false });
+  } catch (err) {
+    hint.textContent = err.message || '登录稍忙，请重试';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function handleManualRequestOtp() {
+  const email = (document.getElementById('authEmailInput').value || '').trim().toLowerCase();
+  const hint = document.getElementById('authHint');
+  if (!email || !email.includes('@')) {
+    hint.textContent = '请输入有效邮箱地址';
+    return;
+  }
+  hint.textContent = '正在发送验证码…';
+  try {
+    const ch = await apiJson('/auth/email/otp:request', {
+      method: 'POST',
+      body: { email, purpose: 'login' },
+    });
+    state.otpChallenge = { challengeId: ch.challengeId, email };
+    document.getElementById('authOtpRow').style.display = 'flex';
+    if (ch.devOtpCode) {
+      document.getElementById('authOtpInput').value = ch.devOtpCode;
+      hint.textContent = '开发验证码已自动填入，轻点登录即可';
+    } else {
+      hint.textContent = '验证码已发送，请查收邮箱';
+    }
+    document.getElementById('authOtpInput').focus();
+  } catch (err) {
+    hint.textContent = err.message || '发送失败';
+  }
+}
+
+async function handleManualVerifyOtp(e) {
+  e.preventDefault();
+  const hint = document.getElementById('authHint');
+  const code = (document.getElementById('authOtpInput').value || '').trim();
+  if (!state.otpChallenge || !code) {
+    await handleManualRequestOtp();
+    return;
+  }
+  hint.textContent = '正在校验并解密个人档案…';
+  try {
+    const verified = await apiJson('/auth/email/otp:verify', {
+      method: 'POST',
+      body: { challengeId: state.otpChallenge.challengeId, email: state.otpChallenge.email, code },
+    });
+    saveSession({
+      userId: verified.userId,
+      email: state.otpChallenge.email,
+      accessToken: verified.accessToken,
+      refreshToken: verified.refreshToken,
+    });
+    closeAuthGate();
+    await refreshBootstrap({ keepPersonId: false });
+  } catch (err) {
+    hint.textContent = err.message || '验证码无效或已过期';
+  }
+}
+
+/* ============================================================================
+   12. EVENT WIRING & BOOTSTRAP
+   ============================================================================ */
+function wireEvents() {
+  if (new URLSearchParams(window.location.search).get('iphone') === '1') {
+    document.documentElement.classList.add('v15-iphone-sim');
+  }
+
+  document.getElementById('btnEnterSim').addEventListener('click', () => {
+    document.documentElement.classList.add('v15-iphone-sim');
+    syncChromaForPerson(currentPerson());
+  });
+  document.getElementById('btnExitSim').addEventListener('click', () => {
+    document.documentElement.classList.remove('v15-iphone-sim');
+    syncChromaForPerson(currentPerson());
+  });
+
+  // Auth Gate
+  document.getElementById('btnQuickGuestLogin').addEventListener('click', handleQuickGuestLogin);
+  document.getElementById('btnRequestOtp').addEventListener('click', handleManualRequestOtp);
+  document.getElementById('authOtpForm').addEventListener('submit', handleManualVerifyOtp);
+
+  // Empty welcome actions
+  document.getElementById('btnLoadDemoPack').addEventListener('click', seedDemoPackIntoBackend);
+  document.getElementById('btnWelcomeCreateFirst').addEventListener('click', () => openDirectorySheet(true));
+
+  // Direct hero photo upload input
+  document.getElementById('dossierBgUploadInput').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) uploadDirectHeroPhoto(currentPerson(), f);
+    e.target.value = '';
+  });
+
+  // Top bar
+  document.getElementById('btnOpenSettings').addEventListener('click', openSettingsSheet);
+  document.getElementById('btnOpenSpotlight').addEventListener('click', openSpotlight);
+
+  const arrowPop = document.getElementById('arrowPopover');
+  document.getElementById('btnArrowPin').addEventListener('click', (e) => {
+    e.stopPropagation();
+    arrowPop.classList.toggle('is-open');
+  });
+  document.addEventListener('click', () => arrowPop.classList.remove('is-open'));
+  document.querySelectorAll('[data-tier-pick]').forEach((b) => b.addEventListener('click', () => {
+    switchPersonTier(b.dataset.tierPick);
+  }));
+
+  // Masthead & Time Scales
+  document.getElementById('btnOpenDossier').addEventListener('click', openDossierSheet);
+  document.getElementById('btnCareRibbon').addEventListener('click', openDossierSheet);
+  document.querySelectorAll('.scale-tab').forEach((t) => t.addEventListener('click', () => {
+    state.scale = t.dataset.scale;
+    renderFeed();
+  }));
+  document.getElementById('btnScaleRightAction').addEventListener('click', () => {
+    const p = currentPerson();
+    if (!p) return;
+    if (p.tier === 'silver') { state.shieldGlobalOpen = !state.shieldGlobalOpen; renderFeed(); }
+    else openDossierSheet();
+  });
+
+  // Tri-Dock Voice Orb (Hold -> Split-Arc / Quick Tap -> 4-Mode Quick Capture)
+  const voiceOrb = document.getElementById('dockVoiceOrb');
+  let holdTimer = null, didHold = false;
+  voiceOrb.addEventListener('pointerdown', () => {
+    didHold = false;
+    holdTimer = setTimeout(() => { didHold = true; openVoiceArc(); }, 340);
+  });
+  const clearHold = () => clearTimeout(holdTimer);
+  voiceOrb.addEventListener('pointerup', () => { clearHold(); if (!didHold) openCaptureSheet(); });
+  voiceOrb.addEventListener('pointerleave', clearHold);
+  voiceOrb.addEventListener('pointercancel', clearHold);
+
+  // Split-Arc Voice Stage
+  document.getElementById('btnLaunchSplitArc').addEventListener('click', openVoiceArc);
+  document.getElementById('btnRouteAuto').addEventListener('click', () => {
+    state.capMode = 'voice';
+    commitSmartCapture(document.getElementById('voiceArcInput').value, true);
+  });
+  document.getElementById('btnRouteCurrent').addEventListener('click', () => {
+    state.capMode = 'voice';
+    commitSmartCapture(document.getElementById('voiceArcInput').value, false);
+  });
+  document.getElementById('btnRouteCancel').addEventListener('click', closeVoiceArc);
+
+  // Tri-Dock Directory & Cupid
+  document.getElementById('btnOpenDirectory').addEventListener('click', () => openDirectorySheet(false));
+  document.getElementById('btnToggleNewPersonForm').addEventListener('click', () => {
+    state.showNewPersonForm = !state.showNewPersonForm;
+    renderDirectorySheet();
+  });
+  document.getElementById('dockCupidOrb').addEventListener('click', openCupid);
+
+  // Cupid Full-Screen Controls
+  document.getElementById('btnCloseCupid').addEventListener('click', closeCupid);
+  document.getElementById('btnToggleMatDrawer').addEventListener('click', openMatDrawer);
+  document.getElementById('btnCupidPlusMat').addEventListener('click', openMatDrawer);
+  document.getElementById('btnCloseMatDrawer').addEventListener('click', closeMatDrawer);
+  document.getElementById('cupidMatScrim').addEventListener('click', closeMatDrawer);
+  document.getElementById('cupidChatForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const inp = document.getElementById('cupidChatInput');
+    const q = inp.value;
+    inp.value = '';
+    sendCupidQuestion(q);
+  });
+
+  // Capture Sheet
+  document.querySelectorAll('[data-cap-mode]').forEach((b) => b.addEventListener('click', () => {
+    state.capMode = b.dataset.capMode;
+    document.querySelectorAll('[data-cap-mode]').forEach((x) => x.classList.toggle('is-active', x === b));
+    updateCapturePreview();
+  }));
+  document.getElementById('capPhotoFile').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    document.getElementById('capPhotoName').textContent = f ? `✓ 已选相片：${f.name}` : '选择一张生活或人像照片（自动剥离 EXIF 并提取色域）';
+  });
+  document.getElementById('capTextarea').addEventListener('input', updateCapturePreview);
+  document.querySelectorAll('[data-cap-sample]').forEach((b) => b.addEventListener('click', () => {
+    document.getElementById('capTextarea').value = b.dataset.capSample;
+    updateCapturePreview();
+  }));
+  document.getElementById('btnCapAutoRoute').addEventListener('click', () => commitSmartCapture(document.getElementById('capTextarea').value, true));
+  document.getElementById('btnCapSaveDirect').addEventListener('click', () => commitSmartCapture(document.getElementById('capTextarea').value, false));
+
+  // Sheets close
+  document.getElementById('sheetBackdrop').addEventListener('click', closeAllSheets);
+  document.querySelectorAll('[data-close-sheet]').forEach((b) => b.addEventListener('click', closeAllSheets));
+
+  // Spotlight
+  document.getElementById('spotInput').addEventListener('input', renderSpotlight);
+  document.getElementById('btnSpotClear').addEventListener('click', () => { document.getElementById('spotInput').value = ''; renderSpotlight(); });
+  document.getElementById('btnSpotClose').addEventListener('click', closeSpotlight);
+  document.querySelectorAll('[data-sfilter]').forEach((b) => b.addEventListener('click', () => {
+    state.spotFilter = b.dataset.sfilter;
+    document.querySelectorAll('[data-sfilter]').forEach((x) => x.classList.toggle('is-active', x === b));
+    renderSpotlight();
+  }));
+
+  // Lightbox
+  document.getElementById('btnLbClose').addEventListener('click', () => document.getElementById('lightboxOverlay').classList.remove('is-open'));
+  document.getElementById('btnLbPrev').addEventListener('click', () => { state.lbIndex = (state.lbIndex - 1 + state.lbPhotos.length) % state.lbPhotos.length; renderLightbox(); });
+  document.getElementById('btnLbNext').addEventListener('click', () => { state.lbIndex = (state.lbIndex + 1) % state.lbPhotos.length; renderLightbox(); });
+  document.getElementById('btnLbFav').addEventListener('click', () => {
+    const r = state.lbPhotos[state.lbIndex];
+    if (r) toggleMaterialFavorite(currentPerson(), r.id);
+  });
+  document.getElementById('btnLbSetBg').addEventListener('click', () => {
+    const r = state.lbPhotos[state.lbIndex];
+    if (r) promoteMaterialToBackground(currentPerson(), r.id);
+  });
+
+  // Keyboard shortcuts
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openSpotlight(); }
+    if (e.key === 'Escape') {
+      closeSpotlight();
+      closeAllSheets();
+      closeVoiceArc();
+      document.getElementById('lightboxOverlay').classList.remove('is-open');
+    }
+  });
+  window.addEventListener('resize', () => syncChromaForPerson(currentPerson()));
+}
+
+async function boot() {
+  wireEvents();
+  animateOrbs();
 
   if (state.session && state.session.accessToken) {
     try {
-      await refreshBootstrap({ allowSeed: true });
-      switchScene('journal');
+      await refreshBootstrap({ keepPersonId: false });
+      closeAuthGate();
       return;
     } catch (_) {
       saveSession(null);
     }
   }
-  switchScene('splash');
+  openAuthGate();
 }
 
-bootApp();
+boot();

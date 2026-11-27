@@ -107,3 +107,72 @@ def format_screenshot_bubbles(
             label = bubble.speaker_label.strip() or "群成员"
             lines.append(f"[UNKNOWN_BUBBLE/{label}]: {text}")
     return "\n".join(lines)
+
+
+_BUBBLE_LINE_RE = re.compile(
+    r"^\[(?P<side>LEFT_BUBBLE|RIGHT_BUBBLE|UNKNOWN_BUBBLE)/(?P<label>[^\]]+)\]\s*[：:]\s*(?P<text>.+)$"
+)
+_PLAIN_DIALOGUE_LINE_RE = re.compile(r"^(?P<label>[^：:\n]{1,14})[：:]\s*(?P<text>.+)$")
+_VOICE_SEG_SPLIT_RE = re.compile(r"(?<=[。！？!?；;\n])")
+
+
+def extract_chat_card_messages(
+    text: str,
+    *,
+    default_target_label: str = "对方",
+    max_messages: int = 6,
+) -> list[dict[str, str]]:
+    """Parse structured WeChat/chat dialogue lines into compact card messages."""
+    messages: list[dict[str, str]] = []
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or is_system_noise_bubble(line):
+            continue
+        m_bubble = _BUBBLE_LINE_RE.match(line)
+        if m_bubble is not None:
+            side = m_bubble.group("side")
+            label = m_bubble.group("label").strip() or default_target_label
+            msg_text = m_bubble.group("text").strip()
+            if not msg_text or is_system_noise_bubble(msg_text):
+                continue
+            sender = "me" if side == "RIGHT_BUBBLE" else "them"
+            messages.append(
+                {
+                    "sender": sender,
+                    "from": "我" if sender == "me" else label,
+                    "text": msg_text[:240],
+                }
+            )
+            if len(messages) >= max_messages:
+                break
+            continue
+
+        m_plain = _PLAIN_DIALOGUE_LINE_RE.match(line)
+        if m_plain is not None:
+            label = m_plain.group("label").strip()
+            msg_text = m_plain.group("text").strip()
+            if not msg_text or is_system_noise_bubble(msg_text):
+                continue
+            is_me = label in ("我", "本人", "自己", "me", "Me", "ME")
+            messages.append(
+                {
+                    "sender": "me" if is_me else "them",
+                    "from": "我" if is_me else label,
+                    "text": msg_text[:240],
+                }
+            )
+            if len(messages) >= max_messages:
+                break
+
+    return messages
+
+
+def split_voice_segments(text: str, *, max_segments: int = 8) -> list[str]:
+    """Split a voice transcript into concise natural clauses for acoustic playback highlighting."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    parts = [p.strip() for p in _VOICE_SEG_SPLIT_RE.split(cleaned) if p.strip()]
+    if len(parts) <= 1 and len(cleaned) > 36:
+        parts = [p.strip() for p in re.split(r"(?<=[，,])", cleaned) if p.strip()]
+    return parts[:max_segments]

@@ -95,6 +95,19 @@ async def _parse_material_create_request(
         raw_stamp = form.get("stampCode") or form.get("stamp_code")
         raw_happened = form.get("happenedOn") or form.get("happened_on")
         raw_pinned = form.get("pinned")
+        raw_fav = form.get("isFavorite") or form.get("is_favorite")
+        raw_meta = form.get("cardMeta") or form.get("card_meta")
+        parsed_meta: dict[str, object] | None = None
+        if raw_meta is not None and str(raw_meta).strip():
+            import json as _json
+
+            try:
+                loaded_meta = _json.loads(str(raw_meta))
+            except ValueError as exc:
+                raise ValidationFailedError("Invalid cardMeta JSON in form") from exc
+            if not isinstance(loaded_meta, dict):
+                raise ValidationFailedError("cardMeta must be a JSON object")
+            parsed_meta = loaded_meta
 
         try:
             dto = MaterialCreateRequest(
@@ -106,6 +119,8 @@ async def _parse_material_create_request(
                 stamp_code=str(raw_stamp) if raw_stamp is not None else None,
                 happened_on=date.fromisoformat(str(raw_happened)) if raw_happened else None,
                 pinned=_parse_bool_flag(raw_pinned, default=True),
+                is_favorite=_parse_bool_flag(raw_fav, default=False),
+                card_meta=parsed_meta,
             )
         except (ValueError, ValidationError) as exc:
             raise ValidationFailedError("Invalid material form parameters") from exc

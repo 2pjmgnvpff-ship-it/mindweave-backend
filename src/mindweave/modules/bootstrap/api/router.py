@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends
 
 from mindweave.core.dependencies import AppContainer, get_container, get_current_user_scope
 from mindweave.modules.bootstrap.api.schemas import (
+    BootstrapFactPreviewDTO,
     BootstrapMaterialPreviewDTO,
     BootstrapPersonDTO,
     BootstrapPreferencesDTO,
+    BootstrapReminderPreviewDTO,
     BootstrapResponse,
 )
 from mindweave.modules.bootstrap.application.service import BootstrapService
@@ -71,9 +73,49 @@ async def get_workspace_bootstrap(
                     happened_on=mat.happened_on,
                     media_url=media_url,
                     thumb=media_url if mat.kind is RecordKind.PHOTO else None,
+                    is_favorite=mat.is_favorite,
+                    card_meta=mat.card_meta,
+                    review_state=mat.review_state,
+                    version=mat.version,
                 )
                 for mat, media_url in agg.materials
             ],
+            facts=[
+                BootstrapFactPreviewDTO(
+                    id=f.id,
+                    record_id=f.record_id,
+                    type=f.type,
+                    polarity=f.polarity,
+                    content=f.content,
+                    status=f.status,
+                    trigger_date=f.trigger_date,
+                    is_lunar=f.is_lunar,
+                    lunar_month=f.lunar_month,
+                    lunar_day=f.lunar_day,
+                    lunar_is_leap_month=f.lunar_is_leap_month,
+                    version=f.version,
+                )
+                for f in agg.facts
+            ],
+            upcoming_reminders=[
+                BootstrapReminderPreviewDTO(
+                    id=rem.id,
+                    fact_id=rem.fact_id,
+                    title=rem.title,
+                    rule=rem.rule,
+                    is_lunar=rem.is_lunar,
+                    target_month=rem.target_month,
+                    target_day=rem.target_day,
+                    is_leap_month=rem.is_leap_month,
+                    once_date=rem.once_date,
+                    lead_days=rem.lead_days,
+                    next_fire_at=rem.next_fire_at,
+                    status=rem.status,
+                    version=rem.version,
+                )
+                for rem in agg.upcoming_reminders
+            ],
+            cooling_count=agg.cooling_count,
             version=p.version,
         )
 
